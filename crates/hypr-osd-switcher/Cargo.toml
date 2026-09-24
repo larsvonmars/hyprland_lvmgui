@@ -1,0 +1,16 @@
+[package]
+name = "hypr-osd-switcher"
+description = "Alt-Tab window switcher for Hyprland: a centred grid of every window, with its application icon, walked with Tab and committed by releasing Alt."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-switcher"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true
+serde_json.workspace = true

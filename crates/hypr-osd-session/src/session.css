@@ -1,0 +1,59 @@
+/* ── the session card ────────────────────────────────────────────────────────
+ *
+ * The bar's own session menu (`~/.config/waybar/scripts/popup.py`) as an OSD:
+ * same rows, same glyphs, same states. Every value here is one popup.py uses -
+ * the transparent row with the 10px radius the bar's module pills use, the accent
+ * tint on hover, @crit for a row that is destructive-hovered or asking again, and
+ * @fg_faint for a row that is unavailable.
+ */
+
+label.title {
+    color: @fg;
+    font-weight: 700;
+}
+
+label.hint {
+    color: @fg_dim;
+    font-size: 11px;
+}
+
+/* The glyph column. No font-family or size of its own: the base stylesheet sets
+ * the bar's MesloLGS Nerd Font Mono, which is the set these codepoints come
+ * from. */
+label.icon {
+    font-size: 15px;
+}
+
+/* ---- the rows ---- */
+
+/* Adwaita would draw a button here; a row should look like a row until you touch
+ * it, so everything it brings is reset first. */
+button.row {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    padding: 7px 8px;
+    border-radius: 10px;
+    color: @fg;
+}
+
+button.row:hover {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+button.row.danger:hover {
+    background-color: @crit_tint;
+    color: @crit;
+}
+
+/* "click again to …" - the row wears the danger fill while it waits. */
+button.row.confirm {
+    background-color: @crit_tint;
+    color: @crit;
+}
+
+button.row:disabled {
+    color: @fg_faint;
+}

@@ -1,0 +1,84 @@
+/* ── the collection's shared GTK4 stylesheet ─────────────────────────────────
+ *
+ * The palette is deliberately NOT in here. `css.rs` prepends it at runtime,
+ * reading the @define-color block out of ~/.config/waybar/style.css - exactly
+ * what ~/.config/waybar/scripts/theme.py does for the bar's popups. So the bar,
+ * its popups and every element in this collection are painted from one palette;
+ * retheme the bar and the OSDs follow. (Fallback values, used only when that
+ * file is missing, live in css.rs.)
+ *
+ * The recipes below are theme.py's `base_css()` - typography, the transparent
+ * surface, the card - so an element looks like a bar popup because it is built
+ * from the same pieces, not because the numbers were copied twice:
+ *
+ *     16px   cards (window#waybar, .card, .island-card)
+ *     12px   tiles, tooltips, menus
+ *     10px   flat rows
+ *     999px  capsules: pills, chips, progress bars
+ *
+ * Card padding is NOT part of the recipe (theme.py's .card has none either):
+ * `osd.rs` insets the element's content widget by CARD_PAD_* instead, which
+ * keeps the width in Opts the real, on-screen width of the card.
+ */
+
+/* ---- typography: the bar's face, size and weight ------------------------ */
+* {
+    font-family: "MesloLGS Nerd Font Mono", "Noto Sans Mono", monospace;
+    font-size: 13px;
+    font-weight: 500;
+    min-height: 0;
+    border: none;
+}
+
+/* ---- the surface: a transparent frame around exactly one card ----------- */
+/* `osd` is the class every element's layer surface carries; without this rule
+ * the window would paint Adwaita's opaque background behind the card. */
+window.osd {
+    background-color: transparent;
+}
+
+/* ---- the card: a bar surface grown into a card -------------------------- */
+/* theme.py's `.card`: the solid pill fill (card_top -> card_bottom, i.e. what
+ * a pill in the bar looks like, fully opaque so text stays crisp over any
+ * window behind it), @border, the card radius and the bar's card shadow. */
+box.card {
+    background-image: linear-gradient(180deg, @card_top, @card_bottom);
+    border: 1px solid @border;
+    border-radius: 16px;
+    color: @fg;
+    box-shadow: 0 6px 20px @shadow, inset 0 1px 0 @hairline;
+}
+
+/* ---- the pieces elements are built from --------------------------------- */
+
+/* a nested surface inside a card - theme.py's `.tile` */
+box.tile {
+    background-color: @surface;
+    border-radius: 12px;
+    padding: 9px 10px;
+}
+
+/* capsule badge - theme.py's `.chip` */
+label.chip {
+    background-color: @surface;
+    color: @fg_dim;
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* the bar's progress recipe - theme.py's `progressbar` */
+progressbar trough {
+    background-color: @surface_h;
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+progressbar progress {
+    background-image: linear-gradient(90deg, @accent, @accent2);
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}

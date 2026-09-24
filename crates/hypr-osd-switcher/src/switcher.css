@@ -1,0 +1,55 @@
+/* The switcher's own rules: a grid of window tiles, one of them selected.
+ *
+ * Everything shared - the card itself, the typography, the palette read from
+ * waybar's stylesheet - comes from base.css. What is here is only what the
+ * switcher has that no other element does.
+ */
+
+button.tile {
+    /* A button arrives from the theme wearing a background, a border, its own
+     * padding and a shadow. A tile is a quiet surface until it is selected. */
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    box-shadow: none;
+    padding: 12px 8px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+button.tile:hover {
+    background-color: @surface_h;
+}
+
+button.tile:active {
+    background-color: @accent_tint;
+}
+
+/* The selection: the same accent the session card puts on a row you are about to
+ * act on, worn by a whole tile. */
+button.tile.selected {
+    background-color: @accent_tint;
+    border-color: @accent;
+}
+
+label.tile-title {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+button.tile.selected label.tile-title {
+    color: @fg;
+}
+
+/* The stand-in for an application the icon theme has nothing for. */
+label.icon-letter {
+    font-size: 30px;
+    color: @fg_faint;
+}
+
+label.hint {
+    font-size: 11px;
+    color: @fg_faint;
+}

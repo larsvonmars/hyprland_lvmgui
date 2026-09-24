@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-media"
+description = "Media OSD for Hyprland: a card with cover art, title, artist and skip buttons, shown when a new track starts."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-media"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

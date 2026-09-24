@@ -1,0 +1,69 @@
+/* ── the media card ──────────────────────────────────────────────────────────
+ *
+ * Cover, title, artist and two skip buttons, in the bar's language: the cover is
+ * a tile (radius 12, the theme's tile step), the title is the bar's `.track`
+ * weight, the second line is the bar's dynamic separator (" · ", composed in
+ * player.rs rather than pasted together here) and the buttons are chips at
+ * 999px, the same capsule every other control in the theme wears.
+ */
+
+/* ---- the cover ---- */
+
+/* The image is what paints the cover, so this radius (plus `overflow: hidden`
+ * in view.rs) is what clips it into a tile; without it the cover would be a
+ * hard square in a card full of rounded corners. */
+image.cover {
+    border-radius: 12px;
+}
+
+/* No artwork (or none we could fetch): the bar's player glyph on a tile. */
+label.art-fallback {
+    background-color: @surface;
+    border: 1px solid @border;
+    border-radius: 12px;
+    color: @fg_faint;
+    font-size: 22px;
+}
+
+/* ---- the text ---- */
+
+label.title {
+    color: @fg;
+    font-weight: 600;
+}
+
+label.subtitle {
+    color: @fg_dim;
+    font-size: 12px;
+}
+
+/* ---- the buttons ---- */
+
+/* A chip, like theme.py's `chipbtn`, but square-ish and round: 32px, 999px
+ * radius, @surface at rest and the accent on hover - the state vocabulary the
+ * bar uses for everything you can click. */
+button.control {
+    background-color: @surface;
+    color: @fg_dim;
+    border-radius: 999px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+    font-size: 14px;
+    box-shadow: none;
+}
+
+button.control:hover {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+button.control:active {
+    background-color: @accent_tint;
+    color: @accent2;
+}
+
+button.control:disabled {
+    background-color: @surface;
+    color: @fg_faint;
+}

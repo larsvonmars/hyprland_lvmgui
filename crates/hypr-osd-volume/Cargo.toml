@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-volume"
+description = "Volume OSD for Hyprland: a waybar-styled card that appears when the volume keys are pressed."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-volume"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

@@ -1,0 +1,38 @@
+# A collection of Hyprland UI elements - one small GTK4 layer-shell app per
+# element (see the README for the tour).
+#
+# Layout: crates/hypr-osd-core is the shared half (card recipe, palette, layer
+# surface, single-instance plumbing), crates/<element> is one element. Adding an
+# element means adding a member here and a directory under crates/.
+[workspace]
+resolver = "2"
+members = [
+    "crates/hypr-osd-core",
+    "crates/hypr-osd-volume",
+    "crates/hypr-osd-media",
+    "crates/hypr-osd-session",
+    "crates/hypr-osd-switcher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Lars Schell <contact@larsschell.ch>"]
+license = "MIT"
+
+[workspace.dependencies]
+hypr-osd-core = { path = "crates/hypr-osd-core" }
+# gtk4-layer-shell 0.6 pins gtk4 0.10, and only one crate in the graph may
+# link the native gtk-4 library - so the whole collection follows it.
+# Features: v4_12 for CssProvider::load_from_string, gio_v2_80 for
+# GApplicationCommandLine::print_literal (how a verb answers its caller).
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12", "gio_v2_80"] }
+gtk4-layer-shell = "0.6"
+serde_json = "1"
+
+[profile.release]
+# Elements are run from a keybinding, so start-up latency and size matter more
+# than build time.
+lto = "thin"
+strip = true
+codegen-units = 1

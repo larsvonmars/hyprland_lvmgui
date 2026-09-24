@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-session"
+description = "Session OSD for Hyprland: a card with lock, suspend, log out, reboot and shut down, shown by the power key or a keybinding."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-session"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

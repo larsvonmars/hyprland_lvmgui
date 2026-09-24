@@ -1,0 +1,79 @@
+/* ── the volume card ─────────────────────────────────────────────────────────
+ *
+ * The bar's volume signal, one size larger: the same three nerd-font symbols as
+ * #wireplumber, the same @accent, and the same @crit the bar paints a muted sink
+ * in. The slider is the bar's progress recipe (theme.py's `progressbar`: a
+ * @surface_h trough with an accent -> accent2 fill) wearing the settings app's
+ * 14px round thumb (`.slider::-webkit-slider-thumb`), expressed as a GTK scale.
+ *
+ * GTK CSS has no transforms, so where the web versions scale the thumb on
+ * hover, this one deepens its glow - same affordance, one property.
+ */
+
+/* the speaker glyph: a fixed-ish width so the slider does not shift when the
+ * symbol changes between one third and the next */
+label.glyph {
+    font-size: 15px;
+    color: @fg;
+    min-width: 20px;
+}
+
+label.glyph.muted {
+    color: @crit;
+}
+
+label.value {
+    color: @fg_dim;
+    font-weight: 600;
+}
+
+box.card.muted label.value {
+    color: @fg_faint;
+}
+
+/* ---- the slider ---- */
+
+/* room for the thumb to hang over the 4px trough */
+scale.volume {
+    min-height: 22px;
+}
+
+scale.volume > trough {
+    background-color: @surface_h;
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+scale.volume > trough > highlight {
+    background-image: linear-gradient(90deg, @accent, @accent2);
+    border-radius: 999px;
+}
+
+scale.volume > trough > slider {
+    background-color: @accent;
+    border-radius: 999px;
+    min-width: 14px;
+    min-height: 14px;
+    /* 14px thumb on a 4px trough: (14 - 4) / 2 */
+    margin: -5px;
+    box-shadow: 0 0 10px @glow;
+}
+
+scale.volume:hover > trough > slider {
+    box-shadow: 0 0 16px @glow;
+}
+
+scale.volume > trough > slider:active {
+    background-color: @accent2;
+}
+
+/* Muted: the accent goes, the level stays - a muted sink at 60 % still shows
+ * 60 %, in the same grey the bar uses for things that are switched off. */
+scale.volume.muted > trough > highlight {
+    background-image: linear-gradient(90deg, @fg_faint, @fg_faint);
+}
+
+scale.volume.muted > trough > slider {
+    background-color: @fg_dim;
+    box-shadow: none;
+}
