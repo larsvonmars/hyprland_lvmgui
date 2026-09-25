@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::{css, run, Config, Opts, Osd};
+use hypr_osd_core::{css, run, Config, Content, Opts, Osd};
 
 use view::VolumeView;
 
@@ -105,7 +105,7 @@ fn main() -> glib::ExitCode {
             let volume = Rc::new(VolumeView::new(&settings));
             volume.hook(osd);
             let _ = view.set(volume.clone());
-            volume.root.clone().upcast::<gtk::Widget>()
+            Content::Single(volume.root.clone().upcast::<gtk::Widget>())
         })
     };
 

@@ -15,12 +15,11 @@
 //!   next                 skip forward, then show what is playing
 //!   previous             skip back, then show what is playing
 //!   show                 reveal the card for the current track
-//!   status               print "Title — Artist", no card (for scripts/waybar)
+//!   status               print "Title — Artist", no card
 //!   (no verb)            start the daemon and wait for something to play
 //! ```
 
 mod art;
-mod player;
 mod view;
 
 use std::cell::OnceCell;
@@ -29,9 +28,9 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::{css, run, Config, Opts, Osd};
+use hypr_osd_core::mpris::{self, Direction};
+use hypr_osd_core::{css, run, Config, Content, Opts, Osd};
 
-use player::Direction;
 use view::MediaView;
 
 /// D-Bus application id - and therefore the single-instance key: a command
@@ -107,7 +106,7 @@ fn main() -> glib::ExitCode {
             // The card's trigger. Everything it needs to know arrives on this
             // one callback, so the rules for "is this worth showing?" live in
             // one place.
-            let follower = player::follow({
+            let follower = mpris::follow({
                 let media = media.clone();
                 let osd = osd.clone();
                 let settings = settings.clone();
@@ -130,7 +129,7 @@ fn main() -> glib::ExitCode {
             osd.on_shutdown(move || follower.stop());
 
             let _ = view.set(media.clone());
-            media.root.clone().upcast::<gtk::Widget>()
+            Content::Single(media.root.clone().upcast::<gtk::Widget>())
         })
     };
 
@@ -153,14 +152,14 @@ fn main() -> glib::ExitCode {
                         } else {
                             Direction::Next
                         };
-                        player::skip(direction)?;
+                        mpris::skip(direction)?;
                         // The card follows from the metadata change that skipping
                         // causes, so nothing is shown here: a player that refuses
                         // to skip would otherwise pop up with the same track.
                         Ok(String::new())
                     }
                     "show" => {
-                        let event = player::current()?;
+                        let event = mpris::current()?;
                         if event.track.is_empty() {
                             return Err("nothing is loaded in the player".to_string());
                         }
@@ -169,7 +168,7 @@ fn main() -> glib::ExitCode {
                         Ok(String::new())
                     }
                     "status" => {
-                        let event = player::current()?;
+                        let event = mpris::current()?;
                         let subtitle = event.track.subtitle();
                         Ok(match (event.track.title.as_str(), subtitle.as_str()) {
                             ("", "") => "nothing is playing".to_string(),

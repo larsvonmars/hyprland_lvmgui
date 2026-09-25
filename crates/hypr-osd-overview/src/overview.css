@@ -1,0 +1,125 @@
+/* The overview's own rules: a full-screen card holding a strip of workspaces and
+ * a field of window tiles.
+ *
+ * Everything shared - the palette read from ~/.config/hypr-osd/theme.css, the
+ * typography, the card recipe - comes from base.css. What is here is only what
+ * the overview has that no other element does.
+ */
+
+/* ── the card, when it is the screen ───────────────────────────────────────
+ *
+ * A filling card has no edge of its own, so the card recipe is replaced rather
+ * than adjusted: no rounding to cut corners out of the screen, no border to draw
+ * one that is not there, no shadow to fall on anything. What is left is the
+ * palette's own background colour - the bar's darkest token, @bg, at full size -
+ * which leaves the desktop a faint ghost behind the tiles instead of hiding it.
+ */
+window.osd box.card.filling {
+    background-image: none;
+    background-color: @bg;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* ── the workspace strip ─────────────────────────────────────────────────── */
+
+button.chip {
+    /* A button from the theme arrives with a background, a border, padding of
+     * its own and a shadow; a chip is a capsule and nothing else. */
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    box-shadow: none;
+    color: @fg_dim;
+    font-size: 11px;
+    padding: 2px 12px;
+    min-width: 0;
+    min-height: 0;
+}
+
+button.chip:hover {
+    background-color: @surface_h;
+}
+
+/* The workspace you are on. With the whole desktop behind the card, this is the
+ * only thing that still says where you are. */
+button.chip.current {
+    background-color: @accent_tint;
+    border-color: @accent;
+    color: @fg;
+}
+
+/* ── a window tile ───────────────────────────────────────────────────────── */
+
+button.tile {
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    box-shadow: none;
+    padding: 8px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+button.tile:hover {
+    background-color: @surface_h;
+}
+
+button.tile:active {
+    background-color: @accent_tint;
+}
+
+/* The selection: the same accent the switcher and the session card put on the
+ * thing you are about to choose. */
+button.tile.selected {
+    background-color: @accent_tint;
+    border-color: @accent;
+}
+
+/* Where a window's picture would be, for a window that has none. A dashed frame
+ * is the one thing on this card that says "missing" rather than "empty". */
+box.placeholder {
+    background-color: @surface_h;
+    border: 1px dashed @border;
+    border-radius: 8px;
+}
+
+label.placeholder-class {
+    font-size: 11px;
+    color: @fg_faint;
+}
+
+label.icon-letter {
+    font-size: 30px;
+    color: @fg_faint;
+}
+
+/* The workspace a tile's window lives on, written on the tile: the tiles are
+ * grouped by workspace, so a row of them would otherwise not say which one it
+ * came from. */
+label.ws-badge {
+    background-color: @bg;
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    color: @fg_dim;
+}
+
+label.tile-title {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+button.tile.selected label.tile-title {
+    color: @fg;
+}
+
+label.hint {
+    font-size: 11px;
+    color: @fg_faint;
+}

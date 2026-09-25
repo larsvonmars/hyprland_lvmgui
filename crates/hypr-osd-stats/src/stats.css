@@ -1,0 +1,152 @@
+/* ── the system popup ────────────────────────────────────────────────────────
+ *
+ * The panel that unfolds from the bar's status pill. Only what is specific to
+ * it: the palette comes from ~/.config/hypr-osd/theme.css, the card it is drawn
+ * on (the fill, the border, the 16px radius, the shadow) is the shell's
+ * `box.card`, and the pieces inside it - tiles, chips, the drawer grip - are the
+ * collection's shared recipes in `base.css`. This panel is a card like every
+ * other OSD here.
+ *
+ * Like the island it is laid out as tiles: the machine's *load* on the left
+ * (three readings with bars, then the updates), the machine's *controls* on the
+ * right (one row per thing, name on the left, value or button on the right).
+ * The right column is the table: every row is the same shape, so the eye can run
+ * down the values.
+ */
+
+/* ---- the panel ------------------------------------------------------------ */
+box.stats {
+    /* The card's own padding comes from the shell; this is the extra breathing
+     * room a panel of tiles needs. */
+    padding: 2px 2px 4px 2px;
+}
+
+box.popup-header {
+    padding: 0 2px;
+}
+
+label.popup-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: @fg;
+    letter-spacing: 1px;
+}
+
+box.body {
+    padding: 0 2px;
+}
+
+/* ---- tiles ---------------------------------------------------------------- */
+/* `box.tile` (the fill and the radius) is shared; the padding is what tells a
+ * tile in this panel from one in a bar popup. */
+box.tile {
+    padding: 9px 10px;
+}
+
+box.section-row {
+    margin-bottom: 2px;
+}
+
+label.section {
+    font-size: 10px;
+    font-weight: 600;
+    color: @fg_faint;
+}
+
+label.section-glyph {
+    font-size: 11px;
+    color: @fg_faint;
+}
+
+/* ---- readings ------------------------------------------------------------- */
+/* The value of a row: bold, so a column of them reads as data rather than as
+ * more prose. `@fg` rather than the dimmer colour, because these are the numbers
+ * the panel exists for. */
+label.value {
+    font-size: 11px;
+    font-weight: 600;
+    color: @fg;
+}
+
+/* Amber and red mean the same thing here as in the bar's pill: have a look, and
+ * look now. */
+label.value.warn {
+    color: @warn;
+}
+
+label.value.crit {
+    color: @crit;
+}
+
+/* The line under a tile's heading - "15 packages waiting", "System up to
+ * date" - which is a statement, not a reading. */
+label.sub {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+/* The first few package names: the smallest type in the panel, because it is
+ * there to make the count tangible, not to be read. */
+label.upd-list {
+    font-size: 9px;
+    color: @fg_faint;
+}
+
+/* ---- rows ----------------------------------------------------------------- */
+box.res-row {
+    margin-bottom: 1px;
+}
+
+box.control-row {
+    margin-bottom: 1px;
+}
+
+/* ---- the brightness slider ------------------------------------------------ */
+/* The same track, fill and knob language as the progress bars above it: a
+ * capsule, the accent gradient, and a round handle - so the slider reads as one
+ * of the readouts rather than as a piece of another toolkit.
+ *
+ * GTK4 draws a `GtkScale` as `scale > trough`, with the filled part
+ * (`trough > highlight`) and the knob (`slider`) inside it. The track is the
+ * trough's minimum height and the knob is taller than that, so the room for the
+ * knob comes from the scale's own padding - asking for it with a negative margin
+ * on the knob is what makes GTK complain that a size is below zero. */
+scale {
+    padding: 4px 0;
+}
+
+scale trough {
+    background-color: @surface_h;
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+scale trough highlight {
+    background-image: linear-gradient(90deg, @accent, @accent2);
+    border: none;
+    border-radius: 999px;
+}
+
+scale slider {
+    min-width: 12px;
+    min-height: 12px;
+    padding: 0;
+    /* The theme this app runs under gives the knob a negative margin so it can
+     * overhang its trough. With a smaller knob than the theme assumes, GTK then
+     * computes a negative size for it and warns about it on every start-up, so
+     * the margin is pinned to zero and the room for the knob is asked for above,
+     * on the scale itself. */
+    margin: 0;
+    /* The theme this app runs under gives the knob a negative margin so that it
+     * can overhang its trough. With a knob smaller than the theme assumes, GTK
+     * then computes a negative size for it and warns about it on every start-up,
+     * so the margin is pinned to zero - the room for the knob is asked for above,
+     * on the scale itself. */
+    margin: 0;
+    background-color: @fg;
+    background-image: none;
+    border: none;
+    border-radius: 999px;
+    box-shadow: none;
+}

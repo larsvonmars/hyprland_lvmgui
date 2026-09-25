@@ -1,4 +1,4 @@
-//! Application icons: a window's class turned into a picture the card can draw.
+//! Application icons: a window's class turned into a picture a card can draw.
 //!
 //! Two hops, each with a fallback, because neither one is reliable on its own:
 //!
@@ -7,8 +7,8 @@
 //!    `firefox.desktop`), but Electron apps and Steam set a class of their own
 //!    and point `StartupWMClass` at it, which is the second way in. The user's
 //!    own directory wins over the system's, exactly like freedesktop says.
-//! 2. **icon name → picture**: GTK's own icon theme, so the switcher shows the
-//!    same artwork as the rest of the desktop, in whatever theme is configured.
+//! 2. **icon name → picture**: GTK's own icon theme, so an element shows the same
+//!    artwork as the rest of the desktop, in whatever theme is configured.
 //!    `Icon=` may also be an absolute path, which is the file itself and not a
 //!    lookup at all.
 //!
@@ -37,18 +37,32 @@ fn index() -> &'static HashMap<String, String> {
 /// (a PNG, an SVG, a symbolic sheet) instead of being decoded here.
 pub fn paintable(class: &str, size: i32) -> Option<gdk::Paintable> {
     let name = icon_name(class)?;
-    // An absolute path in `Icon=` is allowed by the spec and used by apps that
-    // ship their own artwork: then there is nothing to look up.
+    Some(cached(class, by_name(&name, size)?))
+}
+
+/// The picture for an icon *name* - the second hop of [`paintable`], split out
+/// because the tray starts one hop in: a StatusNotifierItem hands over a name
+/// that is already an icon name, not a window class to look up in the desktop
+/// entries. (A class can be looked up by name too, which is why this is a
+/// separate entry point rather than a different implementation.)
+///
+/// An absolute path is the file itself and not a lookup at all: the
+/// freedesktop spec allows `Icon=` to be one, and applications that ship their
+/// own artwork use it.
+pub fn by_name(name: &str, size: i32) -> Option<gdk::Paintable> {
+    if name.trim().is_empty() {
+        return None;
+    }
     if name.starts_with('/') {
-        let texture = gdk::Texture::from_filename(Path::new(&name)).ok()?;
-        return Some(cached(class, texture.upcast()));
+        let texture = gdk::Texture::from_filename(Path::new(name)).ok()?;
+        return Some(texture.upcast());
     }
     let display = gdk::Display::default()?;
     let theme = gtk::IconTheme::for_display(&display);
-    // The second argument is GTK's own fallback list; this element has its own
+    // The second argument is GTK's own fallback list; an element has its own
     // idea of a fallback (the letter tile), so it stays empty.
     let found = theme.lookup_icon(
-        &name,
+        name,
         &[],
         size,
         1,
@@ -57,13 +71,12 @@ pub fn paintable(class: &str, size: i32) -> Option<gdk::Paintable> {
     );
     // GTK answers with *something* even for a name no theme knows - the
     // "image missing" icon. Only an icon that is the one that was asked for
-    // counts; anything else is left to the tile's letter, which at least says
-    // which application it is. (The binding hands the name back as a path, hence
-    // the comparison in those terms.)
-    if found.icon_name().as_deref() != Some(Path::new(name.as_str())) {
+    // counts; anything else is left to the caller's own fallback. (The binding
+    // hands the name back as a path, hence the comparison in those terms.)
+    if found.icon_name().as_deref() != Some(Path::new(name)) {
         return None;
     }
-    Some(cached(class, found.upcast()))
+    Some(found.upcast())
 }
 
 /// The icon *name* for a window class.
@@ -165,9 +178,8 @@ fn parse_string(text: &str, key: &str) -> Option<String> {
 }
 
 /// Textures and paintables already resolved, by class. Going through the theme
-/// costs a few milliseconds per application, and an alt-tab happens far more
-/// often than an application is installed, so paying it once per class is
-/// enough.
+/// costs a few milliseconds per application, and a card is opened far more often
+/// than an application is installed, so paying it once per class is enough.
 fn cached(class: &str, paintable: gdk::Paintable) -> gdk::Paintable {
     thread_local! {
         static CACHE: RefCell<HashMap<String, gdk::Paintable>> = RefCell::new(HashMap::new());
@@ -238,8 +250,11 @@ Icon=should-not-win
     fn a_class_with_no_entry_falls_back_to_the_class_itself() {
         // `icon_name` must answer for classes nobody installed an entry for:
         // the icon theme still gets a chance, then the view's letter tile.
-        let name = icon_name("some-unknown-app").expect("a name");
-        assert_eq!(name, "some-unknown-app");
+        assert_eq!(
+            icon_name("nonexistent-app-xyz").as_deref(),
+            Some("nonexistent-app-xyz")
+        );
+        // …and refuse to answer for a class that is not there at all.
         assert_eq!(icon_name("  "), None);
     }
 }

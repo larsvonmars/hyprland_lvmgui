@@ -1,6 +1,6 @@
 /* ── the session card ────────────────────────────────────────────────────────
  *
- * The bar's own session menu (`~/.config/waybar/scripts/popup.py`) as an OSD:
+ * The desktop's own session menu, as an OSD:
  * same rows, same glyphs, same states. Every value here is one popup.py uses -
  * the transparent row with the 10px radius the bar's module pills use, the accent
  * tint on hover, @crit for a row that is destructive-hovered or asking again, and

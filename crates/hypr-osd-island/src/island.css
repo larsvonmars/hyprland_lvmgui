@@ -1,0 +1,189 @@
+/* ── the island panel ────────────────────────────────────────────────────────
+ *
+ * The panel that unfolds from the bar's clock. Only what is specific to it: the
+ * palette comes from ~/.config/hypr-osd/theme.css, and the card it is drawn on
+ * (the fill, the border, the 16px radius, the shadow) is the shell's `box.card`
+ * in base.css - this panel is a card like every other OSD in the collection.
+ *
+ * The layout is three columns of information inside that card: the clock and the
+ * state chips across the top, then what is playing and what is waiting on the
+ * left, and the calendar on the right. The nesting is deliberate and matches the
+ * theme's steps - a `.tile` inside the card, a `.chip` inside a tile, exactly
+ * like a bar popup.
+ */
+
+/* ---- the panel ------------------------------------------------------------ */
+box.island {
+    /* The card's own padding comes from the shell; this is the extra breathing
+     * room a panel of tiles needs. */
+    padding: 2px 2px 4px 2px;
+}
+
+/* The little capsule that says "this unfolded from the bar": the collection's
+ * shared grip (`box.handle` in base.css), which this panel and the system popup
+ * both wear. */
+
+box.island-header {
+    padding: 0 2px;
+}
+
+label.island-clock {
+    font-size: 23px;
+    font-weight: 700;
+    color: @fg;
+}
+
+label.island-date {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+separator.sep {
+    background-color: @hairline;
+    min-height: 1px;
+    margin: 2px 0;
+}
+
+/* `separator.sep` - the hairline under a panel's header - is shared (base.css). */
+
+box.body {
+    padding: 0 2px;
+}
+
+/* ---- tiles ---------------------------------------------------------------- */
+/* `box.tile` (the fill, the radius) and the section headings are shared recipes
+ * in `base.css`; the padding is what a tile in a popup adds to them. */
+box.tile {
+    padding: 9px 10px;
+}
+
+box.section-row {
+    margin-bottom: 2px;
+}
+
+label.section {
+    font-size: 10px;
+    font-weight: 600;
+    color: @fg_faint;
+}
+
+label.section-glyph {
+    font-size: 11px;
+    color: @fg_faint;
+}
+
+/* ---- the state chips ------------------------------------------------------ */
+/* Same capsule as everywhere else in the theme, one step smaller. The colours a
+ * chip can wear are shared too (`base.css`); what is local is the pair that only
+ * makes sense for a track. */
+label.chip {
+    font-size: 10px;
+    padding: 2px 8px;
+}
+
+label.chip.playing {
+    background-color: @accent2_tint;
+    color: @accent2;
+}
+
+label.chip.paused {
+    color: @fg_dim;
+}
+
+/* ---- now playing ---------------------------------------------------------- */
+label.track {
+    font-size: 14px;
+    font-weight: 600;
+    color: @fg;
+}
+
+label.artist {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+label.time {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+box.transport {
+    margin-top: 2px;
+}
+
+button.transport-button {
+    min-width: 30px;
+    border-radius: 999px;
+    background-color: @surface;
+    color: @fg;
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+button.transport-button:hover {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+button.transport-button:disabled {
+    color: @fg_faint;
+    background-color: transparent;
+}
+
+/* ---- notifications -------------------------------------------------------- */
+label.notif-count {
+    font-size: 12px;
+    color: @fg;
+}
+
+/* `button.chipbtn` and its states are shared (base.css) - what is local is only
+ * the two chips that mean something specific here. */
+
+/* ---- calendar ------------------------------------------------------------- */
+label.cal-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: @fg;
+    margin: 0 4px;
+}
+
+box.cal-head-row button {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    padding: 0 4px;
+    min-width: 0;
+    color: @fg_dim;
+    font-size: 12px;
+}
+
+box.cal-head-row button:hover {
+    color: @accent;
+}
+
+label.cal-head {
+    font-size: 10px;
+    color: @fg_faint;
+    min-width: 22px;
+}
+
+label.cal-day {
+    font-size: 11px;
+    color: @fg_dim;
+    min-width: 22px;
+    min-height: 18px;
+    padding: 1px 0;
+    border-radius: 6px;
+}
+
+label.cal-day.weekend {
+    color: @fg_faint;
+}
+
+/* Today, in the same accent fill the bar's active workspace wears. */
+label.cal-day.today {
+    background-color: @accent;
+    color: @on_accent;
+    font-weight: 700;
+}

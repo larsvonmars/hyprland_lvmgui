@@ -1,6 +1,6 @@
 [package]
 name = "hypr-osd-volume"
-description = "Volume OSD for Hyprland: a waybar-styled card that appears when the volume keys are pressed."
+description = "Volume OSD for Hyprland: a card in the desktop's own theme that appears when the volume keys are pressed."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

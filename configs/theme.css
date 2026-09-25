@@ -1,0 +1,72 @@
+/* ── the desktop palette ─────────────────────────────────────────────────────
+ *
+ * THE single source of truth for the whole desktop theme: the bar, every OSD
+ * card, the island popup and the lock screen all read these tokens.
+ *
+ * The installer copies this file to ~/.config/hypr-osd/theme.css when it is
+ * missing, and `hypr-osd-core` reads the @define-color block out of that file
+ * at start-up, pasting it into the process's own stylesheet. GTK stylesheets are
+ * per process, so pasting a copy is the only way to share them - reading it at
+ * runtime is what keeps the copy honest.
+ *
+ * So: change a colour here, and everything that is drawn in this theme follows
+ * after a restart of the bar:
+ *
+ *     pkill -x hypr-osd-bar && ~/.local/bin/hypr-osd-bar &   # the whole bar
+ *
+ * Two things are not tokens and therefore live in two places by necessity:
+ *
+ *  - hyprlock cannot read CSS at all (it is not a GTK program). Its config,
+ *    ~/.config/hypr/hyprlock.conf, mirrors these values as `$variables` at the
+ *    top of the file - change them together with this block.
+ *  - the geometry (radii, the font) is CSS in `base.css`, which `hypr-osd-core`
+ *    carries in the binary, because it is the same for every element and is not
+ *    something you retheme. It is: 16px for cards and the bar, 12px for tiles,
+ *    10px for flat rows, 999px for capsules, and the face is
+ *    "MesloLGS Nerd Font Mono" at 13px/500.
+ */
+
+/* ---- surfaces ---- */
+@define-color bg            rgba(11, 15, 21, 0.92);
+@define-color bg_gradient   rgba(30, 38, 48, 0.55);
+/* The pills of the bar are ~2-4 % translucent, which is invisible over a
+ * wallpaper but would let a window behind a card show through its text - so
+ * card_top/card_bottom are the same two colours over black, i.e. what the bar's
+ * pills actually look like, and fully opaque for anything that floats over a
+ * window (every OSD card, the island popup). */
+@define-color pill_top      rgba(20, 26, 34, 0.96);
+@define-color pill_bottom   rgba(6, 9, 13, 0.98);
+@define-color card_top      #131921;
+@define-color card_bottom   #06090d;
+@define-color surface       rgba(255, 255, 255, 0.045);
+@define-color surface_h     rgba(255, 255, 255, 0.10);
+@define-color hairline      rgba(255, 255, 255, 0.06);
+@define-color hairline_soft rgba(255, 255, 255, 0.07);
+
+/* ---- lines ---- */
+@define-color border        rgba(51, 204, 255, 0.22);
+@define-color border_soft   rgba(51, 204, 255, 0.18);
+@define-color border_h      rgba(51, 204, 255, 0.42);
+
+/* ---- text ---- */
+@define-color fg            #dde7ef;
+@define-color fg_dim        #8b98a8;
+@define-color fg_faint      #4d5661;
+@define-color on_accent     #0a1216;
+
+/* ---- accents ---- */
+@define-color accent        #33ccff;
+@define-color accent2       #00ff99;
+@define-color warn          #ffcc66;
+@define-color crit          #ff5566;
+
+/* Accent-tinted fills (hover, chips, badges) - one value per accent, so a
+ * hovered pill in the bar, a chip in a popup and a menu row tint identically. */
+@define-color accent_tint   rgba(51, 204, 255, 0.14);
+@define-color accent2_tint  rgba(0, 255, 153, 0.12);
+@define-color warn_tint     rgba(255, 204, 102, 0.14);
+@define-color crit_tint     rgba(255, 85, 102, 0.16);
+
+/* ---- shadows ---- */
+@define-color glow          rgba(51, 204, 255, 0.25);
+@define-color shadow        rgba(0, 0, 0, 0.45);

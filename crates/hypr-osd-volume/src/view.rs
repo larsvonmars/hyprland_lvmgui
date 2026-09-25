@@ -16,10 +16,9 @@ use hypr_osd_core::Osd;
 use crate::sink::{self, Sink};
 use crate::Settings;
 
-/// The bar's own three symbols (the `format-icons` of the wireplumber module in
-/// `~/.config/waybar/config.jsonc`), so the OSD and the bar never disagree
-/// about what a level looks like: off/low, down, up - one per third, with mute
-/// forcing the first one.
+/// The desktop's own three symbols (the same three the bar's volume pill uses),
+/// so the OSD and the bar never disagree about what a level looks like: off/low,
+/// down, up - one per third, with mute forcing the first one.
 const GLYPH_OFF: &str = "\u{f026}";
 const GLYPH_LOW: &str = "\u{f027}";
 const GLYPH_HIGH: &str = "\u{f028}";

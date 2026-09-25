@@ -435,6 +435,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hypr-osd-bar"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+ "serde_json",
+]
+
+[[package]]
 name = "hypr-osd-core"
 version = "0.1.0"
 dependencies = [
@@ -444,7 +453,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypr-osd-island"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+ "serde_json",
+]
+
+[[package]]
 name = "hypr-osd-media"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+]
+
+[[package]]
+name = "hypr-osd-overview"
 version = "0.1.0"
 dependencies = [
  "gtk4",
@@ -460,12 +486,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypr-osd-stats"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+]
+
+[[package]]
 name = "hypr-osd-switcher"
 version = "0.1.0"
 dependencies = [
  "gtk4",
  "hypr-osd-core",
- "serde_json",
 ]
 
 [[package]]

@@ -1,20 +1,37 @@
 # hyprland_lvmgui
 
-A collection of small Hyprland UI elements — one binary per element.
+The desktop's own UI, in Rust: a top bar, and a collection of small Hyprland
+elements — one binary per element.
 
-Each element is a GTK4 app that owns exactly one **card**: a borderless
-layer-shell surface that appears when something happens (a volume key, later a
-brightness key, a media key), shows the state, and gets out of the way again. It
-never takes keyboard focus, it draws above fullscreen windows, and it is styled
-from the same palette as the rest of the desktop — see
-[Look and feel](#look-and-feel).
+The **bar** is the piece of furniture: a GTK4 layer-shell surface across the top
+of **every** screen — one surface per output, kept in step with the compositor's
+monitor list, so plugging a screen in grows a bar onto it and unplugging one
+takes that bar away (`output = eDP-1` in `bar.conf` narrows it back down to a
+single screen). It holds the workspaces, the focused window's title, what is
+playing, the tray, the network, the volume, the battery, the clock and the power
+button. It reads the system itself — Hyprland's own sockets, MPRIS, the session
+bus, `wpctl`, sysfs — with no helper scripts and no module configuration, which
+is the point: the data, the layout and the colours belong to one program, so they
+cannot disagree with each other. It replaced waybar on this desktop (see
+[Waybar](#waybar)).
+
+Every other element owns exactly one **card**: a borderless layer-shell surface
+that appears when something happens (a volume key, a media key, the power key),
+shows the state, and gets out of the way again. A card draws above fullscreen
+windows and is styled from the same palette as the bar — see
+[Look and feel](#look-and-feel). It does not take the keyboard, with two
+deliberate exceptions: cards that are *driven* by keys have to own them while they
+are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
+| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray, network, volume, battery, clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it. |
+| Island popup | `hypr-osd-island` | What is playing (with transport and progress), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
 | Media card | `hypr-osd-media` | Cover art, title and artist, with previous/next buttons. Appears when a new medium starts playing — no keybinding involved. |
-| Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down — the same menu the bar's popup shows. `SUPER + SHIFT + L`, or the hardware power key. |
-| Window switcher | `hypr-osd-switcher` | Every window you have open, most recently used first, with its application icon and title. `ALT + TAB`, and `ALT + SHIFT + TAB` to walk backwards — the one element that takes the keyboard. |
+| Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down. `SUPER + SHIFT + L`, or the hardware power key. |
+| Window switcher | `hypr-osd-switcher` | Every window you have open, most recently used first, with its application icon and title. `ALT + TAB`, and `ALT + SHIFT + TAB` to walk backwards. |
+| Workspace overview | `hypr-osd-overview` | The whole desktop as a picture of itself: every workspace as a chip, every window as a real thumbnail in its own shape, scaled to fit one screen. `SUPER + SHIFT + TAB`. |
 
 Siblings of this repo, which share the design language:
 [`linux-launchpad`](../linux-launchpad) and
@@ -22,52 +39,67 @@ Siblings of this repo, which share the design language:
 
 ```
 crates/
-  hypr-osd-core/       the shared half: palette, card recipe, layer surface,
-                       single-instance command line, config reader, and the
-                       line-follower for elements that watch instead of
-                       waiting for a key press
+  hypr-osd-core/       the shared half: the palette and the card/bar recipes, the
+                       layer surface, the single-instance command line, the config
+                       reader, Hyprland's two sockets with their event stream,
+                       MPRIS, the window and workspace list with its application
+                       icons, and the two ways to run a command without blocking
+  hypr-osd-bar/        the bar, and the StatusNotifier tray host it carries
+  hypr-osd-island/     the popup that unfolds from the clock
   hypr-osd-volume/     element #1: the volume card
   hypr-osd-media/      element #2: the media card
   hypr-osd-session/    element #3: the session card
   hypr-osd-switcher/   element #4: the Alt-Tab window switcher
+  hypr-osd-overview/   element #5: the workspace overview
 scripts/
-  install.sh           build + install + wire up Hyprland
-  hyprland/osd.lua     the Hyprland side (keys, autostart, layer rule)
+  install.sh           build + install + wire up Hyprland (and drop waybar)
+  hyprland/osd.lua     the Hyprland side (autostart, keys, layer rule)
 configs/
+  theme.css            the palette: every colour of this desktop
   hyprpaper.conf       the desktop wallpaper (the lock screen's, too)
-  hyprlock.conf        the lock screen, in the bar's palette
+  hyprlock.conf        the lock screen, in this theme's palette
   hypridle.conf        idle timers: lock, blank the panel, sleep
 ```
 
 ## Look and feel
 
-The rule is the same one the bar and the two apps already follow, so there is
-still exactly one place to change a colour:
+There is exactly one place to change a colour, and it is not in a program:
 
-1. **The palette is not in this repo.** At start-up an element reads the
-   `@define-color` block out of `~/.config/waybar/style.css` and pastes it into
-   its own stylesheet — exactly what `~/.config/waybar/scripts/theme.py` does for
-   the bar's popups. GTK stylesheets are per process, so a copy is the only way;
-   reading it at runtime is what keeps the copy honest. A mirror of that block
-   (`crates/hypr-osd-core/src/css.rs`) is used only when waybar's file is
-   missing, so a token can never come out undefined.
-2. **The recipes are theme.py's.** `crates/hypr-osd-core/src/base.css` carries
-   the typography (`MesloLGS Nerd Font Mono` 13px/500), the transparent surface
-   and the card (theme.py's `.card`: the solid pill fill, `@border`, the 16px
-   card radius, the bar's shadow), plus a couple of pieces elements share (tiles,
-   chips, the progress recipe).
-3. **Element-specific rules live with the element**, in
-   `crates/hypr-osd-volume/src/volume.css` — and they borrow from the two apps:
-   the slider is the bar's progress recipe (`@surface_h` trough, `@accent` →
-   `@accent2` fill, 999px) wearing the settings app's 14px round accent thumb,
-   the glyphs are the same nerd-font symbols waybar's `#wireplumber` module
-   shows, and a muted sink is painted in the same `@crit` red the bar uses.
+1. **The palette is `~/.config/hypr-osd/theme.css`** — installed from
+   [`configs/theme.css`](configs/theme.css), and the single source of truth for
+   the whole desktop: the bar, every card, the island popup and the lock screen.
+   At start-up a process reads the `@define-color` block out of that file and
+   pastes it into its own stylesheet, because GTK stylesheets are per process and
+   a copy is the only way to share one; reading it at runtime is what keeps the
+   copy honest. A mirror of the same block
+   (`crates/hypr-osd-core/src/css.rs`) is used only when the file is missing, so
+   a token can never come out undefined — GTK drops a declaration it cannot
+   resolve, silently, which from the outside looks like a styling bug.
+2. **The recipes are `base.css`.**
+   `crates/hypr-osd-core/src/base.css` carries the typography
+   (`MesloLGS Nerd Font Mono` 13px/500), the transparent surface, the card and
+   the bar, plus the pieces both are built from (tiles, chips, the progress
+   recipe). It lives in the binary rather than in the config directory because it
+   is the same everywhere and is not something you retheme.
+3. **Element-specific rules live with the element**: the bar's pills in
+   `crates/hypr-osd-bar/src/bar.css`, the panel's in
+   `crates/hypr-osd-island/src/island.css`, the volume card's in
+   `crates/hypr-osd-volume/src/volume.css`. They borrow from each other on
+   purpose — the card's slider is the same progress recipe the island's playback
+   bar uses, the bar's workspace pills wear the accent fill the session card puts
+   on a row you are about to act on, and a muted sink is the same `@crit` red
+   everywhere.
 
-GTK CSS is a subset: no `var()` (colour tokens are `@define-color`/`@name`, which
-is what waybar's stylesheet uses anyway), no `transform`, and no CSS animations —
-the card's entrance is Hyprland's own layer animation (`layersIn`/`layersOut`
-in your config), which also keeps it consistent with every other surface on the
-desktop.
+GTK CSS is a subset: no `var()` (colour tokens are `@define-color`/`@name`), no
+`transform`, and no CSS animations — the bar and the cards fade in through
+Hyprland's own layer animation (`layersIn`/`layersOut`), which also keeps them
+consistent with every other surface on the desktop.
+
+```sh
+# after editing ~/.config/hypr-osd/theme.css
+pkill -f hypr-osd-bar;     hypr-osd-bar &        # the bar (and its tray)
+pkill -f hypr-osd-island;  hypr-osd-island &     # the popup under the clock
+```
 
 ## Install
 
@@ -75,16 +107,21 @@ desktop.
 ./scripts/install.sh                  # build, install, wire up Hyprland
 ./scripts/install.sh --no-hyprland    # binary + config only, no config edits
 ./scripts/install.sh --take-over-keys # …and comment out the old wpctl volume binds
+./scripts/install.sh --keep-waybar    # leave the old bar in the autostart
 ```
 
 What it does:
 
 | | |
 | --- | --- |
-| `~/.local/bin/hypr-osd-volume` | the binary |
-| `~/.config/hypr-osd/volume.conf` | a commented config template (only created if missing) |
-| `~/.config/hypr/osd.lua` | volume keys, autostart and the layer rule, generated from `scripts/hyprland/osd.lua` |
+| `~/.local/bin/hypr-osd-*` | the seven binaries (the bar, the island, and the five cards) |
+| `~/.config/hypr-osd/theme.css` | the palette — only if the file is missing, so your edits survive |
+| `~/.config/hypr-osd/bar.conf` | the bar's settings (only created if missing) |
+| `~/.config/hypr-osd/island.conf` | the island popup's settings (only created if missing) |
+| `~/.config/hypr-osd/*.conf` | one config template per card (only created if missing) |
+| `~/.config/hypr/osd.lua` | the bar, the autostart, the volume keys and the layer rule, generated from `scripts/hyprland/osd.lua` |
 | `~/.config/hypr/hyprland.lua` | one appended line: `require("osd")` (backup: `hyprland.lua.bak`), then `hyprctl reload` |
+| `~/.config/hypr/hyprland.lua` | waybar's autostart commented out, and waybar stopped (backup: `hyprland.lua.bak-waybar`) — see [Waybar](#waybar) |
 | `~/.config/hypr/hyprpaper.conf` | the desktop wallpaper — only when hyprpaper is installed, and only if the file is missing |
 | `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed, and only if the file is missing |
 | `~/.config/hypr/hypridle.conf` | idle timers — only when `hypridle` is installed, and only if the file is missing |
@@ -102,11 +139,52 @@ power key has a second gate in front of it — systemd-logind — which the
 installer also reports; see [How it works](#how-it-works).
 
 Requirements: Hyprland ≥ 0.55 (Lua config), GTK4, `gtk4-layer-shell`, a Rust
-toolchain; at runtime `wpctl` (PipeWire/WirePlumber) and `hyprctl`.
+toolchain; at runtime `wpctl` (PipeWire/WirePlumber) and `hyprctl`. The bar reads a
+few more things and simply leaves a pill out when one is missing: `iw` (the
+network pill), `playerctl` (the media pill), `swaync-client` (the island's
+notification hub) and `wpctl` (the volume pill). The installer reports which of
+them it cannot find.
 
 ```sh
 sudo pacman -S --needed base-devel pkgconf gtk4 gtk4-layer-shell rust
+sudo pacman -S --needed pipewire wireplumber playerctl iw            # the pills
 ```
+
+## Waybar
+
+**waybar is gone.** It used to be this desktop's bar, and everything here was
+built to sit beside it: the palette lived in `~/.config/waybar/style.css`, the
+two apps mirrored it, and the cards read it out of that file at start-up. That
+arrangement had two problems, and they are why `hypr-osd-bar` exists:
+
+* **Two programs wanted the same strip of screen.** Both bars reserve an exclusive
+  zone along the top edge, both draw a full-width surface there, and the layer
+  rules that make the transparent parts click-through have to cover both. Running
+  the two together produced overlapping pills, clicks landing on the wrong bar,
+  and a `waybar` that had to be restarted whenever the theme changed.
+* **The palette had no owner.** The bar that *defined* the colours was not the one
+  that drew most of them, so every new element meant another parser for someone
+  else's stylesheet.
+
+So the palette moved into this repository (`configs/theme.css`), the bar moved
+into it too (`crates/hypr-osd-bar`), and the installer takes waybar out of
+the autostart — commenting the line out rather than deleting it, with
+`hyprland.lua.bak-waybar` as a backup, and stopping the two GTK processes that
+existed only to expand a waybar pill on hover.
+
+Going back is a handful of commands (the files are all still there):
+
+```sh
+./scripts/install.sh --keep-waybar      # don't touch it in the first place
+cp ~/.config/hypr/hyprland.lua.bak-waybar ~/.config/hypr/hyprland.lua
+hyprctl reload && waybar &
+```
+
+…but the two bars do not coexist well, so stop this one first
+(`pkill -f hypr-osd-bar`). The two hover panels (`island_panel.py`,
+`stats_panel.py`) are replaced by the island popup, which is the same idea built
+as an element: it registers its own surface, follows the pointer only while it is
+open, and is styled from the same palette as everything else.
 
 ## Use
 
@@ -116,6 +194,61 @@ invocation forwards its arguments to the running instance over D-Bus (and gets
 the exit status and any output back). That is also why a keybinding can just be
 `exec, hypr-osd-volume up`.
 
+The bar and the island popup are daemons like the rest, and answer to verbs the
+same way — they simply have nothing bound to them.
+
+**`hypr-osd-bar` — the bar**
+
+```sh
+hypr-osd-bar            # start the bar (what the autostart runs)
+hypr-osd-bar show       # make sure it is up
+hypr-osd-bar hide       # take it away until the next rebuild
+hypr-osd-bar toggle     # show or hide
+hypr-osd-bar refresh    # re-read every pill now
+hypr-osd-bar status     # print what every pill currently reads, no bar
+```
+
+It has no keybinding, because a bar is not something you call for. `status` is
+the one to remember: it prints the workspace row, the focused window's title,
+what is playing, the sink's level, the battery, and the wireless link as the bar
+sees them — which answers "why does the volume pill say 0 %" without guessing.
+
+The bar's left half is the workspaces (click to focus one, wheel to walk to the
+next or previous) and the focused window's title. Right half: the media pill
+(click to play/pause, right-click for the next track, middle-click for the
+previous one, wheel to seek), the network pill (left click opens `nmtui` in a
+terminal, right click toggles the radio), the **system info pill** — CPU load,
+memory in use, package temperature and the number of pending updates, with the
+same amber/red thresholds the old bar used (CPU 60/85 %, memory 70/90 %,
+temperature 75/90 °C) — then the volume pill (click mutes, wheel steps the volume
+*through the volume element*, right-click opens `pavucontrol`, middle-click mutes
+the microphone), the battery, the tray, and the power button (which opens the
+session card). Every pill has a tooltip with the whole story behind it.
+
+**`hypr-osd-island` — the clock's popup**
+
+```sh
+hypr-osd-island open    # what hovering the bar's clock runs
+hypr-osd-island close   # take it away
+hypr-osd-island toggle  # close it if it is up, otherwise show it
+hypr-osd-island show    # put it up and keep it there (no pointer tracking)
+hypr-osd-island status  # what the panel would show, without showing it
+```
+
+Hovering the clock in the bar unfolds a panel below it: the time and date, what
+is playing (with transport buttons and a progress bar, when the player reports a
+track length), the notification hub (`swaync`: the count, do-not-disturb, and the
+buttons that open the control centre, hide what is showing or clear it), and a
+calendar you can page through by month, with today in the accent colour.
+
+The island is a program of its own because a GTK widget can never paint outside
+its own window: an "expansion" of a 40-pixel pill is necessarily a second
+layer-shell surface. It also does the hover logic itself — the bar only says
+"the pointer is on the clock" (`open`), and the panel then samples the pointer to
+decide when to appear and when to go away, because *leaving* means moving onto
+the panel, somewhere the bar cannot see. Nothing is sampled while the panel is
+closed, so an island that nobody is hovering costs nothing at all.
+
 **`hypr-osd-volume` — the volume card**
 
 ```sh
@@ -124,7 +257,7 @@ hypr-osd-volume down      # −5 %
 hypr-osd-volume toggle    # mute/unmute, keeping the level
 hypr-osd-volume set 40    # an absolute level
 hypr-osd-volume show      # reveal the card without changing anything
-hypr-osd-volume status    # print the level, no card (for scripts/waybar)
+hypr-osd-volume status    # print the level, no card (for scripts)
 hypr-osd-volume           # start the daemon and wait for the first key press
 ```
 
@@ -154,13 +287,15 @@ hypr-osd-session status   # what each action would run, and what is unavailable
 hypr-osd-session reboot   # run one action now: lock | suspend | logout | reboot | poweroff
 ```
 
-The card's rows are the same five actions the bar's own session menu offers
-(`~/.config/waybar/scripts/popup.py`), with the same glyphs and the same
-"destructive actions ask twice" rule: `Reboot` and `Shut down` arm on the first
-click and fire on the second, so a card that appeared under the pointer cannot
-end your session by accident. A verb is never confirmed — typing or binding it is
-already deliberate. **Lock** uses whatever screen locker is installed (and
-**Suspend** locks first, then sleeps) — see [Lock screen](#lock-screen).
+The card's rows are the five actions the desktop offers for this: there is no
+second session menu anywhere now that waybar is gone, so the card is *the* menu
+(it was designed from the old `~/.config/waybar/scripts/popup.py`, whose glyphs
+and wording it keeps). The "destructive actions ask twice" rule still holds:
+`Reboot` and `Shut down` arm on the first click and fire on the second, so a card
+that appeared under the pointer cannot end your session by accident. A verb is
+never confirmed — typing or binding it is already deliberate. **Lock** uses
+whatever screen locker is installed (and **Suspend** locks first, then sleeps) —
+see [Lock screen](#lock-screen).
 
 **`hypr-osd-switcher` — the window switcher**
 
@@ -173,8 +308,8 @@ hypr-osd-switcher cancel   # close without switching
 hypr-osd-switcher status   # the list, in switcher order, and no card
 ```
 
-It is the one element that takes the keyboard, and it has to be: a switch ends
-when you let go of Alt, and the only way to see that release is to own the
+It is one of the two elements that take the keyboard, and it has to be: a switch
+ends when you let go of Alt, and the only way to see that release is to own the
 keyboard for as long as the card is up. So `ALT + TAB` is a *held* gesture. A
 tap and release swaps to the window you were in before this one; keep tapping Tab
 (or the arrow keys, which walk the grid properly) to move further; Enter settles
@@ -188,10 +323,96 @@ card commits on its own (see `idle_commit_ms`), which is the safety net for the
 one case the keyboard cannot cover: an Alt release that happened before the card
 was listening.
 
+**`hypr-osd-overview` — the workspace overview**
+
+```sh
+hypr-osd-overview toggle   # open it, or close it again (what SUPER+Shift+Tab runs)
+hypr-osd-overview show     # open it
+hypr-osd-overview close    # close it without switching anything
+hypr-osd-overview status   # the workspaces and the windows, and no card
+```
+
+One tap of `SUPER + SHIFT + TAB` and the desktop is on the screen as a picture of
+itself: the workspaces that exist as a row of chips along the top (the one you
+are on wears the accent), and every window as a tile, drawn in its own shape and
+scaled until all of them fit on one screen. The tiles are *captures*, not icons —
+a photograph of the window's own contents, taken when the card opens — so a window
+behind three others, or on a workspace that is not on screen at all, shows what is
+really in it.
+
+Arrows (or `h`/`j`/`k`/`l`) walk the tiles, Enter or a click goes to the one you
+are on, `1`–`9` jump to that workspace, `R` takes the pictures again (for a window
+that appeared while the card was up, or a capture that failed), and Escape — or a
+click on the card where there is no tile — closes it. `Shift + Tab` walks
+backwards.
+
+Like the switcher, this card takes the keyboard while it is up: Escape and the
+arrows have to be the card's own keys, or they would be fighting whatever is
+behind the card. It is the second element that does, and both are cards you opened
+on purpose. Because it takes the keyboard, it also lets go of it by itself: after
+a minute with no key and no mouse movement over it (`idle_close_ms`) the card
+closes. The case that makes this necessary is a session lock — a lock takes the
+keyboard from every other surface, this one included, so a card that was up when
+the screen locked would otherwise sit there for good.
+
 ## Configure
 
 One file per element under `~/.config/hypr-osd/`, every key optional (the
-defaults are in the comments of the installed templates).
+defaults are in the comments of the installed templates). `theme.css` is not a
+element config: it is the palette, and it is [its own section](#look-and-feel).
+
+**`bar.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `height` | `40` | the bar's height in pixels |
+| `margin_top` | `8` | how far below the top edge it floats |
+| `margin_x` | `12` | the inset at each side |
+| `exclusive` | `true` | reserve the strip with the compositor, so windows start below it |
+| `output` | *(empty)* | the connector to put the bar on, and *only* that one; empty = a bar on every monitor |
+| `workspaces` | `5` | how many numbered workspaces the row keeps room for |
+| `title_width` | `320` | how much room the window title may take before it is ellipsised |
+| `clock_format` | `%H:%M` | the clock's `strftime` format |
+| `battery`, `adapter` | `BAT1`, `ADP1` | the battery to watch, and the mains supply that says whether it is charging |
+| `network_interface` | `wlan0` | the wireless interface to read through `iw` |
+| `tray_icon_size` | `18` | tray icon size in pixels |
+| `tick_ms` | `1000` | the heartbeat; the clock's resolution |
+| `volume_every_ms`, `network_every_ms`, `battery_every_ms` | `1000`, `5000`, `30000` | how often the slow pills are re-read |
+| `stats_every_ms` | `1000` | how often CPU, memory and temperature are read |
+| `updates_every_ms` | `1800000` | how often a stale update count is refreshed (half an hour) |
+| `updates_command` | `checkupdates` | what prints the pending-update list; empty turns the count off |
+| `resync_every_ms` | `5000` | how often Hyprland and MPRIS are re-read even with no event |
+| `volume_command` | `hypr-osd-volume` | what the volume pill's click and wheel run |
+| `session_command` | `hypr-osd-session` | what the power button runs |
+| `island_command` | `hypr-osd-island` | what the clock's hover runs |
+| `notifications_command` | `swaync-client` | what the clock's clicks run |
+| `terminal_command` | `kitty` | the terminal the network pill opens `nmtui` in |
+
+The bar is event driven: Hyprland's own event socket drives the workspace row and
+the title, and `playerctl --follow` drives the media pill. The `*_every_ms` keys
+are the intervals for the things that have no event to listen to (a battery
+discharging has nothing to say about itself), and `resync_every_ms` is the safety
+net for an event socket that quietly died.
+
+**`island.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `bar_height`, `bar_margin_top` | `40`, `8` | where the bar is — these have to match `bar.conf` |
+| `gap` | `6` | the distance between the bar's bottom edge and the panel |
+| `hot_width` | `280` | how wide the hover zone around the bar's centre is |
+| `left_width`, `right_width` | `252`, `178` | the panel's two columns |
+| `open_delay_ms` | `120` | how long the pointer has to rest on the clock before the panel opens |
+| `close_delay_ms` | `300` | how long it may be away before the panel closes |
+| `poll_ms` | `50` | how often the pointer is sampled, while the panel matters |
+| `tick_ms` | `1000` | the clock's resolution |
+| `media_every_ms` | `700` | how often the progress bar is refreshed while the panel is up |
+| `notifications_command` | `swaync-client` | what the hub's buttons run |
+
+The panel is told nothing by the bar: it works the bar's geometry out from
+`bar_height`, `bar_margin_top` and `gap`, which is why those three have to agree
+with `bar.conf`. The hover zone is derived rather than measured, because the
+clock is the bar's middle child and therefore always centred on it.
 
 **`volume.conf`**
 
@@ -226,6 +447,7 @@ A daemon reads its file once, at start-up:
 ```sh
 pkill -x hypr-osd-media && hypr-osd-media &
 pkill -f hypr-osd-session && hypr-osd-session &   # '-f': see note below
+pkill -f hypr-osd-bar && hypr-osd-bar &           # the bar, too
 ```
 
 `pkill -x` matches process names of up to 15 characters, and `hypr-osd-session`
@@ -246,6 +468,17 @@ then GTK's own icon theme. An application nothing can be found for gets its firs
 letter in a tile rather than a generic glyph, so the grid still says which window
 is which.
 
+**`overview.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `tile_min_height` | `84` | the smallest a tile may become, however full the desktop is |
+| `tile_max_height` | `300` | the largest: what a single window gets, and the ceiling for any tile |
+| `gap` | `18` | space between tiles, and between rows of them |
+| `icon_size` | `64` | the icon in a tile that has no picture |
+| `thumbnails` | `true` | `false` skips the captures — the card becomes a workspace switcher drawn with icons |
+| `idle_close_ms` | `60000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
 ## Lock screen
 
 **hyprlock** draws it (`sudo pacman -S hyprlock`), from
@@ -254,11 +487,10 @@ is which.
 the file is missing — it is meant to be edited, so re-running `install.sh` leaves
 your version alone.
 
-hyprlock cannot read the bar's stylesheet, so the palette is mirrored at the top
-of that file as `$variables` — the same `@define-color` values theme.py reads for
-the bar's popups and the OSDs' `base.css` mirrors, written as `#RRGGBBAA`. Same
-deal as everywhere else in this theme: change a colour in
-`~/.config/waybar/style.css`, change it here.
+hyprlock cannot read CSS, so the palette is mirrored at the top of that file as
+`$variables` — the same `@define-color` values every element reads out of
+`~/.config/hypr-osd/theme.css`, written as `#RRGGBBAA`. Same deal as everywhere
+else in this theme: change a colour in `theme.css`, change it here.
 
 What it draws, over **your desktop wallpaper** — the lock screen points straight at
 the image the desktop uses, rather than at a screenshot of the desktop, so it
@@ -355,24 +587,75 @@ session lock signal slots in without touching them.
 
 ## How it works
 
+- **The bar is not a card.** It is the same kind of surface — one GTK4
+  layer-shell app — but anchored to the *top* layer (not the overlay one),
+  stretched across the screen, with its height reserved as an exclusive zone so
+  tiled windows start below it, and it is up from the moment its process starts
+  until it ends. `Placement::Bar` in `osd.rs` is the whole difference, plus one
+  detail: a fullscreen window covers the bar exactly as it covers everything
+  else, which is what the top layer means.
+- **The bar is the one element with a surface per screen.** A GTK widget has a
+  single parent, so there is no one bar that could be shown on two monitors: the
+  element hands the shell a *factory* (`Content::PerOutput`) and the shell calls
+  it once per output, reconciling its surfaces against GDK's monitor list every
+  time that changes. `hypr-osd-bar` keeps one view per connector and paints them
+  all from the same values — the workspaces, the track and the volume are
+  properties of the session, not of a screen — so two bars cannot disagree, and a
+  screen plugged in halfway through is painted immediately instead of waiting for
+  the battery's thirty-second tick. The tray is a session-wide D-Bus object with
+  one set of icons, so exactly one bar carries it: the screen `output` names, else
+  the one that was focused when the bar started.
+- **Nothing that runs a command waits for it.** `hypr_osd_core::hardware::launch`
+  spawns and hands the exit to GLib; `run` (which waits) is only for tools that
+  answer once and leave. Half of what the bar *does* is another element —
+  `hypr-osd-stats toggle` opens the system popup, the power button runs
+  `hypr-osd-session`, the wheel runs `hypr-osd-volume` — and the first invocation
+  of an element nobody has started yet *becomes* that element's daemon, staying up
+  as long as its card does. Waiting for one therefore means waiting for the user to
+  close a panel, with the bar's own main loop parked: the status pill's click froze
+  the whole bar, permanently. There is a regression test for it
+  (`launching_a_command_does_not_wait_for_it`).
+- **The bar asks Hyprland over its own sockets**, not through `hyprctl`: raw
+  requests on `.socket.sock`, and the event stream on `.socket2.sock`, so the
+  workspace row keeps up with a swipe instead of with a timer. Events arrive in
+  bursts and are coalesced into one read, and the read is a GIO stream on the
+  main loop, so nothing blocks. The timer that remains is a safety net for a
+  socket that quietly died.
+- **The tray is a D-Bus service the bar owns.** `hypr-osd-bar` claims
+  `org.kde.StatusNotifierWatcher`, because without a host application indicators
+  are simply invisible, and then renders each registered item: its own pixmap when
+  it sends one, otherwise a lookup in the icon theme. Clicks are passed on to the
+  item (`Activate`, `SecondaryActivate`, `ContextMenu`). The item's *menu* is the
+  one thing the bar does not draw — that is a second protocol
+  (`com.canonical.dbusmenu`) and a project of its own — so items that implement
+  `ContextMenu` themselves get theirs and the rest do nothing on a right click.
 - **One process per element**, started at login by `osd.lua`'s `exec-once`
   (nothing is shown), or lazily by the first key press. A card, not a window:
   `gtk4-layer-shell` puts the surface on the *overlay* layer, so it appears above
   fullscreen windows and is not touched by the tiling layout.
-- **It never steals focus.** The layer surface is created with
-  `KeyboardMode::None`, so the window you were typing in keeps the keyboard while
-  the card is up. Pointer input still works — the slider needs it.
+- **It never steals focus — except for the two cards that are driven by keys.**
+  The layer surface is created with `KeyboardMode::None`, so the window you were
+  typing in keeps the keyboard while the card is up; pointer input still works —
+  the slider needs it. The switcher and the overview ask for the keyboard
+  (`Opts::keyboard`) for as long as their card is on screen, because both are
+  driven by keys that must not also reach the window underneath: an Alt release
+  ends a switch, and Escape and the arrows cancel an overview. Both cards are
+  opened on purpose, which is what makes eating a keystroke acceptable there, and
+  both of them close themselves if they are left alone.
 - **The transparent frame is click-through.** The surface is the card plus an
   18px ring that lets the card's shadow breathe; `osd.lua`'s `ignore_alpha` layer
   rule makes those transparent pixels pass clicks to whatever is behind them, so
   only the card itself is hit-testable.
-- **It follows the focused monitor.** Each command asks `hyprctl -j
+- **A card follows the focused monitor.** Each command asks `hyprctl -j
   activeworkspace` which output is focused, and the surface is (re)built for that
   monitor, so the card appears where you are looking. One monitor means this is a
-  no-op.
+  no-op. The bar is the deliberate exception: it is on *every* output (see
+  above), and a popup that unfolds from it is told which of the bars it came
+  from.
 - **`wpctl` is the single source of truth.** The volume element reads the sink, applies
   the change and reads it back, so the card can never show a number the sink does
-  not have — and it can never disagree with the bar's volume module.
+  not have — and it can never disagree with the bar's volume pill, which asks the
+  same element for its step.
 - **The media element watches instead of polling.** One `playerctl metadata
   --follow` runs for the session and prints a line per change; the daemon reads
   it as a single async stream (no timer, no repeated process spawns, nothing
@@ -392,7 +675,9 @@ session lock signal slots in without touching them.
   fetched the glyph stays up: showing the previous track's cover would be a lie.
 - **Auto-hide.** `duration_ms` after the last change the card hides — unless the
   volume slider is being dragged, or (for the cards with buttons) the pointer is
-  resting on it, so they stay usable.
+  resting on it, so they stay usable. The two keyboard cards instead close after
+  `idle_commit_ms` / `idle_close_ms` of silence, which is a *different* timer: not
+  "the news is stale", but "nobody is here to press Escape".
 - **The session card is a menu, not a notification.** A layer surface never gets
   the keyboard, so Escape cannot reach it: the key that opened it toggles it away
   again, and the card says so in its own hint line. Its `duration_ms` is longer
@@ -406,6 +691,20 @@ session lock signal slots in without touching them.
   card would never appear. `install.sh` reports the current setting and prints the
   two lines that hand the key over (a `logind.conf.d` drop-in and a logind
   restart); `SUPER + SHIFT + L` works either way.
+- **The overview captures a window, not the screen.** `grim -T` asks the
+  compositor for one *toplevel's* own buffer, which is what makes the tiles real
+  pictures: a window behind another is as complete as the one in front, and a
+  window on a workspace that is not on screen has a picture at all (grabbing the
+  screen once and cropping per window could do neither). `hyprctl -j clients`
+  names each window for it (`stableId`), and the capture is scaled down and
+  encoded as JPEG before it is read: the card holds textures for as long as it is
+  up, and a dozen full-size windows would be a couple of hundred megabytes.
+- **The overview sizes itself to fit.** Tile height is solved, not guessed: a
+  tile's width follows from the window's shape, so "does it fit the screen" is a
+  question about one number, and the largest number that fits is the answer — no
+  scrolling, because the whole point is seeing everything at once. The
+  arithmetic is a pure function in `layout.rs`, which is also where its tests
+  are.
 - **Stopping a daemon stops its helpers.** Follower children are not killed by
   their parent dying, so `run` turns SIGTERM/SIGINT into a clean shutdown and
   `Osd::on_shutdown` gives each element the chance to stop what it started.
@@ -416,20 +715,31 @@ session lock signal slots in without touching them.
 1. `crates/hypr-osd-<name>/`, a `Cargo.toml` with a `[[bin]]` whose name matches
    the crate, and `src/main.rs` + `src/<name>.css`.
 2. Use `hypr_osd_core::run(…)`: give it `Opts` (`app_id` `com.schells2.osd.<name>`,
-   namespace `hypr-osd`, width, bottom margin), a `Build` closure that returns the
-   card's content widget, and a `Handle` closure that implements the verbs and
-   calls `osd.reveal(duration)` when the card should appear.
+   namespace `hypr-osd`, width, and — if it is not a bottom-anchored card —
+   `placement` and `keyboard`), a `Build` closure that returns the card's content
+   widget, and a `Handle` closure that implements the verbs and shows the card
+   (`osd.reveal(duration)` for a notification, `osd.show()` for a card that stays
+   up until something dismisses it).
 3. An element that reacts to something happening rather than to a key press starts
    a follower in `Build` (`hypr_osd_core::follow`) and stops it in
-   `osd.on_shutdown(…)` — that is the whole of the media card's wiring.
-3. Keep the `hypr-osd` namespace prefix: the layer rule in `osd.lua` matches it,
+   `osd.on_shutdown(…)` — that is the whole of the media card's wiring. For a
+   command that answers *once* with bytes, `hypr_osd_core::output::read` is the
+   same idea with an end to it; that is how the overview captures windows.
+4. Draw from what the core already knows before inventing it again: the window and
+   workspace list (`windows`), an application's icon (`icons`), a tile's stand-in
+   letter and a label that cannot widen its card (`text`), what is playing
+   (`mpris`), Hyprland's sockets and event stream (`hypripc`), and the one-file
+   flags two elements use to talk to each other (`state`).
+5. Keep the `hypr-osd` namespace prefix: the layer rule in `osd.lua` matches it,
    and that rule is what makes the transparent frame click-through.
-4. Style it from the tokens (`@accent`, `@card_top`, …) and the shared classes
-   (`box.card`, `box.tile`, `label.chip`, `progressbar`), and add only what is
-   special about that element.
-5. Add the binary to `ELEMENTS` in `scripts/install.sh` and its keybinding/
+6. Style it from the tokens (`@accent`, `@card_top`, …) and the shared classes
+   (`box.card`, `box.bar`, `box.tile`, `label.chip`, `progressbar`), and add only
+   what is special about that element. A new *pill in the bar* is not an element at
+   all: it is a `Pill` in `crates/hypr-osd-bar/src/view.rs` plus a `render_*`
+   method, a class in `bar.css`, and a line in the bar's tick.
+7. Add the binary to `ELEMENTS` in `scripts/install.sh` and its keybinding/
    autostart to `scripts/hyprland/osd.lua`.
-6. `cargo fmt && cargo clippy --all-targets && cargo test`.
+8. `cargo fmt && cargo clippy --all-targets && cargo test`.
 
 ## Development
 
@@ -464,6 +774,16 @@ Debugging:
 
 | Symptom | Likely cause |
 | --- | --- |
+| Two bars, one on top of the other | waybar is still in the autostart, or was started by hand: comment the line out (the installer does it) and `pkill -x waybar`. |
+| The bar is there but a pill is missing | That is how the bar reports “nothing to say”: no battery on the machine, no wireless interface, nothing playing, no tray items. `hypr-osd-bar status` prints what each one reads and why. |
+| The bar is not there at all | `pgrep -f hypr-osd-bar`, then run it in a terminal and read stderr — a missing `gtk4-layer-shell` means it cannot create the surface. `hyprctl -j layers` shows the surface (namespace `hypr-osd`, top layer) when it exists. |
+| No bar on one of the monitors | With `output` set in `bar.conf`, only that connector gets one — clear it to put a bar on every screen. Otherwise `hypr-osd-bar status` prints the screens it is on (and which of them carries the tray). A monitor GDK does not know about — a nested session, a headless output — cannot have a surface. |
+| A tray icon is missing | The indicator registered with the watcher before the bar owned it — indicators register once, when they start, so restart the application (or log out and in). `busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems` lists what the bar knows about. |
+| A right click on a tray icon does nothing | The item has no `ContextMenu` of its own, and the bar does not draw `dbusmenu` menus — see [How it works](#how-it-works). The left click is the one that works everywhere. |
+| The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Is `island.conf`'s `hot_width` wide enough for the clock pill, and do `bar_height`/`bar_margin_top` match `bar.conf`? `hypr-osd-island status` prints the geometry it works with. |
+| The island opens or closes too eagerly | `open_delay_ms` and `close_delay_ms` in `island.conf`: the first is how long the pointer has to rest on the clock, the second how long it may be away before the panel closes. |
+| The clock pill stays lit with no panel behind it | A stale “panel is open” flag — the island writes it on show/hide, so a `kill` leaves it behind. It is cleared at start-up: `pkill -f hypr-osd-island; hypr-osd-island &`. |
+| The bar's clock says the wrong time | It ticks once a second by default; `tick_ms` in `bar.conf` is the resolution (and the clock's `strftime` format is `clock_format`). |
 | No card, but the volume changes | The daemon died — check its stderr, and `pgrep -x hypr-osd-volume`. On a session without `gtk4-layer-shell` it cannot create the surface at all. |
 | The volume moves two steps per press | `hyprland.lua` still binds the volume keys to `wpctl`; re-run with `--take-over-keys`. |
 | `wpctl … failed` on stderr | PipeWire/WirePlumber trouble; `wpctl status` should list a default sink. |
@@ -471,7 +791,10 @@ Debugging:
 | Card on the wrong monitor | It follows the focused output through `hyprctl`; if `hyprctl` is unavailable it stays on the monitor it was built for. |
 | No media card appears | Is the daemon running (`pgrep -x hypr-osd-media`)? Does the player speak MPRIS (`playerctl -l`)? A track that is merely loaded, never played, does not trigger a card unless `only_when_playing = false`. |
 | Media card shows no cover | The player reported none, or reported it as a `blob:`/`data:` URL — only `file://` and `http(s)://` artwork can be read. `playerctl metadata | grep -i arturl` shows what it sends. |
-| “Lock” is greyed out | No screen locker is installed — `hypr-osd-session status` names the candidates (`hyprlock`, `swaylock`, `gtklock`). The bar's own session menu greys it out the same way. The row re-checks every time the card is shown, so installing one is enough. |
+| “Lock” is greyed out | No screen locker is installed — `hypr-osd-session status` names the candidates (`hyprlock`, `swaylock`, `gtklock`). The row re-checks every time the card is shown, so installing one is enough. |
 | Nothing locks when you walk away | That is hypridle's job, and it is not installed: `sudo pacman -S hypridle`, then re-run `install.sh`. `pgrep -af hypridle` should show it running. |
 | The power button doesn't show the session card | systemd-logind is handling the key (`HandlePowerKey=`); see the note in [How it works](#how-it-works) and re-run `install.sh` to see the current value. |
 | The session card won't go away | Press `SUPER + SHIFT + L` again, or set `duration_ms` to something shorter in `session.conf` (`0` means “stay until dismissed”, which is also what a card with no way out looks like). |
+| The overview shows icons instead of pictures | No `grim`, or a compositor that cannot hand over a single window (`hypr-osd-overview status` says which windows have a capture id; a *nested* Hyprland cannot capture a toplevel, a real one can). `thumbnails = false` makes the icon tiles the deliberate look. |
+| The overview won't go away | It takes the keyboard while it is up: Escape, a click on the card where there is no tile, or the key again. `hypr-osd-overview close` works from anywhere, and after `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
+| A card is on screen but nothing responds to keys | A keyboard card is up (switcher or overview) and something else grabbed the keyboard first — usually a session lock. Wait for `idle_close_ms`, or `hypr-osd-overview close` / `hypr-osd-switcher cancel`. |

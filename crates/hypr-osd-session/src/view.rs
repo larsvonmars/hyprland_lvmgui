@@ -1,7 +1,7 @@
 //! The session card: a title, one row per action, and a line saying how the card
 //! closes.
 //!
-//! The rows are the bar's session menu (`~/.config/waybar/scripts/popup.py`) as
+//! The rows are the desktop's session menu as a card: the five actions, each
 //! an OSD: glyph plus label, a hover tint, `@crit` when a row is armed or
 //! destructive - and the "click again" rule, which is the one thing here that has
 //! to be right. A card that appears under the pointer because a hardware key was

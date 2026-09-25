@@ -51,3 +51,18 @@ pub fn focus_window(address: &str) -> bool {
         "hl.dsp.focus({{ window = \"address:{address}\" }})"
     )) || dispatch(&format!("focuswindow address:{address}"))
 }
+
+/// Switch to a workspace by id or name (`3`, `special:magic`).
+///
+/// Numbers are passed as numbers, because that is how a Hyprland configured in
+/// Lua spells them (`hl.dsp.focus({ workspace = 3 })`, exactly what the example
+/// config's workspace binds use); a name goes through as a string
+/// (`{ workspace = "special:magic" }`).
+pub fn focus_workspace(name: &str) -> bool {
+    let target = match name.parse::<i32>() {
+        Ok(id) => id.to_string(),
+        Err(_) => format!("\"{name}\""),
+    };
+    dispatch(&format!("hl.dsp.focus({{ workspace = {target} }})"))
+        || dispatch(&format!("workspace {name}"))
+}

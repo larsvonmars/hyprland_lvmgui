@@ -1,8 +1,8 @@
 /* The switcher's own rules: a grid of window tiles, one of them selected.
  *
- * Everything shared - the card itself, the typography, the palette read from
- * waybar's stylesheet - comes from base.css. What is here is only what the
- * switcher has that no other element does.
+ * Everything shared - the palette read from ~/.config/hypr-osd/theme.css, the
+ * typography, the card recipe - comes from base.css. What is here is only what
+ * the switcher has that no other element does.
  */
 
 button.tile {

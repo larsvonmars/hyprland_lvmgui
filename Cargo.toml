@@ -8,10 +8,14 @@
 resolver = "2"
 members = [
     "crates/hypr-osd-core",
+    "crates/hypr-osd-bar",
+    "crates/hypr-osd-island",
+    "crates/hypr-osd-stats",
     "crates/hypr-osd-volume",
     "crates/hypr-osd-media",
     "crates/hypr-osd-session",
     "crates/hypr-osd-switcher",
+    "crates/hypr-osd-overview",
 ]
 
 [workspace.package]

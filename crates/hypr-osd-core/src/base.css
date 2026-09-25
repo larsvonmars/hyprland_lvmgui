@@ -1,24 +1,26 @@
 /* ── the collection's shared GTK4 stylesheet ─────────────────────────────────
  *
  * The palette is deliberately NOT in here. `css.rs` prepends it at runtime,
- * reading the @define-color block out of ~/.config/waybar/style.css - exactly
- * what ~/.config/waybar/scripts/theme.py does for the bar's popups. So the bar,
- * its popups and every element in this collection are painted from one palette;
- * retheme the bar and the OSDs follow. (Fallback values, used only when that
- * file is missing, live in css.rs.)
+ * reading the @define-color block out of ~/.config/hypr-osd/theme.css (installed
+ * from this repository's configs/theme.css). So the bar, the OSD cards, the
+ * island popup and the lock screen are all painted from one palette; retheme
+ * that one file and everything follows. (Fallback values, used only when it is
+ * missing, live in css.rs.)
  *
- * The recipes below are theme.py's `base_css()` - typography, the transparent
- * surface, the card - so an element looks like a bar popup because it is built
- * from the same pieces, not because the numbers were copied twice:
+ * The recipes below are the desktop's shared ones - typography, the transparent
+ * surface, the card, the bar - so an element looks like part of the desktop
+ * because it is built from the same pieces, not because the numbers were copied
+ * twice:
  *
- *     16px   cards (window#waybar, .card, .island-card)
+ *     16px   cards, the bar (box.card, box.bar)
  *     12px   tiles, tooltips, menus
  *     10px   flat rows
  *     999px  capsules: pills, chips, progress bars
  *
- * Card padding is NOT part of the recipe (theme.py's .card has none either):
- * `osd.rs` insets the element's content widget by CARD_PAD_* instead, which
- * keeps the width in Opts the real, on-screen width of the card.
+ * Card padding is NOT part of the recipe (the card in the bar's design language
+ * has none either): `osd.rs` insets the element's content widget by CARD_PAD_*
+ * instead, which keeps the width in Opts the real, on-screen width of the card.
+ * The bar pads itself, because it is full width and its pills carry the rhythm.
  */
 
 /* ---- typography: the bar's face, size and weight ------------------------ */
@@ -49,6 +51,26 @@ box.card {
     box-shadow: 0 6px 20px @shadow, inset 0 1px 0 @hairline;
 }
 
+/* ---- the bar: the card recipe grown across the screen -------------------- */
+/* The top bar is the same surface as a card, stretched: one row from the left
+ * edge of the screen to the right, floating a few pixels below the top with
+ * hairline margins at the sides. Everything inside it - the workspace pills, the
+ * clock, the tray - is a `.module` (see the bar's own bar.css).
+ *
+ * It is deliberately *not* translucent the way a wallpaper-hugging bar can be:
+ * card_top -> card_bottom is an opaque fill, so a window scrolled underneath can
+ * never show through the clock. */
+box.bar {
+    background-image: linear-gradient(180deg, @bg_gradient, rgba(0, 0, 0, 0.25));
+    background-color: @bg;
+    border: 1px solid @border;
+    border-radius: 16px;
+    color: @fg;
+    box-shadow:
+        0 6px 20px @shadow,
+        inset 0 1px 0 @hairline;
+}
+
 /* ---- the pieces elements are built from --------------------------------- */
 
 /* a nested surface inside a card - theme.py's `.tile` */
@@ -66,6 +88,77 @@ label.chip {
     padding: 2px 9px;
     font-size: 10px;
     font-weight: 600;
+}
+
+/* The states a chip can be in, shared by everything that shows one: the accent
+ * for "something is going on" (a track is playing, bluetooth is on), the warning
+ * colour for "you should look at this" (updates waiting, presentation mode held,
+ * the wifi radio switched off), and the dimmer colour for "on, but boring". */
+label.chip.accent {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+label.chip.warn {
+    background-color: @warn_tint;
+    color: @warn;
+}
+
+label.chip.dim {
+    color: @fg_dim;
+}
+
+/* a button that is a chip: the small controls inside a card - the notification
+ * actions, the popup's switches. Square-ish rather than fully round, because it
+ * carries a word. */
+button.chipbtn {
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    box-shadow: none;
+    border-radius: 9px;
+    padding: 5px 9px;
+    color: @fg_dim;
+    font-size: 11px;
+}
+
+button.chipbtn:hover {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+/* A switch that is on says so in the warning colour - it is holding something
+ * back (an idle/sleep block, do-not-disturb), which is worth noticing. */
+button.chipbtn.on {
+    background-color: @warn_tint;
+    border-color: rgba(255, 204, 102, 0.30);
+    color: @warn;
+}
+
+button.chipbtn.danger:hover {
+    background-color: @crit_tint;
+    border-color: rgba(255, 85, 102, 0.30);
+    color: @crit;
+}
+
+button.chipbtn:disabled {
+    color: @fg_faint;
+}
+
+/* the drawer grip: the little capsule that says "this unfolded from the bar",
+ * at the end of the bar its panel hangs from */
+box.handle {
+    background-color: @surface_h;
+    border-radius: 999px;
+    margin: 2px 0 4px 0;
+}
+
+/* the hairline under a panel's header */
+separator.sep {
+    background-color: @hairline;
+    min-height: 1px;
+    margin: 2px 0;
 }
 
 /* the bar's progress recipe - theme.py's `progressbar` */

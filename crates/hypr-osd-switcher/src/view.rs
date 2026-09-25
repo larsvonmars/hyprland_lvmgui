@@ -13,9 +13,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use hypr_osd_core::windows::Window;
+use hypr_osd_core::{icons, text};
 
-use crate::icons;
-use crate::windows::Window;
 use crate::Settings;
 
 /// Gap between tiles in pixels. `Settings::width` computes the card's width from
@@ -122,7 +122,7 @@ impl Tile {
         // What is drawn when the theme has no icon for the application: its
         // first letter, in the tile's own shape. Better than a generic glyph -
         // it still says *which* application this is.
-        let letter = gtk::Label::new(Some(&initial(&window.class)));
+        let letter = gtk::Label::new(Some(&text::initial(&window.class)));
         letter.add_css_class("icon-letter");
         letter.set_size_request(size, size);
 
@@ -142,7 +142,7 @@ impl Tile {
         title.set_lines(2);
         title.set_wrap(true);
         title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        cap_width(&title, settings.tile_width - 12);
+        text::cap_width(&title, settings.tile_width - 12);
 
         let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         content.append(&art);
@@ -156,28 +156,4 @@ impl Tile {
 
         Tile { button }
     }
-}
-
-/// The first letter of a class, for the tile that stands in for an icon.
-fn initial(class: &str) -> String {
-    class
-        .chars()
-        .find(|character| character.is_alphanumeric())
-        .map(|character| character.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_string())
-}
-
-/// Cap a label so that it cannot widen the card it sits in.
-///
-/// An ellipsised label still reports its *full* text as its natural width, so
-/// without this one long window title would decide how wide the whole card is.
-/// The media card learned the same lesson for the same reason.
-fn cap_width(label: &gtk::Label, pixels: i32) {
-    const SAMPLE: &str = "0000000000";
-    let (sample_width, _) = label.create_pango_layout(Some(SAMPLE)).pixel_size();
-    let char_width = f64::from(sample_width) / SAMPLE.chars().count() as f64;
-    if char_width <= 0.0 {
-        return;
-    }
-    label.set_max_width_chars((f64::from(pixels) / char_width).floor().max(1.0) as i32);
 }

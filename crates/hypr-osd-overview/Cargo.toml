@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-overview"
+description = "Workspace overview for Hyprland: every workspace and every window as a picture of itself, scaled to fit one screen."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-overview"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

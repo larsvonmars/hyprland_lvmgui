@@ -1,7 +1,8 @@
 //! `hypr-osd-session` - element #3: the session card.
 //!
 //! Lock, suspend, log out, reboot, shut down - the same menu the bar's popup
-//! shows (see `~/.config/waybar/scripts/popup.py`), as a card that appears where
+//! shows (the design was taken from the old `~/.config/waybar/scripts/popup.py`,
+//! which waybar is no longer there to run), as a card that appears where
 //! you are looking when you press the power button or `SUPER + SHIFT + L`.
 //!
 //! Verbs (`hypr-osd-session <verb>`):
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::{css, run, Config, Opts, Osd};
+use hypr_osd_core::{css, run, Config, Content, Opts, Osd};
 
 use view::SessionView;
 
@@ -99,7 +100,7 @@ fn main() -> glib::ExitCode {
             let session = Rc::new(SessionView::new());
             session.hook(osd);
             let _ = view.set(session.clone());
-            session.root.clone().upcast::<gtk::Widget>()
+            Content::Single(session.root.clone().upcast::<gtk::Widget>())
         })
     };
 

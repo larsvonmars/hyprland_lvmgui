@@ -59,6 +59,20 @@ impl Config {
         self.parse(key).unwrap_or(default)
     }
 
+    /// A text setting, e.g. `clock_format = %H:%M`.
+    ///
+    /// An empty value means "the default", like every other key. Note that the
+    /// reader strips everything after a `#`, so a value cannot contain one - a
+    /// format string that needs a literal `#` would have to spell it `%H`-style
+    /// (none of the presets here do).
+    pub fn string(&self, key: &str, default: &str) -> String {
+        self.values
+            .get(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default.to_string())
+    }
+
     /// A duration in milliseconds.
     pub fn millis(&self, key: &str, default: u64) -> std::time::Duration {
         std::time::Duration::from_millis(self.parse(key).unwrap_or(default))

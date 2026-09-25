@@ -1,0 +1,16 @@
+[package]
+name = "hypr-osd-island"
+description = "The island popup: the panel that unfolds from the bar's clock, with what is playing, the notification hub and a calendar."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-island"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true
+serde_json.workspace = true

@@ -1,24 +1,29 @@
 //! The GTK4 stylesheet every element wears.
 //!
-//! GTK CSS providers are per process, so an element cannot load the bar's
-//! `~/.config/waybar/style.css` - but it can do what
-//! `~/.config/waybar/scripts/theme.py` does for the bar's popups: pull the
-//! `@define-color` block out of that file and paste it into its own
-//! stylesheet, then style itself with the very same `@tokens`. That is what
-//! [`palette`] returns, and it is why retheming the bar retheme's every OSD.
+//! GTK CSS providers are per process, so a stylesheet cannot be *imported* from
+//! another process's - the palette has to be pasted into each one. It is read at
+//! runtime from `~/.config/hypr-osd/theme.css` (installed from `configs/` in this
+//! repository), which is the desktop's single source of truth for colour: the
+//! bar, every card, the island popup and the lock screen are all painted from
+//! the same `@tokens`. That is what [`palette`] returns, and it is why editing
+//! one file rethemes the whole desktop.
+//!
+//! (This used to read `~/.config/waybar/style.css`. It does not any more:
+//! waybar is not part of this desktop - see the README.)
 
 use std::fs;
 use std::path::PathBuf;
 
-/// The stylesheet all elements share: typography, the transparent surface and
-/// the card recipe. See the file - it documents itself.
+/// The stylesheet all elements share: typography, the transparent surface, the
+/// card and bar recipes. See the file - it documents itself.
 pub const BASE: &str = include_str!("base.css");
 
-/// A mirror of the `@define-color` block in `~/.config/waybar/style.css`, in
-/// that file's order. Only a safety net, exactly like theme.py's `FALLBACK`:
-/// `palette()` prefers whatever the real stylesheet says and fills the gaps
-/// from here, so an element can never reference an undefined colour (GTK drops
-/// such a declaration silently, which looks like a styling bug).
+/// A mirror of the `@define-color` block in `~/.config/hypr-osd/theme.css`, in
+/// that file's order. Only a safety net: `palette()` prefers whatever the real
+/// theme file says and fills the gaps from here, so an element can never
+/// reference an undefined colour (GTK drops such a declaration silently, which
+/// looks like a styling bug). It also has to be here for a daemon started
+/// before the installer ever ran.
 const FALLBACK: &[(&str, &str)] = &[
     ("bg", "rgba(11, 15, 21, 0.92)"),
     ("bg_gradient", "rgba(30, 38, 48, 0.55)"),
@@ -50,26 +55,27 @@ const FALLBACK: &[(&str, &str)] = &[
 ];
 
 /// The single source of truth for the palette, in a `$XDG_CONFIG_HOME`-aware
-/// way: `~/.config/waybar/style.css` (waybar is what defines the desktop
-/// theme; the two apps mirror it and so do we).
-fn waybar_stylesheet() -> PathBuf {
+/// way: `~/.config/hypr-osd/theme.css`, installed from this repository's
+/// `configs/theme.css`.
+pub fn theme_file() -> PathBuf {
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"));
-    config_home.join("waybar").join("style.css")
+    config_home.join(crate::config::DIR).join("theme.css")
 }
 
 /// `@define-color name value;` for every token, ready to be prepended to a
-/// stylesheet. Values come from waybar's stylesheet when it can be read.
+/// stylesheet. Values come from the theme file when it can be read, and from
+/// [`FALLBACK`] otherwise.
 pub fn palette() -> String {
     let mut tokens: Vec<(String, String)> = FALLBACK
         .iter()
         .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
         .collect();
 
-    if let Ok(text) = fs::read_to_string(waybar_stylesheet()) {
+    if let Ok(text) = fs::read_to_string(theme_file()) {
         for line in text.lines() {
             let Some((name, value)) = parse_define_color(line) else {
                 continue;
@@ -102,9 +108,18 @@ fn parse_define_color(line: &str) -> Option<(String, String)> {
 }
 
 /// An element's complete stylesheet: palette + shared base + the element's own
-/// rules (which is where everything specific to one OSD belongs).
+/// rules (which is where everything specific to one element belongs).
 pub fn stylesheet(element_css: &str) -> String {
     format!("{}\n{}\n{}", palette(), BASE, element_css)
+}
+
+/// A stylesheet from the shared base plus an element's own rules, without the
+/// palette - for a *second* surface in a process that has already installed
+/// one. Installing the palette twice would be harmless but would also let two
+/// copies of the same tokens drift apart; this is how the bar adds the island
+/// popup's rules to the stylesheet it already wears.
+pub fn stylesheet_without_palette(element_css: &str) -> String {
+    format!("{BASE}\n{element_css}")
 }
 
 /// Install a stylesheet for the whole app. Parse errors are printed instead of
@@ -148,6 +163,12 @@ mod tests {
         assert_eq!(parse_define_color("@define-color"), None);
     }
 
+    /// The theme file that ships in this repository is what the palette falls
+    /// back to when the installed copy is missing, so the two must agree: a
+    /// token added to one and not the other would show up as an undefined
+    /// colour in one of the two situations.
+    const SHIPPED_THEME: &str = include_str!("../../../configs/theme.css");
+
     #[test]
     fn palette_defines_every_fallback_token() {
         let css = palette();
@@ -155,6 +176,28 @@ mod tests {
             assert!(
                 css.contains(&format!("@define-color {name} {value};")),
                 "{name} is missing from the palette"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_theme_defines_every_token_the_mirror_knows() {
+        for (name, value) in FALLBACK {
+            assert_eq!(
+                parse_define_color(&format!("@define-color {name} {value};")),
+                Some(((*name).to_string(), (*value).to_string())),
+                "the mirror is not parseable"
+            );
+            let shipped = SHIPPED_THEME
+                .lines()
+                .find_map(|line| match parse_define_color(line) {
+                    Some((found, value)) if found == *name => Some(value),
+                    _ => None,
+                });
+            assert_eq!(
+                shipped.as_deref(),
+                Some(*value),
+                "configs/theme.css and the built-in mirror disagree about `{name}`"
             );
         }
     }

@@ -9,10 +9,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use hypr_osd_core::mpris::{self, Direction, Track};
 use hypr_osd_core::{Osd, CARD_PAD_X};
 
 use crate::art;
-use crate::player::{self, Direction, Track};
 
 /// The cover is a square tile: 56px, radius 12 like every other tile in the
 /// theme, next to two comfortable lines of text.
@@ -30,13 +30,13 @@ const GAP: i32 = 14;
 /// is exactly as wide as the config asks for instead of a few pixels more.
 const CONTROLS: i32 = 36 + 36 + 6;
 
-/// The bar's own "a player is playing something" icon - the default of the mpris
-/// module's `player-icons` in `~/.config/waybar/config.jsonc` - used when a
-/// player reports no artwork, or artwork that cannot be fetched.
+/// The generic "something is playing" icon - the same one the bar's media pill
+/// falls back to - used when a player reports no artwork, or artwork that cannot
+/// be fetched.
 const GLYPH_MUSIC: &str = "\u{f001}";
 
-/// The bar's player icons use step-backward/forward for the skip keys; the card's
-/// buttons wear them too.
+/// The skip keys wear step-backward/forward, which is what the bar's media pill
+/// uses for them too.
 const GLYPH_PREVIOUS: &str = "\u{f048}";
 const GLYPH_NEXT: &str = "\u{f051}";
 
@@ -224,7 +224,7 @@ fn cap_width(label: &gtk::Label, pixels: i32) {
 }
 
 fn skip(direction: Direction) {
-    if let Err(error) = player::skip(direction) {
+    if let Err(error) = mpris::skip(direction) {
         eprintln!("hypr-osd-media: {error}");
     }
 }

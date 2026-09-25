@@ -7,10 +7,16 @@
 #   - config -> ~/.config/hypr-osd/<element>.conf (a commented template, only
 #               written when the file does not exist yet)
 #
+# The desktop's palette (~/.config/hypr-osd/theme.css) is installed the same way:
+# it is the single source of truth for every colour in this theme, and every
+# element reads it at start-up.
+#
 # On Hyprland it also wires up the compositor side (Wayland cannot be driven from
 # inside an app):
-#   - ~/.config/hypr/osd.lua            volume keys, autostart, layer rule
+#   - ~/.config/hypr/osd.lua            the bar, autostart, volume keys, layer rule
 #   - a `require("osd")` line in ~/.config/hypr/hyprland.lua
+#   - waybar is taken out of the autostart (see --keep-waybar), because the bar
+#     in this repository replaces it
 #   - ~/.config/hypr/hyprlock.conf      the lock screen, when hyprlock is there
 #   - ~/.config/hypr/hypridle.conf      idle timers, when hypridle is there
 #
@@ -18,22 +24,25 @@
 #   ./scripts/install.sh                    # build + install (+ Hyprland setup)
 #   ./scripts/install.sh --no-hyprland      # skip the Hyprland integration
 #   ./scripts/install.sh --take-over-keys   # comment out the old wpctl keybinds
+#   ./scripts/install.sh --keep-waybar      # leave the old bar running alongside
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 # The elements this script installs. Add an element here (and to osd.lua) when
-# the collection grows.
-ELEMENTS=(hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher)
+# the collection grows. Order is only the order they are reported in.
+ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview)
 
 SKIP_HYPRLAND=0
 TAKE_OVER_KEYS=0
+KEEP_WAYBAR=0
 for arg in "$@"; do
   case "$arg" in
     --no-hyprland) SKIP_HYPRLAND=1 ;;
     --take-over-keys) TAKE_OVER_KEYS=1 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --keep-waybar) KEEP_WAYBAR=1 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -69,9 +78,25 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 command -v wpctl >/dev/null || {
-  echo "WARNING: wpctl not found - hypr-osd-volume reads and writes the sink" >&2
-  echo "         through it, so install PipeWire/WirePlumber." >&2
+  echo "WARNING: wpctl not found - the volume card and the bar's volume pill read" >&2
+  echo "         and write the sink through it, so install PipeWire/WirePlumber." >&2
 }
+
+# The bar reads the system directly, and reports what it cannot read by leaving a
+# pill out. These are the tools whose absence costs a pill or two, not the whole
+# bar - so they are reported, never required.
+for tool in iw playerctl swaync-client hyprctl; do
+  command -v "$tool" >/dev/null || {
+    case "$tool" in
+      iw) echo "WARNING: iw not found - the bar's network pill stays hidden." >&2 ;;
+      playerctl) echo "WARNING: playerctl not found - no media pill, and the media card" >&2
+                 echo "         has nothing to watch." >&2 ;;
+      swaync-client) echo "WARNING: swaync-client not found - the island popup's notification" >&2
+                     echo "         tile stays empty." >&2 ;;
+      hyprctl) echo "WARNING: hyprctl not found - the bar cannot see workspaces or windows." >&2 ;;
+    esac
+  }
+done
 
 # ---------------------------------------------------------------------------
 # Build and install the binaries
@@ -96,6 +121,235 @@ done
 # ---------------------------------------------------------------------------
 echo "== Configuration =="
 mkdir -p "$OSD_CONFIG_DIR"
+
+# The palette first: every element reads it at start-up, and it is the one file
+# that decides what the whole desktop looks like. It is installed like the
+# element configs - only when missing - so an edit here survives a re-install.
+if [ ! -f "$OSD_CONFIG_DIR/theme.css" ]; then
+  install -m644 configs/theme.css "$OSD_CONFIG_DIR/theme.css"
+  echo "   -> $OSD_CONFIG_DIR/theme.css (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/theme.css (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/bar.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/bar.conf" <<'EOF'
+# hypr-osd-bar - settings for the top bar (hyprland_lvmgui).
+# Everything here has a built-in default (shown in the comments); delete a line
+# to fall back to it. The bar reads this file once, at start-up:
+#     pkill -f hypr-osd-bar && ~/.local/bin/hypr-osd-bar &
+# (`-f`, because the element's name is longer than the 15 characters `pkill -x`
+#  can match.)
+#
+# The palette is NOT here: it lives in ~/.config/hypr-osd/theme.css, which the
+# bar reads at start-up and paints itself from.
+
+# The bar's geometry, in pixels: it floats below the top edge with an equal
+# margin at each side.
+height = 40
+margin_top = 8
+margin_x = 12
+
+# Whether the bar reserves its strip with the compositor. On, tiled windows are
+# laid out below it; off, they slide under it.
+exclusive = true
+
+# Which output the bar lives on, and *only* that one. Empty means a bar on every
+# monitor, which is what a bar is for: one surface per screen, kept in step with
+# the compositor's monitor list, so a screen plugged in later grows one and an
+# unplugged one takes its bar away. Set a connector name (eDP-1, DP-2, ...) to
+# keep the bar on a single screen.
+output =
+
+# How many numbered workspaces the row keeps room for, so a workspace you have
+# never visited is still clickable. Workspaces that exist beyond this number get
+# a pill as well.
+workspaces = 5
+
+# How much room the focused window's title may take before it is ellipsised.
+title_width = 320
+
+# The clock, in strftime terms. The island popup shows the date and the time;
+# this is the pill.
+clock_format = %H:%M
+
+# The battery to watch, and the mains supply that says whether it is charging.
+# A battery that is not there is looked up by name prefix instead (so a renamed
+# one is still found); a machine with no battery gets no battery pill.
+battery = BAT1
+adapter = ADP1
+
+# The wireless interface to read, through `iw`. No such interface - or no `iw` -
+# means no network pill.
+network_interface = wlan0
+
+# Tray icon size, in pixels.
+tray_icon_size = 18
+
+# The heartbeat, in milliseconds, and how often each source is read. The tick is
+# the clock's resolution; the three intervals are how often the slow pills are
+# refreshed, counted in ticks (so `volume_every_ms = 1000` with a 1000 ms tick
+# means every tick).
+tick_ms = 1000
+volume_every_ms = 1000
+network_every_ms = 5000
+battery_every_ms = 30000
+
+# The system info pill (CPU, memory, temperature). Three file reads, so it keeps
+# up with the heartbeat - the CPU number is a delta between two of them, which is
+# why the pill appears on the second tick rather than the first.
+stats_every_ms = 1000
+
+# The pending-update count in the same pill. It comes from `checkupdates`, which
+# syncs a throwaway pacman database and takes a second or two, so its answer is
+# cached in a file and believed for half an hour; this is how often a stale cache
+# is refreshed, in the background. Leave `updates_command` empty to drop the
+# count and show the three readings alone.
+updates_every_ms = 1800000
+updates_command = checkupdates
+
+# How often Hyprland is re-read even with no event, and how often MPRIS is asked
+# again. The Hyprland event socket and `playerctl --follow` are the real
+# mechanisms; this is the safety net for one of them quietly dying.
+resync_every_ms = 5000
+
+# What the pills run. The installer substitutes absolute paths, so the bar does
+# not depend on ~/.local/bin being on Hyprland's PATH.
+#
+# `volume_command` is the volume *element*: it owns the volume step, so a scroll
+# on the status pill asks it rather than calling wpctl behind its back (and the
+# card appears, which is the feedback a key press gets). If it cannot be run, the
+# bar falls back to wpctl and the step is 5 %.
+volume_command = __BIN_DIR__/hypr-osd-volume
+session_command = __BIN_DIR__/hypr-osd-session
+island_command = __BIN_DIR__/hypr-osd-island
+# The status pill's handle: it asks this element to open the system popup on
+# hover, to toggle it on a click, and to switch the wireless radio on a right
+# click.
+stats_command = __BIN_DIR__/hypr-osd-stats
+# The clock's left click opens the notification centre, the right one toggles
+# do-not-disturb.
+notifications_command = swaync-client
+# Where the popups put the things they open: btop, nmtui, bluetoothctl, pacman.
+terminal_command = kitty
+EOF
+  sed -i "s|__BIN_DIR__|$BIN_DIR|g" "$OSD_CONFIG_DIR/bar.conf"
+  echo "   -> $OSD_CONFIG_DIR/bar.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/bar.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/island.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/island.conf" <<'EOF'
+# hypr-osd-island - settings for the panel that unfolds from the bar's clock.
+# Read once at start-up:
+#     pkill -f hypr-osd-island && ~/.local/bin/hypr-osd-island &
+
+# Where the bar is, so the panel can hang below it - and so it knows which part
+# of the screen counts as "the pointer is still on the clock". These have to
+# match ~/.config/hypr-osd/bar.conf: the bar tells the panel nothing, it works
+# the geometry out from these numbers.
+bar_height = 40
+bar_margin_top = 8
+bar_margin_x = 12
+
+# The distance between the bar's bottom edge and the panel's top edge.
+gap = 6
+
+# How wide the hover zone around the bar's centre is. The clock is the bar's
+# middle child, so it is centred on the bar; this is how much of that centre
+# counts as hovering it.
+hot_width = 280
+
+# The panel's two columns, in pixels: what is playing and what is waiting on the
+# left, the calendar on the right. The panel's width follows from them.
+left_width = 252
+right_width = 178
+
+# How long the pointer has to rest on the clock before the panel opens, and how
+# long it may be away - crossing the gap between the two, or leaving for good -
+# before it closes. Both exist to keep a passing pointer from flickering it.
+open_delay_ms = 120
+close_delay_ms = 300
+
+# How often the pointer is sampled, in milliseconds. Only while the panel
+# matters: an island that is closed asks the compositor for nothing at all.
+poll_ms = 50
+
+# The clock's resolution, and how often what is playing is re-read while the
+# panel is up (the progress bar needs this; `playerctl` only speaks when the
+# metadata changes).
+tick_ms = 1000
+media_every_ms = 700
+
+# What the notification buttons run.
+notifications_command = swaync-client
+EOF
+  echo "   -> $OSD_CONFIG_DIR/island.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/island.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/stats.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/stats.conf" <<'EOF'
+# hypr-osd-stats - settings for the system popup, the card that unfolds from the
+# bar's status pill. Read once at start-up:
+#     pkill -f hypr-osd-stats && ~/.local/bin/hypr-osd-stats &
+
+# Where the bar is, so the panel can hang below it and line its right edge up
+# with the bar's. These have to match ~/.config/hypr-osd/bar.conf.
+bar_height = 40
+bar_margin_top = 8
+bar_margin_x = 12
+
+# The distance between the bar's bottom edge and the panel's top edge.
+gap = 6
+
+# How wide the fallback hover zone at the bar's right end is, in pixels. It is
+# only used for an `open` that arrives without a rectangle - `hypr-osd-stats
+# open` typed by hand: the bar measures its own status pill and sends that
+# (`open <connector> <x> <y> <w> <h>`), so the zone is normally exactly the pill
+# and never reaches the tray.
+hot_width = 240
+
+# The panel's two columns, in pixels: the readings (CPU, memory, temperature and
+# the pending updates) on the left, the controls on the right. The panel's width
+# follows from them.
+left_width = 200
+right_width = 200
+
+# How long the pointer has to rest on the pill before the panel opens, and how
+# long it may be away - crossing the gap between the two, or leaving for good -
+# before it closes.
+open_delay_ms = 120
+close_delay_ms = 300
+
+# How often the pointer is sampled, in milliseconds. Only while the panel
+# matters: a closed popup asks the compositor for nothing at all.
+poll_ms = 50
+
+# The readings that are file reads (CPU, memory, temperature, the update count)
+# keep up with the heartbeat; the ones that cost a command (bluetoothctl,
+# powerprofilesctl, rfkill, the backlight, the keyboard layout) are on the slower
+# interval.
+tick_ms = 1000
+slow_every_ms = 5000
+
+# The pending-update count, from the same cache the bar's pill uses. Stale after
+# half an hour, at which point `checkupdates` runs again - in the background, in
+# both programs. Leave `updates_command` empty to turn the updates tile off.
+updates_every_ms = 1800000
+updates_command = checkupdates
+
+# The wireless interface the NETWORK row reports, and where the buttons that open
+# something put it (btop, nmtui, bluetoothctl, pacman).
+network_interface = wlan0
+terminal_command = kitty
+EOF
+  echo "   -> $OSD_CONFIG_DIR/stats.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/stats.conf (left alone)"
+fi
 
 if [ ! -f "$OSD_CONFIG_DIR/volume.conf" ]; then
   cat > "$OSD_CONFIG_DIR/volume.conf" <<'EOF'
@@ -212,6 +466,44 @@ else
   echo "   -> $OSD_CONFIG_DIR/switcher.conf (left alone)"
 fi
 
+if [ ! -f "$OSD_CONFIG_DIR/overview.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/overview.conf" <<'EOF'
+# hypr-osd-overview - settings for the workspace overview (hyprland_lvmgui).
+# Read once at start-up:
+#     pkill -f hypr-osd-overview && ~/.local/bin/hypr-osd-overview &
+
+# How large a tile may be, in pixels. The card solves for a tile size between the
+# two: windows are drawn in their own shape, so a larger tile is also a wider
+# one, and the size that fits all of them on the screen at once is the one that
+# gets used. The maximum is what a single window gets; the minimum is what an
+# over-full desktop is allowed to shrink to.
+#
+tile_min_height = 84
+tile_max_height = 300
+
+# Space between tiles, and between rows of them.
+gap = 18
+
+# Application icon size inside a tile that has no picture of its own.
+icon_size = 64
+
+# Whether to capture the windows at all. Off, the card is a workspace switcher
+# drawn with application icons and titles - instant, and what to set if the
+# captures are too slow or grim is not installed.
+thumbnails = true
+
+# Close the card after this long with no key press and no pointer movement over
+# it, in milliseconds. The card takes the keyboard while it is up, and this is
+# what makes that safe: a session lock takes the keyboard away from every other
+# surface, so a card that was up when the screen locked hears nothing - not even
+# the Escape that was meant for it. 0 never closes by itself.
+idle_close_ms = 60000
+EOF
+  echo "   -> $OSD_CONFIG_DIR/overview.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/overview.conf (left alone)"
+fi
+
 # ---------------------------------------------------------------------------
 # The screen locker
 # ---------------------------------------------------------------------------
@@ -297,10 +589,14 @@ elif [ -d "$HYPR_DIR" ]; then
     echo "       bindl = , XF86AudioMute, exec, $BIN_DIR/hypr-osd-volume toggle" >&2
     echo "       layerrule = ignorealpha 0.2, hypr-osd" >&2
   else
-    sed -e "s|@VOLUME_OSD_BIN@|$BIN_DIR/hypr-osd-volume|g" \
+    sed -e "s|@BAR_OSD_BIN@|$BIN_DIR/hypr-osd-bar|g" \
+      -e "s|@ISLAND_OSD_BIN@|$BIN_DIR/hypr-osd-island|g" \
+      -e "s|@STATS_OSD_BIN@|$BIN_DIR/hypr-osd-stats|g" \
+      -e "s|@VOLUME_OSD_BIN@|$BIN_DIR/hypr-osd-volume|g" \
       -e "s|@MEDIA_OSD_BIN@|$BIN_DIR/hypr-osd-media|g" \
       -e "s|@SESSION_OSD_BIN@|$BIN_DIR/hypr-osd-session|g" \
       -e "s|@SWITCHER_OSD_BIN@|$BIN_DIR/hypr-osd-switcher|g" \
+      -e "s|@OVERVIEW_OSD_BIN@|$BIN_DIR/hypr-osd-overview|g" \
       scripts/hyprland/osd.lua > "$HYPR_DIR/osd.lua"
     echo "   -> $HYPR_DIR/osd.lua"
 
@@ -315,6 +611,36 @@ elif [ -d "$HYPR_DIR" ]; then
 require("osd")
 EOF
       echo "   -> require(\"osd\") appended to hyprland.lua (backup: hyprland.lua.bak)"
+    fi
+
+    # -----------------------------------------------------------------------
+    # The old bar
+    # -----------------------------------------------------------------------
+    # `hypr-osd-bar` replaces waybar on this desktop, and the two of them cannot
+    # share the top of the screen: both reserve an exclusive zone there, both
+    # draw a full-width surface, and the palette used to be read out of waybar's
+    # own stylesheet. So the autostart line goes - along with the two GTK
+    # processes that existed only to expand a waybar pill on hover.
+    #
+    # The lines are *commented out* rather than deleted, and the file is backed
+    # up first: this is the user's own config, and an installer that rewrites it
+    # with no way back is not one you run twice.
+    if [ "$KEEP_WAYBAR" -eq 1 ]; then
+      echo "   -> waybar left where it is (--keep-waybar)"
+    elif grep -qE '^[[:space:]]*hl\.exec_cmd\("[^"]*waybar' "$HYPR_DIR/hyprland.lua" 2>/dev/null; then
+      cp -n "$HYPR_DIR/hyprland.lua" "$HYPR_DIR/hyprland.lua.bak-waybar" 2>/dev/null || true
+      sed -i -E '/^[[:space:]]*hl\.exec_cmd\("[^"]*waybar/ s|^|-- replaced by hypr-osd-bar: |' \
+        "$HYPR_DIR/hyprland.lua"
+      echo "   -> waybar autostart commented out (backup: hyprland.lua.bak-waybar)"
+      # And stop it now, so the change is visible in this session rather than the
+      # next one. The panels go with it: they watch the pointer for a pill that
+      # no longer exists.
+      pkill -x waybar 2>/dev/null || true
+      pkill -f waybar/scripts/island_panel.py 2>/dev/null || true
+      pkill -f waybar/scripts/stats_panel.py 2>/dev/null || true
+      echo "   -> waybar and its two hover panels stopped"
+    else
+      echo "   -> no waybar autostart found in hyprland.lua"
     fi
 
     # The desktop's background, its lock screen and the idle timers. All three
@@ -426,23 +752,30 @@ EOF
 fi
 
 echo
+
 echo "✅ hypr-osd installed:"
 for element in "${ELEMENTS[@]}"; do
   echo "   $element -> $BIN_DIR/$element"
 done
 if [ "$hypr_installed" -eq 1 ]; then
   echo
-  echo "The volume keys are wired up, and every daemon starts at your next login."
-  echo "Right now:"
-  echo "   $BIN_DIR/hypr-osd-volume up        # a volume card"
-  echo "   $BIN_DIR/hypr-osd-media &          # start watching for tracks"
-  echo "   $BIN_DIR/hypr-osd-session toggle   # the session card"
-  echo "   $BIN_DIR/hypr-osd-switcher next    # the window switcher"
-  echo "   ALT + TAB                          # the same thing, with app icons"
-  echo "   SUPER + L                          # lock the screen (hyprlock)"
+  echo "The palette lives in $OSD_CONFIG_DIR/theme.css, and the bar is on the top"
+  echo "of your screen. Right now:"
+  echo "   $BIN_DIR/hypr-osd-bar status          # what every pill currently reads"
+  echo "   $BIN_DIR/hypr-osd-volume up           # a volume card"
+  echo "   $BIN_DIR/hypr-osd-media &             # start watching for tracks"
+  echo "   $BIN_DIR/hypr-osd-session toggle      # the session card"
+  echo "   $BIN_DIR/hypr-osd-island show         # the clock's popup, without hovering"
+  echo "   ALT + TAB                             # the window switcher"
+  echo "   SUPER + SHIFT + TAB                   # every workspace, every window"
+  echo "   SUPER + L                             # lock the screen (hyprlock)"
   echo "or just log out and back in."
+  echo
+  echo "Hover the clock in the bar for the island popup; the tray fills in as"
+  echo "indicator applications start (they register with the watcher once, when"
+  echo "they start - an indicator that was already running needs a restart)."
 else
   echo
-  echo "Run an element with a verb, e.g. '$BIN_DIR/hypr-osd-volume up', or"
+  echo "Run an element with a verb, e.g. '$BIN_DIR/hypr-osd-bar status', or"
   echo "start a daemon (no verb) and bind the verbs yourself."
 fi

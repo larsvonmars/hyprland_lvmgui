@@ -1,0 +1,225 @@
+/* ── the top bar ─────────────────────────────────────────────────────────────
+ *
+ * Only what is specific to the bar. The palette comes from
+ * ~/.config/hypr-osd/theme.css and the typography and the bar's own surface
+ * (box.bar: the fill, the border, the shadow) come from base.css, so this file
+ * is about the *pills* that sit in it.
+ *
+ * The rhythm is the one the whole theme uses, one step down from the cards:
+ * each pill is a 10px-radius capsule with 6px of margin above and below inside a
+ * 40px bar, so the pills breathe and the row still reads as one line. Hovering
+ * any of them lifts it with the same hairline glow the whole desktop uses, which
+ * is how a pill says "you can click me" without an icon changing colour.
+ */
+
+/* ---- sections -------------------------------------------------------------- */
+/* The left and right groups are plain boxes; the spacing between pills is the
+ * pills' own margin, so a hidden pill does not leave a gap behind. */
+box.section {
+    padding: 0 6px;
+}
+
+/* ---- a pill ---------------------------------------------------------------- */
+/* A GTK button arrives wearing a theme background, a border, its own padding and
+ * a shadow. A pill is a quiet surface until you touch it, so all of that is
+ * reset first - and `background-image: none` matters because Adwaita paints its
+ * buttons with a gradient, which `background-color` alone does not remove. */
+button.module {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    min-height: 0;
+    padding: 0 9px;
+    margin: 5px 1px;
+    border-radius: 10px;
+    color: @fg;
+    font-weight: 500;
+    text-shadow: none;
+    transition: background 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+
+button.module:hover {
+    background-color: @surface_h;
+    box-shadow: 0 0 10px @glow;
+}
+
+button.module:active {
+    background-color: @accent_tint;
+}
+
+/* ---- workspaces ------------------------------------------------------------ */
+/* The five (or however many) pills that keep room for the workspaces you can
+ * switch to. State is carried by colour, not by a different glyph, except for
+ * the one you are on: that one gets the accent fill and a dark glyph. */
+button.ws {
+    min-width: 20px;
+    padding: 0 5px;
+    border-radius: 9px;
+    color: @fg_dim;
+    font-size: 12px;
+}
+
+button.ws.empty {
+    color: @fg_faint;
+}
+
+button.ws.occupied {
+    color: @fg_dim;
+}
+
+/* on screen, but on another monitor */
+button.ws.visible {
+    color: @accent;
+}
+
+button.ws.active {
+    background-image: linear-gradient(135deg, @accent, @accent2);
+    color: @on_accent;
+    font-weight: 700;
+    box-shadow: 0 0 10px rgba(51, 204, 255, 0.45);
+}
+
+button.ws.active:hover {
+    background-image: linear-gradient(135deg, @accent, @accent2);
+    color: @on_accent;
+}
+
+/* ---- the window title ------------------------------------------------------ */
+/* Quieter than the workspaces: it is context, not a control. */
+label.title {
+    color: @fg_dim;
+    font-size: 12px;
+    padding: 0 4px;
+}
+
+/* ---- the clock (and the island popup's handle) ---------------------------- */
+button.clock {
+    padding: 0 14px;
+    border-radius: 999px;
+    background-color: @surface;
+    border: 1px solid @hairline;
+    color: @fg;
+    font-weight: 600;
+}
+
+button.clock:hover {
+    background-color: @surface_h;
+    border-color: @border_soft;
+}
+
+/* While the island popup is unfolded the pill wears the accent, so it and the
+ * panel below it read as one object. */
+button.clock.panel-open {
+    color: @accent;
+    border-color: @border_h;
+    box-shadow: 0 0 14px @glow;
+}
+
+/* ---- media ---------------------------------------------------------------- */
+button.media.playing {
+    color: @accent2;
+}
+
+button.media:hover {
+    color: @fg;
+}
+
+/* ---- tray ----------------------------------------------------------------- */
+/* The tray is a row of icon buttons with the tightest spacing in the bar: a
+ * tray icon is already a picture, and the theme's 10px pill padding would
+ * stretch the row out for nothing. */
+box.tray {
+    padding: 0 2px;
+}
+
+button.tray-item {
+    padding: 0 3px;
+    margin: 3px 1px;
+    border-radius: 8px;
+}
+
+button.tray-item.needs-attention {
+    background-color: @crit_tint;
+}
+
+/* ---- the status pill (and the system popup's handle) --------------------- */
+/* One pill for the wireless link, the sound and the battery - the three things
+ * about the machine you glance at, which used to be three pills. Its states
+ * follow the same rule as the system pill below: the colour is always the worst
+ * thing that is true, and a colour that means "look now" wins over one that
+ * means "have a look".
+ *
+ * It carries more words than any other pill, so it gets a little more room than
+ * the theme's default padding - it is the busiest thing on the bar. */
+button.status {
+    padding: 0 14px;
+    border-radius: 999px;
+    background-color: @surface;
+    border: 1px solid @hairline;
+    color: @fg;
+}
+
+button.status:hover {
+    background-color: @surface_h;
+    border-color: @border_soft;
+}
+
+/* While the system popup is unfolded the pill wears the accent, exactly as the
+ * clock does for the island: the pill and the panel below it read as one
+ * object. */
+button.status.panel-open {
+    color: @accent;
+    border-color: @border_h;
+    box-shadow: 0 0 14px @glow;
+}
+
+/* The link is gone, or nothing is joined: amber, because the wifi is a thing
+ * you can fix. */
+button.status.disconnected {
+    color: @warn;
+}
+
+button.status.warning {
+    color: @warn;
+}
+
+/* Muted sound or a battery about to die: red. Both are things you would stop
+ * what you are doing for, which is what the colour is for. */
+button.status.critical {
+    color: @crit;
+}
+
+button.status.muted {
+    color: @crit;
+}
+
+/* ---- the system info pill ------------------------------------------------- */
+/* CPU, memory, temperature and the pending-update count in one pill, the way the
+ * bar this replaces had them. The count is the only part in the accent - it is a
+ * task, not a reading - and the load colours come last so they win: a machine at
+ * 95°C is red whatever its update count is. */
+button.stats.updates {
+    color: @accent2;
+}
+
+button.stats.warning {
+    color: @warn;
+}
+
+button.stats.critical {
+    color: @crit;
+}
+
+/* ---- power ---------------------------------------------------------------- */
+button.power {
+    color: @fg_dim;
+    font-size: 15px;
+    margin-right: 3px;
+}
+
+button.power:hover {
+    color: @crit;
+    background-color: @crit_tint;
+    box-shadow: 0 0 12px rgba(255, 85, 102, 0.35);
+}

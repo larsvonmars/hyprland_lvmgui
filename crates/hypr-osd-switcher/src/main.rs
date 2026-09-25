@@ -4,13 +4,14 @@
 //! window's application icon and title. Tab walks it, Enter or releasing Alt
 //! switches to the selected window, Escape walks away.
 //!
-//! This is the one element that takes the keyboard. An OSD that eats a
+//! This is one of the two elements that take the keyboard. An OSD that eats a
 //! keystroke is a bug - the volume card must not stop you typing - but a
 //! switcher is *driven* by the keys you are holding: it has to see the Alt
 //! release that ends the switch, and the only way to see it is to own the
 //! keyboard for as long as the card is up. `osd.lua` binds Alt+Tab to
 //! `switcher next`, and everything after that first press arrives on the card
-//! itself.
+//! itself. (The other one is the workspace overview, for the same kind of
+//! reason: a card you opened on purpose may keep its own keys.)
 //!
 //! Verbs (`hypr-osd-switcher <verb>`):
 //!
@@ -24,9 +25,7 @@
 //!   (no verb)            start the daemon and wait for the first key press
 //! ```
 
-mod icons;
 mod view;
-mod windows;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
@@ -35,10 +34,10 @@ use std::time::Duration;
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::{css, hyprctl, run, Config, Keyboard, Opts, Osd, Placement};
+use hypr_osd_core::windows::{self, Window};
+use hypr_osd_core::{css, hyprctl, run, Config, Content, Keyboard, Opts, Osd, Placement};
 
 use view::SwitcherView;
-use windows::Window;
 
 /// D-Bus application id - and therefore the single-instance key.
 const APP_ID: &str = "com.schells2.osd.switcher";
@@ -221,6 +220,8 @@ fn main() -> glib::ExitCode {
         keyboard: Keyboard::Exclusive,
         // Unused by a centred card, kept at the default.
         bottom_margin: 0.12,
+        // Cards follow the focused monitor; only the bar pins itself.
+        ..Opts::default()
     };
 
     // The widgets are built inside the application's start-up (GTK does not
@@ -251,7 +252,7 @@ fn main() -> glib::ExitCode {
             install_keys(osd, switcher.clone());
             let root = view.root.clone().upcast::<gtk::Widget>();
             state.set(switcher).ok();
-            root
+            Content::Single(root)
         })
     };
 

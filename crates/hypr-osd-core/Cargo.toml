@@ -1,6 +1,6 @@
 [package]
 name = "hypr-osd-core"
-description = "Shared plumbing for the hyprland_lvmgui elements: the waybar card recipe, the layer-shell surface and the single-instance command line."
+description = "Shared plumbing for the hyprland_lvmgui elements: the palette and the card/bar recipes, the layer-shell surface and the single-instance command line."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

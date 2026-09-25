@@ -1,0 +1,16 @@
+[package]
+name = "hypr-osd-bar"
+description = "The desktop's top bar: workspaces, window title, tray and status pills, drawn by a GTK4 layer-shell surface of our own."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-bar"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true
+serde_json.workspace = true

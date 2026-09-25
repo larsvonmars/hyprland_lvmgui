@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-stats"
+description = "The system popup: the card that unfolds from the bar's status pill, with CPU/memory/temperature, pending updates and the machine's controls."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-stats"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true
