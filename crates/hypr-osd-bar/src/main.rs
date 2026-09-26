@@ -142,8 +142,11 @@ pub struct Settings {
     volume_command: String,
     session_command: String,
     terminal_command: String,
-    /// The system popup the status pill unfolds. It is asked to open on hover,
-    /// to toggle on click, and to switch the wireless radio on a right click.
+    /// The system popup the status pill unfolds. The pill asks it to open - on
+    /// hover and on a left click alike - and to switch the wireless radio on a
+    /// right click. It is never *pinned* from here: a pinned panel is not watched
+    /// by the pointer, so one click would leave it up for good (see the pill's
+    /// handlers in `view`).
     stats_command: String,
     /// What prints the pending-update list (`checkupdates`). Empty turns the
     /// update count off: the pill then shows only the three readings.

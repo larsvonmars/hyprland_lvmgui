@@ -321,16 +321,11 @@ impl BarView {
         let status = Pill::new("status");
         {
             let stats = settings.stats_command.clone();
+            // The left click is the popup's other handle, but it is wired
+            // further down with the hover: both send the same request, and that
+            // request has to measure the pill - which needs the widget tree the
+            // pill ends up in (see below).
             status
-                // Left click is the popup's other handle: pinned open, so it
-                // stays while you work through the rows - and a click is also how
-                // you open it without waiting for the dwell.
-                .on_click({
-                    let stats = stats.clone();
-                    move || {
-                        sources::launch(&stats, &["toggle"]);
-                    }
-                })
                 // The microphone is not part of the combined reading (it is
                 // about the source, not the sink), so it keeps the corner it had
                 // on the volume pill: one click away, out of the way.
@@ -410,16 +405,30 @@ impl BarView {
         root.set_center_widget(Some(&clock.button));
         root.set_end_widget(Some(&right));
 
-        // The hover that unfolds the system popup. Wired here rather than with
-        // the pill's other handlers, because it has to *measure* the pill - for
-        // which it needs the widget tree the pill lives in.
+        // The two handles that unfold the system popup: the pointer arriving on
+        // the status pill, and a left click on it. Both send the *same* thing,
+        // and that thing is only ever `open` - the request to start watching,
+        // which is all the bar ever says to either popup (the clock's hover sends
+        // the island the same verb). The panel then decides for itself when it has
+        // had enough of the pointer, exactly as the island does: the bar asks, the
+        // panel disposes.
+        //
+        // Wired here rather than with the pill's other handlers, because the
+        // request has to *measure* the pill - for which it needs the widget tree
+        // the pill lives in.
         {
             let stats = settings.stats_command.clone();
             let pill = status.button.clone();
             let root = root.clone();
             let connector = connector.to_owned();
-            let motion = gtk::EventControllerMotion::new();
-            motion.connect_enter(move |_, _, _| {
+            // What the click used to run instead is worth knowing about, because
+            // it is the bug this shape exists to prevent: `toggle`, which puts the
+            // panel into the machine's *pinned* state - and a pinned panel is not
+            // watched at all, so a single click on the pill left it up for good,
+            // glowing, with the pointer long gone. Nothing but another click (or
+            // `hypr-osd-stats close`) could take it away. The island has no such
+            // state, and the bar must not be able to put either panel into one.
+            let ask = Rc::new(move || {
                 // Two things the panel cannot work out for itself, so the bar
                 // says them: which monitor the bar is on (the panel is drawn on
                 // that screen and measured against it, and it has no way of
@@ -438,7 +447,13 @@ impl BarView {
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 sources::launch(&stats, &refs);
             });
-            status.button.add_controller(motion);
+            {
+                let ask = ask.clone();
+                let motion = gtk::EventControllerMotion::new();
+                motion.connect_enter(move |_, _, _| ask());
+                status.button.add_controller(motion);
+            }
+            status.on_click(move || ask());
         }
 
         let this = BarView {

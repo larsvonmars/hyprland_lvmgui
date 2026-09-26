@@ -7,17 +7,22 @@
  * collection's shared recipes in `base.css`. This panel is a card like every
  * other OSD here.
  *
- * Like the island it is laid out as tiles: the machine's *load* on the left
- * (three readings with bars, then the updates), the machine's *controls* on the
- * right (one row per thing, name on the left, value or button on the right).
- * The right column is the table: every row is the same shape, so the eye can run
- * down the values.
+ * The layout is two columns of tiles: the machine's *load* on the left (three
+ * gauges, then the bluetooth radios with one row per device), the machine's
+ * *controls* on the right (glyph and name on the left, value or control on the
+ * right), with the pending updates under them.
+ *
+ * The hierarchy is carried by type size, not by rules and boxes: the gauges are
+ * the only large numbers in the panel, values are one size, and headings and
+ * secondary lines are the smallest in the faintest colour. That is what lets the
+ * eye land on the readings first and read the labels second.
  */
 
 /* ---- the panel ------------------------------------------------------------ */
 box.stats {
     /* The card's own padding comes from the shell; this is the extra breathing
-     * room a panel of tiles needs. */
+     * room a panel of tiles needs. If it changes, `Settings::content_width` has
+     * to change with it: that number is what the hover zone is derived from. */
     padding: 2px 2px 4px 2px;
 }
 
@@ -29,7 +34,7 @@ label.popup-title {
     font-size: 12px;
     font-weight: 700;
     color: @fg;
-    letter-spacing: 1px;
+    letter-spacing: 1.5px;
 }
 
 box.body {
@@ -44,13 +49,14 @@ box.tile {
 }
 
 box.section-row {
-    margin-bottom: 2px;
+    margin-bottom: 1px;
 }
 
 label.section {
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 700;
     color: @fg_faint;
+    letter-spacing: 0.8px;
 }
 
 label.section-glyph {
@@ -58,18 +64,91 @@ label.section-glyph {
     color: @fg_faint;
 }
 
-/* ---- readings ------------------------------------------------------------- */
-/* The value of a row: bold, so a column of them reads as data rather than as
- * more prose. `@fg` rather than the dimmer colour, because these are the numbers
- * the panel exists for. */
-label.value {
-    font-size: 11px;
+/* ---- the gauges ----------------------------------------------------------- */
+/* Three readings side by side, each in its own softly-filled capsule: the fill
+ * is what groups a number with its label and its meter, where a rule between
+ * them would be three boxes' worth of ink for the same job. */
+box.metric {
+    background-color: @surface;
+    border-radius: 12px;
+    padding: 6px 9px 8px 9px;
+}
+
+box.metric-head {
+    margin-bottom: 1px;
+}
+
+label.metric-glyph {
+    font-size: 10px;
+    color: @fg_dim;
+}
+
+label.metric-name {
+    font-size: 9px;
+    font-weight: 700;
+    color: @fg_faint;
+    letter-spacing: 0.6px;
+}
+
+/* The hero numbers: the largest type in the panel, and the only place it is
+ * used. `@fg` rather than a dimmer colour, because these are what it is for. */
+label.metric-value {
+    font-size: 19px;
     font-weight: 600;
     color: @fg;
 }
 
 /* Amber and red mean the same thing here as in the bar's pill: have a look, and
  * look now. */
+label.metric-value.warn {
+    color: @warn;
+}
+
+label.metric-value.crit {
+    color: @crit;
+}
+
+/* The meter under a reading: the bar's progress capsule at a third of the
+ * height, because here it is a backdrop for a number rather than a control. */
+progressbar.meter trough {
+    background-color: @surface_h;
+    border: none;
+    border-radius: 999px;
+    min-height: 3px;
+    /* The theme this app runs under gives a progress bar's trough a 150px
+     * minimum width: sensible for one lone progress bar, ruinous for three in a
+     * row, because minimums add up - the tile then asks for 470px nobody asked
+     * it for, and the card grows to fit. Zero means "as wide as the box makes
+     * me", which is what the gauge's own hexpand is for. */
+    min-width: 0;
+}
+
+progressbar.meter progress {
+    background-image: linear-gradient(90deg, @accent, @accent2);
+    border: none;
+    border-radius: 999px;
+    min-height: 3px;
+}
+
+progressbar.meter.warn progress {
+    background-image: none;
+    background-color: @warn;
+}
+
+progressbar.meter.crit progress {
+    background-image: none;
+    background-color: @crit;
+}
+
+/* ---- values, and the lines under them ------------------------------------- */
+/* The value of a row: bold, so a column of them reads as data rather than as
+ * more prose. */
+label.value {
+    font-size: 11px;
+    font-weight: 600;
+    color: @fg;
+}
+
 label.value.warn {
     color: @warn;
 }
@@ -78,8 +157,20 @@ label.value.crit {
     color: @crit;
 }
 
-/* The line under a tile's heading - "15 packages waiting", "System up to
- * date" - which is a statement, not a reading. */
+/* A value that is there but not doing anything ("Bluetooth: Off"). */
+label.value.dim {
+    color: @fg_dim;
+}
+
+/* The one line a tile has to say at a size worth reading ("15 packages
+ * waiting"). */
+label.value-lg {
+    font-size: 13px;
+    font-weight: 600;
+    color: @fg;
+}
+
+/* A statement rather than a reading ("System up to date"). */
 label.sub {
     font-size: 11px;
     color: @fg_dim;
@@ -93,18 +184,260 @@ label.upd-list {
 }
 
 /* ---- rows ----------------------------------------------------------------- */
-box.res-row {
-    margin-bottom: 1px;
-}
-
 box.control-row {
     margin-bottom: 1px;
 }
 
+/* The buttons of one control sit under it, lined up with its right edge, so a
+ * two-step row reads as one paragraph rather than as two unrelated rows. */
+box.actions {
+    margin-bottom: 4px;
+}
+
+box.actions button.chipbtn {
+    padding: 3px 7px;
+}
+
+/* ---- the bluetooth tile --------------------------------------------------- */
+box.bt-state {
+    margin-bottom: 3px;
+}
+
+/* The round buttons: the power switch, and the action at the end of a device's
+ * row. One glyph, a tint on hover, and no word - the tooltip carries that. */
+button.iconbtn {
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    box-shadow: none;
+    border-radius: 999px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    color: @fg_dim;
+}
+
+button.iconbtn:hover {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+button.iconbtn.on {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+/* The forget button: the one action here that cannot be undone from this
+ * panel, so its hover is the danger colour rather than the accent - the same
+ * distinction `chipbtn.danger` draws for the chips. */
+button.iconbtn.danger:hover {
+    background-color: @crit_tint;
+    border-color: rgba(255, 85, 102, 0.30);
+    color: @crit;
+}
+
+button.iconbtn:disabled {
+    background-color: transparent;
+    color: @fg_faint;
+}
+
+/* The spinner that stands in for a glyph while a button is talking to the
+ * controller (a scan, a connect): accent, because "something is happening"
+ * is its whole message. */
+spinner.btn-spinner {
+    min-width: 12px;
+    min-height: 12px;
+    color: @accent;
+}
+
+label.btn-glyph {
+    font-size: 11px;
+}
+
+/* The word inside a chip. It needs a rule of its own because `base.css` sets a
+ * font size on `*`: a size on the *button* never reaches the label, so the words
+ * would all come out at the base 13px - which is exactly what made the first
+ * version of this panel nearly twice as wide as it was meant to be. */
+label.btn-word {
+    font-size: 11px;
+}
+
+/* The buttons under a control are a step smaller than the buttons that head a
+ * tile: they are secondary, and there are two of them in a row. */
+box.actions label.btn-word {
+    font-size: 10px;
+}
+
+/* A device: an edge mark when it is live, a badge with its class glyph, the
+ * name and its state, then the link meter, the battery pill, and the one
+ * action that makes sense for it. The hover fill is what says the row is a
+ * thing at all, since only the buttons at its end are clickable. */
+box.dev {
+    padding: 4px 5px;
+    border-radius: 10px;
+}
+
+box.dev:hover {
+    background-color: @surface;
+}
+
+/* The edge mark of a live row. It is always there - the class only turns its
+ * colour on - so connected and idle rows keep their badges aligned. */
+box.dev-mark {
+    background-color: transparent;
+    border-radius: 999px;
+    min-width: 3px;
+    min-height: 22px;
+    margin-right: 5px;
+}
+
+box.dev-mark.live {
+    background-color: @accent;
+}
+
+box.dev-badge {
+    background-color: @surface_h;
+    border-radius: 8px;
+    min-width: 24px;
+    min-height: 24px;
+}
+
+/* A device that is actually *there*: the one thing in this list worth colouring,
+ * because everything else is a name in a cache. */
+box.dev-badge.live {
+    background-color: @accent_tint;
+}
+
+box.dev-badge > label.dev-glyph {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+box.dev-badge.live > label.dev-glyph {
+    color: @accent;
+}
+
+label.dev-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: @fg;
+}
+
+label.dev-sub {
+    font-size: 9px;
+    color: @fg_faint;
+}
+
+/* The link quality meter: partial blocks, the filled ones dim and the rest
+ * fainter, so the shape does the reading. */
+label.sig-on {
+    font-size: 9px;
+    color: @fg_dim;
+}
+
+label.sig-off {
+    font-size: 9px;
+    color: @fg_faint;
+}
+
+/* The battery pill. Capsule like the chips, because it is a reading of the
+ * same family; a low one tints itself warning-coloured rather than colouring
+ * the name it sits next to. */
+box.dev-batt {
+    background-color: @surface;
+    border-radius: 999px;
+    padding: 1px 7px;
+}
+
+box.dev-batt.low {
+    background-color: @warn_tint;
+}
+
+box.dev-batt label.batt-glyph,
+box.dev-batt label.batt-value {
+    font-size: 9px;
+    color: @fg_dim;
+}
+
+box.dev-batt.low label.batt-glyph,
+box.dev-batt.low label.batt-value {
+    color: @warn;
+}
+
+label.dev-hint {
+    font-size: 10px;
+    color: @fg_dim;
+    padding: 2px 0;
+}
+
+/* The "the list is empty and could be full" state: the hint boxed in a dashed
+ * outline, so an empty tile still reads as a place things go. */
+label.dev-hint.empty {
+    background-color: @surface;
+    border: 1px dashed @border;
+    border-radius: 10px;
+    padding: 7px 10px;
+}
+
+label.dev-more {
+    font-size: 9px;
+    color: @fg_faint;
+}
+
+/* The one line the tile says *about* a device rather than *of* it - a pairing
+ * that did not work. Warning-coloured and only up for a few seconds, because it
+ * reports something that happened, not a state the list is in. */
+label.dev-note {
+    font-size: 9px;
+    color: @warn;
+    padding: 3px 0 0 0;
+}
+
+/* ---- the segmented control (the power profile) ---------------------------- */
+/* One trough, one button per setting, the one in force lit. Direct: where the
+ * machine is now and what a click would do are the same piece of information. */
+box.segmented {
+    background-color: @surface;
+    border-radius: 9px;
+    padding: 2px;
+}
+
+button.seg {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    box-shadow: none;
+    border-radius: 7px;
+    padding: 2px 6px;
+    color: @fg_dim;
+}
+
+/* The words, at the size the switch needs to fit one row: the labels are
+ * abbreviated ("saver", "balanced", "perf") and the tooltips spell the profiles
+ * out, so this is small on purpose. */
+button.seg label {
+    font-size: 9px;
+    font-weight: 600;
+}
+
+button.seg:hover {
+    color: @fg;
+}
+
+button.seg.active {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+button.seg:disabled {
+    color: @fg_faint;
+}
+
 /* ---- the brightness slider ------------------------------------------------ */
-/* The same track, fill and knob language as the progress bars above it: a
- * capsule, the accent gradient, and a round handle - so the slider reads as one
- * of the readouts rather than as a piece of another toolkit.
+/* The same track, fill and knob language as the meters above it: a capsule, the
+ * accent gradient, and a round handle - so the slider reads as one of the
+ * readings rather than as a piece of another toolkit.
  *
  * GTK4 draws a `GtkScale` as `scale > trough`, with the filled part
  * (`trough > highlight`) and the knob (`slider`) inside it. The track is the
@@ -120,6 +453,10 @@ scale trough {
     border: none;
     border-radius: 999px;
     min-height: 4px;
+    /* Same story as the meters above: the theme's 150px minimum is meant for a
+     * slider standing on its own. The row gives this one 80px and the hexpand
+     * fills whatever is left. */
+    min-width: 0;
 }
 
 scale trough highlight {
@@ -136,12 +473,6 @@ scale slider {
      * overhang its trough. With a smaller knob than the theme assumes, GTK then
      * computes a negative size for it and warns about it on every start-up, so
      * the margin is pinned to zero and the room for the knob is asked for above,
-     * on the scale itself. */
-    margin: 0;
-    /* The theme this app runs under gives the knob a negative margin so that it
-     * can overhang its trough. With a knob smaller than the theme assumes, GTK
-     * then computes a negative size for it and warns about it on every start-up,
-     * so the margin is pinned to zero - the room for the knob is asked for above,
      * on the scale itself. */
     margin: 0;
     background-color: @fg;

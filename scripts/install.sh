@@ -312,11 +312,14 @@ gap = 6
 # and never reaches the tray.
 hot_width = 240
 
-# The panel's two columns, in pixels: the readings (CPU, memory, temperature and
-# the pending updates) on the left, the controls on the right. The panel's width
-# follows from them.
-left_width = 200
-right_width = 200
+# The panel's two columns, in pixels: the machine's *load* on the left (the three
+# gauges, then the bluetooth radios and the devices they know), the machine's
+# *controls* on the right, with the pending updates under them. The panel's width
+# follows from them - and they are a floor, not a ceiling: a widget the theme
+# will not let be narrower (a progress bar's trough, a slider's) wins over them,
+# and `hypr-osd-stats status` prints the width the card actually came out at.
+left_width = 260
+right_width = 240
 
 # How long the pointer has to rest on the pill before the panel opens, and how
 # long it may be away - crossing the gap between the two, or leaving for good -
@@ -329,11 +332,21 @@ close_delay_ms = 300
 poll_ms = 50
 
 # The readings that are file reads (CPU, memory, temperature, the update count)
-# keep up with the heartbeat; the ones that cost a command (bluetoothctl,
-# powerprofilesctl, rfkill, the backlight, the keyboard layout) are on the slower
-# interval.
+# keep up with the heartbeat; the ones that cost a command (powerprofilesctl,
+# rfkill, the backlight, the keyboard layout) are on the slower interval.
 tick_ms = 1000
 slow_every_ms = 5000
+
+# The bluetooth device list, on the slowest clock of all: it costs one
+# `bluetoothctl` per device, so it is re-read every few seconds *while the panel
+# is open* and never at all while it is closed.
+devices_every_ms = 10000
+
+# How many device rows the list shows before it switches to a count, and how long
+# the Scan button looks for devices. bluetoothctl exits by itself after that,
+# which is what ends the scan.
+max_devices = 5
+scan_seconds = 12
 
 # The pending-update count, from the same cache the bar's pill uses. Stale after
 # half an hour, at which point `checkupdates` runs again - in the background, in

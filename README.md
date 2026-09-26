@@ -25,8 +25,9 @@ are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
-| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray, network, volume, battery, clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it. |
+| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray, the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup. |
 | Island popup | `hypr-osd-island` | What is playing (with transport and progress), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
+| System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
 | Media card | `hypr-osd-media` | Cover art, title and artist, with previous/next buttons. Appears when a new medium starts playing — no keybinding involved. |
 | Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down. `SUPER + SHIFT + L`, or the hardware power key. |
@@ -248,6 +249,43 @@ layer-shell surface. It also does the hover logic itself — the bar only says
 decide when to appear and when to go away, because *leaving* means moving onto
 the panel, somewhere the bar cannot see. Nothing is sampled while the panel is
 closed, so an island that nobody is hovering costs nothing at all.
+
+**`hypr-osd-stats` — the system popup**
+
+```sh
+hypr-osd-stats open eDP-1 1097 5 192 28   # what hovering the bar's status pill runs
+hypr-osd-stats close    # take it away
+hypr-osd-stats toggle   # close it if it is up, otherwise pin it up
+hypr-osd-stats show     # put it up and keep it there (no pointer tracking)
+hypr-osd-stats wifi     # switch the wireless radio (what the pill's right click runs)
+hypr-osd-stats bluetooth on|off|scan                            # the controller
+hypr-osd-stats bluetooth connect|disconnect|pair|remove MAC     # one device
+hypr-osd-stats status   # every reading, the devices and their addresses, no card
+```
+
+The panel is the island's right-hand twin and works the same way: the bar only
+says "the pointer is on the pill" — with the pill's own rectangle, so the panel
+can measure its hot zone — and the panel samples the pointer from then on,
+because *leaving* means moving onto the panel itself, somewhere the bar cannot
+see. Nothing is sampled while it is closed.
+
+Left column: three gauges (CPU, memory, temperature, with the same amber/red
+thresholds as the bar's pill) and the **bluetooth** radios — the controller's
+state with a power and a *visibility* switch (whether it answers pairing
+requests), then a row per device BlueZ knows, each with the icon it reports,
+its link quality as a signal meter and its battery as a pill (warning-coloured
+when it runs low), and the action that follows from its state: disconnect what
+is connected, connect — or *forget* — what is paired, pair what a scan found.
+Right column:
+the controls as a table — the wireless link, the sound, the power profile as a
+switch you click *directly* (no cycling), presentation mode, the brightness
+slider and the keyboard layout — with the pending updates under them. The device
+list is re-read only while the panel is open, and it costs a `bluetoothctl` per
+device, so a closed panel asks the controller nothing at all.
+
+`status` is the one to run when the panel looks wrong: it prints every reading,
+the devices with their addresses (which is what `bluetooth connect` wants), the
+width the card actually came out at, and the two hover zones in the layout.
 
 **`hypr-osd-volume` — the volume card**
 
@@ -608,12 +646,12 @@ session lock signal slots in without touching them.
 - **Nothing that runs a command waits for it.** `hypr_osd_core::hardware::launch`
   spawns and hands the exit to GLib; `run` (which waits) is only for tools that
   answer once and leave. Half of what the bar *does* is another element —
-  `hypr-osd-stats toggle` opens the system popup, the power button runs
-  `hypr-osd-session`, the wheel runs `hypr-osd-volume` — and the first invocation
-  of an element nobody has started yet *becomes* that element's daemon, staying up
-  as long as its card does. Waiting for one therefore means waiting for the user to
-  close a panel, with the bar's own main loop parked: the status pill's click froze
-  the whole bar, permanently. There is a regression test for it
+  `hypr-osd-stats open eDP-1 1105 5 184 28` unfolds the system popup, the power
+  button runs `hypr-osd-session`, the wheel runs `hypr-osd-volume` — and the first
+  invocation of an element nobody has started yet *becomes* that element's daemon,
+  staying up as long as its card does. Waiting for one therefore means waiting for
+  the user to close a panel, with the bar's own main loop parked: the status pill's
+  click froze the whole bar, permanently. There is a regression test for it
   (`launching_a_command_does_not_wait_for_it`).
 - **The bar asks Hyprland over its own sockets**, not through `hyprctl`: raw
   requests on `.socket.sock`, and the event stream on `.socket2.sock`, so the

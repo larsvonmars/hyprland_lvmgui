@@ -19,6 +19,13 @@
 //! panel uses exactly that (with a wide strip at the right end as the fallback,
 //! for an `open` that was typed by hand).
 //!
+//! `open` is the *only* verb the bar runs, for both of the pill's handles - the
+//! pointer arriving and a left click - so the panel is pointer-driven in every
+//! case, exactly like the island: it appears when it is asked for and goes away
+//! when the pointer leaves, and nothing the bar does can leave it up. (`toggle`
+//! and `show` pin it, which is for a script or for looking at it by hand; a
+//! pinned panel is not watched, so only a verb closes it again.)
+//!
 //! Verbs (`hypr-osd-stats <verb>`):
 //!
 //! ```text
@@ -30,13 +37,19 @@
 //!                        Typed by hand without them, the pointer is watched
 //!                        against a strip at the bar's right end instead.
 //!   close                take it away now
-//!   toggle               close it if it is up, otherwise pin it up
+//!   toggle               close it if it is up, otherwise pin it up (a script's
+//!                        verb: a pinned panel is not closed by the pointer)
 //!   show                 pin it up (no pointer tracking) - debugging
 //!   wifi                 switch the wireless radio on/off, which is what the
 //!                        bar's status pill runs on a right click: the switch
 //!                        has to *read* `rfkill` before it can flip it (see
 //!                        `sources`), and this is the element that owns that
 //!                        reading.
+//!   bluetooth <verb>     the bluetooth controls for a script - `on`, `off`,
+//!                        `scan`, and `connect|disconnect|pair|remove <address>`
+//!                        (the addresses `status` prints). The card's own
+//!                        buttons do not come through here: they *are* this
+//!                        element, so they call `sources` directly.
 //!   status               print every reading, without a card
 //!   (no verb)            start the daemon and wait for the bar
 //! ```
@@ -79,18 +92,40 @@ const DEFAULT_GAP: i32 = 6;
 /// or a bar too old to send one): the width of the strip at the bar's right end
 /// that counts as "over the pill".
 const DEFAULT_HOT_WIDTH: i32 = 240;
-const DEFAULT_LEFT_WIDTH: i32 = 200;
-const DEFAULT_RIGHT_WIDTH: i32 = 200;
+// The two columns. The left one is the wider, because it carries the bluetooth
+// device list, where a name and its readings have to fit side by side; the right
+// one is a table of short values on one line each. Both numbers are what the
+// content needs - and they are *minimums* as far as the panel is concerned: a
+// widget that cannot be narrower than the theme says (a slider's trough, a
+// progress bar) wins over them, so they are set to the width the rows really
+// take rather than to a number that looks good.
+const DEFAULT_LEFT_WIDTH: i32 = 260;
+const DEFAULT_RIGHT_WIDTH: i32 = 240;
 const DEFAULT_OPEN_DELAY_MS: u64 = 120;
 const DEFAULT_CLOSE_DELAY_MS: u64 = 300;
 const DEFAULT_POLL_MS: u64 = 50;
 /// The fast readings - CPU, memory, temperature, the update count - which are
 /// file reads and can keep up with the heartbeat.
 const DEFAULT_TICK_MS: u64 = 1000;
-/// Everything a *command* has to answer: `bluetoothctl`, `powerprofilesctl`,
-/// `rfkill`, the backlight, the keyboard layout. Cheaper than the readings by
-/// nothing, and nothing here changes faster than a person can click a button.
+/// Everything a *command* has to answer: `powerprofilesctl`, `rfkill`, the
+/// backlight, the keyboard layout. Cheaper than the readings by nothing, and
+/// nothing here changes faster than a person can click a button.
 const DEFAULT_SLOW_EVERY_MS: u64 = 5000;
+/// How often the bluetooth devices are re-read while the panel is open.
+///
+/// It is the slowest clock here on purpose: the list costs one `bluetoothctl`
+/// per device (a process each, and the *only* way to learn a device's icon, its
+/// link quality or its battery), so it is re-read when someone is looking, every
+/// few seconds - and never at all while the panel is closed.
+const DEFAULT_DEVICES_EVERY_MS: u64 = 10_000;
+/// How long the Scan button looks for nearby devices. `bluetoothctl --timeout`
+/// makes the scan exit by itself, and that exit is what ends the scan.
+const DEFAULT_SCAN_SECONDS: u64 = 12;
+/// How many device rows the list shows before it switches to a count. Five rows
+/// is what the card holds next to the controls without becoming a scrolling
+/// window - and a popup that scrolls under the pointer would scroll itself away
+/// from the pointer.
+const DEFAULT_MAX_DEVICES: i32 = 5;
 /// How often a stale update count is refreshed. `checkupdates` syncs a pacman
 /// database in a temporary directory, and the count only changes when somebody
 /// syncs anyway - so half an hour, which is also how long a count is believed
@@ -110,6 +145,12 @@ struct Settings {
     tick: Duration,
     slow_every: u64,
     updates_every: u64,
+    devices_every: u64,
+    /// How long the Scan button scans for, and how many device rows the list
+    /// shows. The second one is also what `main` caps its `bluetoothctl info`
+    /// reads at, so no details are read for rows that will not be drawn.
+    scan_seconds: u64,
+    max_devices: usize,
     /// The wireless interface the NETWORK row reports on.
     interface: String,
     /// Where the buttons that open something put it, and where `pacman` runs.
@@ -144,18 +185,36 @@ impl Settings {
             updates_every: config
                 .millis("updates_every_ms", DEFAULT_UPDATES_EVERY_MS)
                 .as_millis() as u64,
+            devices_every: config
+                .millis("devices_every_ms", DEFAULT_DEVICES_EVERY_MS)
+                .as_millis() as u64,
+            scan_seconds: config
+                .i32("scan_seconds", DEFAULT_SCAN_SECONDS as i32)
+                .max(1) as u64,
+            max_devices: config.i32("max_devices", DEFAULT_MAX_DEVICES).max(1) as usize,
             interface: config.string("network_interface", "wlan0"),
             terminal_command: config.string("terminal_command", "kitty"),
             updates_command: config.string("updates_command", "checkupdates"),
         }
     }
 
-    /// The panel's width: the two columns, their gap, the padding this panel's
-    /// own stylesheet adds, and the padding the shell puts around the content.
+    /// The panel's *content* width: the two columns, the gap between them, and
+    /// the padding this panel's own stylesheet puts around the body (2px each
+    /// side - see `box.stats` in `stats.css`).
+    ///
     /// Getting this right is what makes the derived hover zone line up with the
-    /// panel that is actually on screen.
+    /// panel that is actually on screen: a column whose content is wider than its
+    /// request grows the card, and the zone would then be measured against a
+    /// rectangle the card no longer is. `status` prints the measured width next
+    /// to this one so the two can be compared instead of guessed at.
+    fn content_width(&self) -> i32 {
+        self.left_width + self.right_width + 10 + 4
+    }
+
+    /// The card's width: the content plus the padding the shell keeps between
+    /// that content and the card's edge. This is what `Opts::width` wants.
     fn width(&self) -> i32 {
-        self.left_width + self.right_width + 10 + 2 * CARD_PAD_X + 4
+        self.content_width() + 2 * CARD_PAD_X
     }
 
     /// How far below the top edge of the screen the panel hangs: past the bar and
@@ -185,6 +244,10 @@ struct Panel {
     reading: RefCell<Option<system::Reading>>,
     updates: Cell<i32>,
     names: RefCell<Vec<String>>,
+    /// The bluetooth scan the Scan button started, if it is still running. The
+    /// scanner knows when it ends, and `main` holds it because the panel's own
+    /// state is what the button and the header chip are drawn from.
+    scanner: Rc<sources::Scanner>,
 }
 
 fn main() -> glib::ExitCode {
@@ -222,6 +285,35 @@ fn main() -> glib::ExitCode {
                     }
                 })
             });
+
+            let scanner = Rc::new(sources::Scanner::default());
+            // The Scan button asks for a scan; the scanner owns it from there.
+            // The repaint is immediate (the button says "Scanning" while the
+            // controller looks), and the *end* of the scan is what re-reads the
+            // list - a device that answered the scan is only listed once
+            // bluetoothctl has been asked again.
+            node.on_scan({
+                let panel = panel.clone();
+                let settings = settings.clone();
+                let scanner = scanner.clone();
+                Rc::new(move || {
+                    let Some(state) = panel.get() else {
+                        return;
+                    };
+                    state.borrow().node.render_scanning(true);
+                    let panel = panel.clone();
+                    let settings = settings.clone();
+                    sources::Scanner::start(&scanner, settings.scan_seconds, move || {
+                        if let Some(state) = panel.get() {
+                            state.borrow().node.render_scanning(false);
+                        }
+                        if let Some(state) = panel.get() {
+                            refresh_devices(state, &settings);
+                        }
+                    });
+                })
+            });
+
             // A fresh process has no panel up, whatever the flag says: an element
             // that was killed while the panel was open would otherwise leave the
             // bar's status pill lit for the rest of the session, because the flag
@@ -237,6 +329,7 @@ fn main() -> glib::ExitCode {
                 reading: RefCell::new(None),
                 updates: Cell::new(0),
                 names: RefCell::new(Vec::new()),
+                scanner,
             }));
             let _ = panel.set(state.clone());
 
@@ -267,6 +360,11 @@ fn main() -> glib::ExitCode {
                         if every(count, settings.slow_every, settings.tick) {
                             render_slow(&state, &settings);
                         }
+                        if every(count, settings.devices_every, settings.tick) {
+                            // The device list, on its own slower clock: it is
+                            // the one read here that costs a process per row.
+                            refresh_devices(&state, &settings);
+                        }
                         if every(count, settings.updates_every, settings.tick)
                             && system::cached_updates().is_none()
                         {
@@ -289,7 +387,7 @@ fn main() -> glib::ExitCode {
                 glib::timeout_add_local(settings.poll, move || {
                     if state.borrow().machine.is_watching() {
                         let action = sample(&state, &settings);
-                        act(&osd, action);
+                        act(&state, &osd, &settings, action);
                     }
                     glib::ControlFlow::Continue
                 });
@@ -338,7 +436,7 @@ fn main() -> glib::ExitCode {
                     }
                     "close" => {
                         let action = panel.borrow_mut().machine.dismiss();
-                        act(osd, action);
+                        act(panel, osd, &settings, action);
                         Ok(String::new())
                     }
                     "toggle" => {
@@ -351,12 +449,12 @@ fn main() -> glib::ExitCode {
                                 Action::Show
                             }
                         };
-                        act(osd, action);
+                        act(panel, osd, &settings, action);
                         Ok(String::new())
                     }
                     "show" => {
                         panel.borrow_mut().machine.pin();
-                        act(osd, Action::Show);
+                        act(panel, osd, &settings, Action::Show);
                         Ok(String::new())
                     }
                     "wifi" => {
@@ -371,10 +469,54 @@ fn main() -> glib::ExitCode {
                         });
                         Ok(String::new())
                     }
+                    // The bluetooth controls, for a script (the card's own
+                    // buttons call `sources` directly - they *are* this element).
+                    // `bluetooth power off` is the radio; the rest take an
+                    // address, which `status` prints.
+                    "bluetooth" => {
+                        let (verb, address) = (args.get(1), args.get(2));
+                        match (verb.map(String::as_str), address.map(String::as_str)) {
+                            (Some("on"), _) => sources::set_bluetooth(true),
+                            (Some("off"), _) => sources::set_bluetooth(false),
+                            (Some("connect"), Some(address)) => sources::connect_device(address),
+                            (Some("disconnect"), Some(address)) => {
+                                sources::disconnect_device(address)
+                            }
+                            (Some("pair"), Some(address)) => {
+                                // The attempt outlives this answer by design -
+                                // the verb is a script's way of *asking*, and
+                                // waiting here would park the panel's own pointer
+                                // sampling for the whole handshake. A script that
+                                // wants to know how it went reads `status`.
+                                sources::pair_device(address, |_| {})
+                            }
+                            (Some("remove"), Some(address)) => sources::remove_device(address),
+                            (Some("scan"), _) => {
+                                let scanner = panel.borrow().scanner.clone();
+                                let seconds = settings.scan_seconds;
+                                sources::Scanner::start(&scanner, seconds, || {});
+                            }
+                            _ => {
+                                return Err("usage: bluetooth on|off|scan | \
+                                     bluetooth connect|disconnect|pair|remove <address>"
+                                    .to_string())
+                            }
+                        }
+                        // Whatever it was, it takes a moment; the rows are
+                        // re-read once it has had one.
+                        let panel = panel.clone();
+                        let settings = settings.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                            refresh_devices(&panel, &settings);
+                        });
+                        Ok(String::new())
+                    }
                     "status" => Ok(status(&panel.borrow(), &settings)),
                     other => Err(format!(
                         "unknown command `{other}` \
-                         (open [connector] [connector] [x y w h] | close | toggle | show | wifi | status)"
+                         (open [connector] [connector] [x y w h] | close | toggle | show | wifi | \
+                         bluetooth on|off|scan | bluetooth connect|disconnect|pair|remove <address> | \
+                         status)"
                     )),
                 }
             },
@@ -389,18 +531,38 @@ fn main() -> glib::ExitCode {
 /// The flag is what the bar's status pill reads to light up. It is written here
 /// and nowhere else, so the two programs cannot disagree about whether the panel
 /// is up.
-fn act(osd: &Rc<Osd>, action: Action) {
+///
+/// Showing is also when the bluetooth devices are read: the list is the one thing
+/// in the panel that costs a process per row, so it is asked for when somebody is
+/// about to look at it rather than on the heartbeat.
+fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, settings: &Rc<Settings>, action: Action) {
     match action {
         Action::None => {}
         Action::Show => {
             osd.show();
             state::write(&state::stats_panel(), true);
+            refresh_devices(panel, settings);
         }
         Action::Hide => {
             osd.hide();
             state::write(&state::stats_panel(), false);
         }
     }
+}
+
+/// Read the bluetooth controller and its devices, and repaint the tile when the
+/// answer lands.
+fn refresh_devices(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
+    let limit = settings.max_devices;
+    sources::refresh_bluetooth(limit, {
+        let panel = panel.clone();
+        move |bluetooth, devices| {
+            let state = panel.borrow();
+            let scanning = state.scanner.active();
+            state.node.render_bluetooth(bluetooth, devices, scanning);
+            state.node.render_chips();
+        }
+    });
 }
 
 /// Ask `checkupdates` for a new count, in the background, and repaint when it
@@ -581,7 +743,8 @@ fn render_readings(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
 /// The rows that each cost a command: the wireless link and its radio, the sink,
 /// the power profile, the backlight and the keyboard layout. None of them change
 /// faster than a person can click a button, so they sit on the slower interval -
-/// and the one that is genuinely slow (bluetooth) does not even block it.
+/// and the one that is genuinely slow (the bluetooth device list) is not here at
+/// all: it has its own clock (see [`refresh_devices`]).
 fn render_slow(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
     let network = hardware::network(&settings.interface);
     let radio = sources::radio_on();
@@ -599,20 +762,13 @@ fn render_slow(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
         state.node.render_layout(&sources::layout());
         state.node.render_chips();
     }
-    sources::refresh_bluetooth({
-        let panel = panel.clone();
-        move |bluetooth| {
-            let state = panel.borrow();
-            state.node.render_bluetooth(bluetooth);
-            state.node.render_chips();
-        }
-    });
 }
 
 /// Everything, now: the first paint, and what a button's re-read runs.
 fn refresh(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
     render_readings(panel, settings);
     render_slow(panel, settings);
+    refresh_devices(panel, settings);
 }
 
 /// Whether this tick is the one for an interval (the bar's `every`, which this
@@ -629,19 +785,60 @@ fn every(count: u64, interval_ms: u64, tick: Duration) -> bool {
 /// This is the answer to "why does the row say that", without a card in the way.
 fn status(panel: &Panel, settings: &Settings) -> String {
     let reading = panel.reading.borrow();
-    let bluetooth = panel.node.bluetooth();
     let network = hardware::network(&settings.interface);
-    let lines = [
+    // The devices are read *now* rather than taken from the card's last read:
+    // this is a verb for answering questions, and "which address do I pass to
+    // `bluetooth connect`" is one of them. Waiting a few tenths of a second is
+    // what a status read does everywhere else in this program.
+    let (bluetooth, devices) = sources::bluetooth_now(settings.max_devices);
+    let mut lines = vec![
         format!(
             "panel      {}px wide, {}px below the top, right edge {}px in from the screen",
             settings.width(),
             settings.margin_top(),
             settings.bar.margin_x as i32
         ),
+        // The size the card *actually* came out at, against the width the hover
+        // zone is derived from: the two have to agree, because a widget that asks
+        // for more room than the columns were given grows the card and leaves the
+        // zone behind (see `zones`).
+        {
+            let measured = panel.node.root.width();
+            let planned = settings.content_width();
+            format!(
+                "size       content {}x{}, planned {planned}x? - {}",
+                measured,
+                panel.node.root.height(),
+                match measured {
+                    // A panel that has never been shown has no allocation: the
+                    // question does not apply yet, and saying "mismatch" would
+                    // be a lie about a card nobody has looked at.
+                    0 => "not drawn yet".to_string(),
+                    measured if measured == planned =>
+                        "the columns came out as planned".to_string(),
+                    measured if measured < planned =>
+                        format!("{}px narrower than planned", planned - measured),
+                    measured => format!("{}px wider than planned", measured - planned),
+                }
+            )
+        },
         // Where the two hover zones ended up, in the layout. There is no way to
         // move a pointer from here, so this is how "the panel does not open" gets
         // diagnosed: the pill's zone has to be the pill.
         describe_zone(panel, settings),
+        // What the machine makes of the pointer - and in particular whether the
+        // panel is still being watched. A panel that is up and *not* watched is
+        // one that no amount of moving the pointer will take away again, which is
+        // the answer to "why will it not close" (`show` and `toggle` pin it; the
+        // bar never does - see the bar's status pill).
+        format!(
+            "state      {}",
+            match (panel.machine.is_open(), panel.machine.is_watching()) {
+                (false, _) => "closed".to_string(),
+                (true, true) => "open, watching the pointer".to_string(),
+                (true, false) => "open, pinned - only a verb closes this".to_string(),
+            }
+        ),
         match reading.as_ref() {
             Some(reading) => format!(
                 "resources  CPU {:.0}%  memory {:.0}%  {}",
@@ -661,9 +858,18 @@ fn status(panel: &Panel, settings: &Settings) -> String {
             (_, count) => format!("updates    {count} packages waiting"),
         },
         format!(
-            "bluetooth  {} (the button would {})",
+            "bluetooth  {} · {} (the power button would {})",
             bluetooth.state(),
+            bluetooth.visibility().to_lowercase(),
             bluetooth.action().to_lowercase()
+        ),
+        format!(
+            "scan       {}",
+            if panel.scanner.active() {
+                format!("running ({}s at a time)", settings.scan_seconds)
+            } else {
+                "not running".to_string()
+            }
         ),
         format!(
             "network    {}",
@@ -703,5 +909,40 @@ fn status(panel: &Panel, settings: &Settings) -> String {
             if panel.node.presenting() { "on" } else { "off" }
         ),
     ];
+    // The devices as the list would draw them, with the address spelled out:
+    // this is where the one for a `bluetooth connect` comes from.
+    lines.push(format!(
+        "devices    {} known, {} shown at a time{}",
+        devices.len(),
+        settings.max_devices,
+        if devices.is_empty() {
+            " (none paired, nothing seen by a scan)"
+        } else {
+            ""
+        }
+    ));
+    for device in &devices {
+        // The link quality and the battery draw as widgets in the panel;
+        // `status` spells them out so the shorter detail line loses nothing.
+        let readings = [
+            device.rssi.map(|rssi| format!("{rssi} dBm")),
+            device.battery.map(|battery| format!("battery {battery}%")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("  ");
+        lines.push(format!(
+            "           {}  {}  {}{}",
+            device.address,
+            device.label(),
+            device.detail(),
+            if readings.is_empty() {
+                String::new()
+            } else {
+                format!("  {readings}")
+            }
+        ));
+    }
     lines.join("\n")
 }
