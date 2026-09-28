@@ -23,6 +23,7 @@ use gtk::glib;
 use serde_json::Value;
 
 use hypr_osd_core::hypripc::{self, Events};
+use hypr_osd_core::windows::PUT_AWAY;
 
 /// How long to wait after the first event before reading, so a burst of them
 /// costs one round-trip.
@@ -120,12 +121,29 @@ fn build(
         })
         .collect();
 
-    let window = active_window.unwrap_or(&Value::Null);
+    // A window that is put away can still be the *focused* one - the compositor
+    // keeps it there while it hides the workspace it sits on (see the bar's
+    // `minimise`) - but it is not what a title is for: a window nobody can see must
+    // not be named on the bar. The class goes with the title, because it is the
+    // same window's tooltip.
+    let window = active_window
+        .filter(|window| !is_put_away(window))
+        .unwrap_or(&Value::Null);
     Snapshot {
         workspaces,
         title: text(window, "title"),
         class: text(window, "class"),
     }
+}
+
+/// Whether the window object Hyprland answered with sits on the put-away
+/// workspace, i.e. is a window the bar has minimised.
+fn is_put_away(window: &Value) -> bool {
+    window
+        .get("workspace")
+        .and_then(|workspace| workspace.get("name"))
+        .and_then(Value::as_str)
+        == Some(PUT_AWAY)
 }
 
 /// Which workspace is focused, and which ones are showing on the other
@@ -188,10 +206,13 @@ const RELEVANT: &[&str] = &[
     "fullscreen",
 ];
 
-/// Call `on_change` when the bar's left half may be out of date.
+/// Call `on_change` - on the main loop - when something the bar draws may be out
+/// of date. The event's *name* is handed over (`activewindow`, `windowtitlev2`,
+/// …): a caller that has to decide whether a large reading is worth repeating
+/// needs to know what happened, and only this module parses the lines.
 ///
 /// Keep the returned handle: dropping it stops the subscription.
-pub fn watch(on_change: impl Fn() + 'static) -> Events {
+pub fn watch(on_change: impl Fn(&str) + 'static) -> Events {
     // One refresh per burst. `scheduled` is the "a timer is already running"
     // flag, and it is cleared *inside* the timer, so an event that arrives while
     // the refresh runs schedules the next one rather than being lost.
@@ -202,11 +223,14 @@ pub fn watch(on_change: impl Fn() + 'static) -> Events {
         if !RELEVANT.contains(&name) || scheduled.replace(true) {
             return;
         }
+        // The name is copied out of the line: the read it schedules happens after
+        // the line is gone.
+        let name = name.to_string();
         let scheduled = scheduled.clone();
         let on_change = on_change.clone();
         glib::timeout_add_local_once(COALESCE, move || {
             scheduled.set(false);
-            on_change();
+            on_change(&name);
         });
     })
 }
@@ -281,6 +305,20 @@ mod tests {
         let snapshot = build(Some(&workspaces()), Some(&monitors(1, 1)), Some(&window), 1);
         assert_eq!(snapshot.title, "README.md");
         assert_eq!(snapshot.class, "kitty");
+    }
+
+    #[test]
+    fn a_window_that_is_put_away_is_not_the_title() {
+        // The compositor goes on considering a hidden window the focused one when
+        // its workspace has nothing else on it; the bar must not name it.
+        let window = serde_json::json!({
+            "title": "hidden editor",
+            "class": "code-oss",
+            "workspace": { "name": PUT_AWAY },
+        });
+        let snapshot = build(Some(&workspaces()), Some(&monitors(1, 1)), Some(&window), 1);
+        assert!(snapshot.title.is_empty());
+        assert!(snapshot.class.is_empty());
     }
 
     #[test]

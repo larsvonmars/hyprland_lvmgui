@@ -699,10 +699,10 @@ EOF
       fi
     fi
 
-    # The session card's keybinding has to be free. Only report these two: the
-    # volume keys are *deliberately* taken over (below), while a key the user
-    # already bound would simply be replaced - silently losing a binding is
-    # worth a warning.
+    # The keys osd.lua adds - the session card's, the lock's and the tray's - have
+    # to be free. Only report those: the volume keys are *deliberately* taken over
+    # (below), while a key the user already bound would simply be replaced -
+    # silently losing a binding is worth a warning.
     if grep -qE 'SHIFT \+ L"' "$HYPR_DIR/hyprland.lua" 2>/dev/null; then
       {
         echo "   ! hyprland.lua already binds SUPER + SHIFT + L (the session card's"
@@ -714,6 +714,16 @@ EOF
       {
         echo "   ! hyprland.lua already binds SUPER + L (the lock key osd.lua"
         echo "     adds): one of the two will win. Change one of them."
+      } >&2
+    fi
+
+    # The tray's two keys are the bar's: SUPER + H puts the focused window away
+    # and SUPER + SHIFT + H brings the last one back. Same warning as above - a
+    # binding that is silently replaced is worth a line on the way past.
+    if grep -qE 'SUPER \+ (SHIFT \+ )?H' "$HYPR_DIR/hyprland.lua" 2>/dev/null; then
+      {
+        echo "   ! hyprland.lua already binds SUPER + H or SUPER + SHIFT + H (the"
+        echo "     tray's put-away keys): one of the two will win. Change one."
       } >&2
     fi
 

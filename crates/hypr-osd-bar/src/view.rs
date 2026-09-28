@@ -23,11 +23,14 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use hypr_osd_core::hardware::{self as sources, Battery, Charging, Network, Volume};
+use hypr_osd_core::icons;
 use hypr_osd_core::mpris::Track;
 use hypr_osd_core::system::Reading;
 use hypr_osd_core::text;
+use hypr_osd_core::windows::Window;
 
 use crate::hypr::{Snapshot, Workspace};
+use crate::minimise::{self, Minimised};
 use crate::Settings;
 
 // ---------------------------------------------------------------------------
@@ -205,6 +208,8 @@ pub struct BarView {
     /// handle the system popup unfolds from.
     status: Pill,
     tray: gtk::Box,
+    /// The windows the bar has put away, drawn at the left of the tray's row.
+    minimised: gtk::Box,
     power: Pill,
     /// The three readings behind the status pill, kept together because the pill
     /// is drawn from all of them at once (see [`Status`]).
@@ -212,6 +217,13 @@ pub struct BarView {
     /// What the workspace row was last drawn from, so an event that changes
     /// nothing does not rebuild a row of buttons.
     last_workspaces: RefCell<String>,
+    /// The same for the put-away icons, which are buttons too - and one the
+    /// pointer may well be resting on (see [`BarView::render_minimised`]).
+    last_minimised: RefCell<String>,
+    /// How large a tray icon is drawn, in layout pixels. The put-away icons are
+    /// the same size as the application indicators beside them: they are the same
+    /// gesture.
+    icon_size: i32,
 }
 
 /// The last reading of each part of the status pill.
@@ -310,6 +322,16 @@ impl BarView {
 
         let tray = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         tray.add_css_class("tray");
+
+        // The windows the bar has put away are drawn in the same row, at its left
+        // end - they are the tray's other half (see `minimise`), and this box is
+        // built here rather than by the tray host because *every* bar draws them:
+        // the application indicators are one session-wide D-Bus object that only
+        // one bar can carry, while these are simply what Hyprland says. Putting a
+        // window away on one screen therefore shows its icon on both.
+        let minimised = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        minimised.add_css_class("minimised");
+        tray.append(&minimised);
 
         // --- the combined status pill --------------------------------------
         //
@@ -466,9 +488,12 @@ impl BarView {
             stats,
             status,
             tray,
+            minimised,
             power,
             readings: RefCell::new(Status::default()),
             last_workspaces: RefCell::new(String::new()),
+            last_minimised: RefCell::new(String::new()),
+            icon_size: settings.icon_size,
         };
         // A first paint, so the bar that appears is already correct rather than
         // appearing empty and filling in over the next second.
@@ -499,6 +524,58 @@ impl BarView {
     pub fn render_hypr(&self, snapshot: &Snapshot) {
         self.render_workspaces(&snapshot.workspaces);
         self.render_title(snapshot);
+    }
+
+    /// The windows that are put away: one icon per window, at the left of the
+    /// tray's row. A click brings that window back.
+    ///
+    /// The icons are rebuilt only when what they show changes. Rebuilding on
+    /// every repaint would replace the button under the pointer - which loses a
+    /// hover and, worse, can swallow the click that was about to land on it.
+    pub fn render_minimised(&self, entries: &[Minimised]) {
+        let signature = entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}:{}:{}:{}",
+                    entry.window.address,
+                    entry.window.class,
+                    entry.window.title,
+                    entry.home.as_deref().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        {
+            let mut last = self.last_minimised.borrow_mut();
+            if *last == signature {
+                return;
+            }
+            *last = signature;
+        }
+
+        while let Some(child) = self.minimised.first_child() {
+            self.minimised.remove(&child);
+        }
+        for entry in entries {
+            let button = gtk::Button::new();
+            button.add_css_class("minimised-item");
+            button.set_has_frame(false);
+            button.set_focus_on_click(false);
+            button.set_can_focus(false);
+            button.set_child(Some(&picture(&entry.window, self.icon_size)));
+            button.set_tooltip_text(Some(&entry.tooltip()));
+            // What a click does is the entry's own business, and the entry is
+            // cloned into the handler: the *list* it came from is thrown away at
+            // the next repaint, and the icons are rebuilt with it.
+            let entry = entry.clone();
+            button.connect_clicked(move |_| {
+                if let Err(error) = minimise::bring_back(&entry) {
+                    eprintln!("hypr-osd-bar: {error}");
+                }
+            });
+            self.minimised.append(&button);
+        }
     }
 
     fn render_workspaces(&self, workspaces: &[Workspace]) {
@@ -791,6 +868,23 @@ impl BarView {
         self.stats.tooltip(Some(&tooltip.join("\n")));
         self.stats.set_visible(true);
     }
+}
+
+/// What a put-away window is drawn as: the application's icon, or its first
+/// letter when the theme has nothing for that class - the same stand-in the two
+/// window cards fall back to, so a window looks like itself wherever this desktop
+/// draws it.
+fn picture(window: &Window, size: i32) -> gtk::Widget {
+    if let Some(paintable) = icons::paintable(&window.class, size) {
+        let image = gtk::Image::new();
+        image.set_pixel_size(size);
+        image.set_paintable(Some(&paintable));
+        return image.upcast::<gtk::Widget>();
+    }
+    let letter = gtk::Label::new(Some(&text::initial(&window.class)));
+    letter.add_css_class("initial");
+    letter.set_size_request(size, size);
+    letter.upcast::<gtk::Widget>()
 }
 
 /// Where a widget sits inside `target`, in whole pixels.

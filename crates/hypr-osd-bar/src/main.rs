@@ -28,8 +28,18 @@
 //!   toggle               show it, or hide it
 //!   refresh              re-read every pill now
 //!   status               print what each pill currently reads, no bar
+//!   minimise             put the focused window away, into the tray
+//!   restore [n|0x…]      bring one back (the last one put away, by default)
+//!   minimised            list what is put away, no bar
 //!   (no verb)            start the bar (what the autostart runs)
 //! ```
+//!
+//! Three of those verbs are the bar's other job. It is where the desktop's one
+//! *window* action lives: the keybinding that puts the focused window away
+//! (Hyprland has no minimise of its own - see [`minimise`]) and the row of icons
+//! beside the application indicators that brings one back. It belongs in the bar
+//! for the same reason the tray does: that row is the only place on this desktop
+//! where something that is not on screen is drawn.
 //!
 //! The verbs speak for *all* the bars - they are one element with one set of
 //! pills per screen. Like every element here the binary is single-instance: a
@@ -43,6 +53,7 @@
 //! which is exactly what it used to do. See `sources::launch`.
 
 mod hypr;
+mod minimise;
 mod tray;
 mod view;
 
@@ -249,13 +260,16 @@ fn main() -> glib::ExitCode {
             //    with one set of icons and a widget can only be in one bar - so
             //    exactly one of the bars carries it.
 
-            // 2. Hyprland: the workspace row and the window title, kept up to
-            //    date by the event stream; the heartbeat re-reads them too, as
-            //    the safety net for a socket that quietly died.
+            // 2. Hyprland: the workspace row, the window title and the windows
+            //    that are put away, kept up to date by the event stream; the
+            //    heartbeat re-reads them too, as the safety net for a socket that
+            //    quietly died.
             let events = hypr::watch({
                 let bars = bars.clone();
-                let settings = settings.clone();
-                move || bars.edit(|paint| paint.hypr = hypr::read(settings.workspaces))
+                // The event's name travels with the call, because the tray's icons
+                // are only worth re-reading when the event can have moved a window
+                // (see `minimise::CHANGES`).
+                move |event| bars.refresh_hypr(Some(event))
             });
 
             // 3. MPRIS: the media pill. The follower prints the state it finds
@@ -349,8 +363,17 @@ fn main() -> glib::ExitCode {
                         Ok(String::new())
                     }
                     "status" => Ok(bars.status()),
+                    // Spelled with an `s` because that is how this collection
+                    // writes English; the `z` is accepted because that is how a
+                    // hand types it.
+                    "minimise" | "minimize" => bars.minimise(),
+                    // Without an argument: the window put away last, which is the
+                    // icon nearest the indicators and what the keybinding runs.
+                    "restore" => bars.restore(args.get(1).map(String::as_str)),
+                    "minimised" | "minimized" => Ok(bars.minimised()),
                     other => Err(format!(
-                        "unknown command `{other}` (show | hide | toggle | refresh | status)"
+                        "unknown command `{other}` (show | hide | toggle | refresh | status | \
+                         minimise | restore | minimised)"
                     )),
                 }
             },
@@ -392,6 +415,9 @@ struct Bars {
     /// The tray. It is a session-wide D-Bus object with one set of icons, and a
     /// widget can only be in one bar, so exactly one of the bars carries it.
     tray: RefCell<Option<tray::Tray>>,
+    /// Where the windows this bar put away came from, so a click on one of their
+    /// icons can put it back where it was (see [`minimise::Memory`]).
+    memory: RefCell<minimise::Memory>,
     /// The screen the tray *prefers* to live on (see [`Bars::new`]).
     tray_home: String,
     /// The screen it actually ended up on, so it can be moved if that screen
@@ -417,6 +443,9 @@ struct Bars {
 struct Paint {
     /// The workspace row and the focused window's title.
     hypr: hypr::Snapshot,
+    /// The windows the bar has put away, in the order the tray draws them (see
+    /// [`minimise`]).
+    minimised: Vec<minimise::Minimised>,
     /// The clock, already formatted - `now` is the only code that knows the
     /// configured format.
     clock: String,
@@ -455,6 +484,7 @@ impl Bars {
             views: RefCell::new(BTreeMap::new()),
             paint: RefCell::new(Paint::default()),
             tray: RefCell::new(None),
+            memory: RefCell::new(minimise::Memory::default()),
             tray_home,
             tray_output: RefCell::new(None),
             sampler: RefCell::new(stats::Sampler::new()),
@@ -530,6 +560,125 @@ impl Bars {
         }
     }
 
+    /// Read Hyprland's own picture and paint it: the callers that have nothing
+    /// else to add to the same repaint use this (the event stream, the minimise
+    /// verbs).
+    fn refresh_hypr(&self, event: Option<&str>) {
+        let (snapshot, minimised) = self.read_hypr(event);
+        self.edit(|paint| {
+            paint.hypr = snapshot;
+            if let Some(minimised) = minimised {
+                paint.minimised = minimised;
+            }
+        });
+    }
+
+    /// Read what Hyprland knows about windows: the workspace row, the focused
+    /// window's title, and what is put away.
+    ///
+    /// `event` is the event that caused the read, or `None` for "not because of
+    /// an event" (the `refresh` verb, the heartbeat, a key press). Only an event
+    /// that can move a window in or out of the put-away workspace is worth
+    /// re-reading the tray's icons for: everything else the bar hears about (a
+    /// title, a focus change) cannot change them, and `j/clients` is the largest
+    /// answer Hyprland gives.
+    fn read_hypr(&self, event: Option<&str>) -> (hypr::Snapshot, Option<Vec<minimise::Minimised>>) {
+        let snapshot = hypr::read(self.settings.workspaces);
+        let moves_windows = match event {
+            Some(event) => minimise::CHANGES.contains(&event),
+            None => true,
+        };
+        let minimised = if moves_windows {
+            self.read_minimised()
+        } else {
+            None
+        };
+        (snapshot, minimised)
+    }
+
+    /// The windows that are put away, as the tray draws them.
+    ///
+    /// The list of them comes from Hyprland and the order and the way back from
+    /// the bar's own memory, so the two are reconciled here, in one place:
+    /// whatever is not put away any more is forgotten, and whatever Hyprland
+    /// knows but the bar does not is drawn anyway (see [`minimise::Memory`]).
+    ///
+    /// `None` when Hyprland cannot be asked - the tray then keeps the icons it
+    /// has, because an empty tray would state that nothing is put away.
+    fn read_minimised(&self) -> Option<Vec<minimise::Minimised>> {
+        let put_away = minimise::read()?;
+        let mut memory = self.memory.borrow_mut();
+        memory.retain(&put_away);
+        Some(memory.arrange(put_away))
+    }
+
+    /// Put the focused window away - what the bar's one keybinding runs.
+    ///
+    /// The icons are re-read here rather than left to the event stream: the icon
+    /// arriving with the key press is the feedback the press deserves, and the
+    /// title pill moves on too, because the focus has moved to another window.
+    fn minimise(&self) -> Result<String, String> {
+        let message = minimise::minimise(&mut self.memory.borrow_mut())?;
+        self.refresh_hypr(None);
+        Ok(message)
+    }
+
+    /// Bring a put-away window back: the one `what` names - a window address, or
+    /// a number counting from 1 in the order the tray draws them - else the one
+    /// put away last, which is what the keybinding asks for.
+    fn restore(&self, what: Option<&str>) -> Result<String, String> {
+        let Some(entries) = self.read_minimised() else {
+            return Err("Hyprland did not answer".to_string());
+        };
+        let entry = match what {
+            None => entries.first(),
+            Some(what) => entries
+                .iter()
+                .find(|entry| entry.matches(what))
+                .or_else(|| {
+                    // A number counts the icons from 1, the way the digits count tiles
+                    // in the overview and the switcher.
+                    what.parse::<usize>()
+                        .ok()
+                        .and_then(|number| number.checked_sub(1))
+                        .and_then(|index| entries.get(index))
+                }),
+        };
+        let Some(entry) = entry else {
+            // Say how much there *is*: "no window matches `9`" on a tray that
+            // happens to be empty is a different story from the same answer when
+            // two windows are waiting.
+            let count = match entries.len() {
+                0 => "nothing is put away".to_string(),
+                1 => "1 window is put away".to_string(),
+                count => format!("{count} windows are put away"),
+            };
+            return Err(match what {
+                None => "nothing is put away".to_string(),
+                Some(what) => format!("no put-away window matches `{what}` ({count})"),
+            });
+        };
+        let message = minimise::bring_back(entry)?;
+        self.refresh_hypr(None);
+        Ok(message)
+    }
+
+    /// What the `minimised` verb prints: one line per put-away window, in the
+    /// order the tray draws them.
+    fn minimised(&self) -> String {
+        let Some(entries) = self.read_minimised() else {
+            return "Hyprland did not answer".to_string();
+        };
+        if entries.is_empty() {
+            return "nothing is put away".to_string();
+        }
+        entries
+            .iter()
+            .map(minimise::Minimised::describe)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Read every source into the cache and show it: the `refresh` verb, and how
     /// the first bar of the session paints itself.
     ///
@@ -537,7 +686,7 @@ impl Bars {
     /// instead, each source on its own clock (see [`Bars::tick`]).
     fn refresh(&self) {
         let settings = self.settings.clone();
-        let snapshot = hypr::read(settings.workspaces);
+        let (snapshot, minimised) = self.read_hypr(None);
         let volume = sources::volume();
         let network = sources::network(&settings.interface);
         let battery = sources::battery(&settings.battery, &settings.adapter);
@@ -547,6 +696,9 @@ impl Bars {
         let status_open = state::read(&state::stats_panel());
         self.edit(|paint| {
             paint.hypr = snapshot;
+            if let Some(minimised) = minimised {
+                paint.minimised = minimised;
+            }
             paint.clock = clock;
             paint.island_open = island_open;
             paint.status_open = status_open;
@@ -598,6 +750,12 @@ impl Bars {
             }
         }
 
+        // Read before the repaint (see [`Bars::read_hypr`]): a resync is the
+        // safety net for an event socket that quietly died, so it reads exactly
+        // what the event path reads - including the tray's icons, which no event
+        // may have mentioned for a long while.
+        let resynced = resync.then(|| self.read_hypr(None));
+
         self.edit(|paint| {
             paint.clock = now(&settings.clock_format);
             // While a popup is unfolded, its pill wears the accent. The flags are
@@ -618,11 +776,14 @@ impl Bars {
             if due(settings.battery_every) {
                 paint.battery = sources::battery(&settings.battery, &settings.adapter);
             }
-            if resync {
+            if let Some((snapshot, minimised)) = resynced {
                 // The event socket is the real mechanism, so this is only the
                 // safety net - for one that quietly died, or for Hyprland being
                 // restarted under a running bar.
-                paint.hypr = hypr::read(settings.workspaces);
+                paint.hypr = snapshot;
+                if let Some(minimised) = minimised {
+                    paint.minimised = minimised;
+                }
                 // `playerctl --follow` only speaks when something changes;
                 // asking again here is what makes the pill correct after a player
                 // exits without saying goodbye.
@@ -700,6 +861,19 @@ impl Bars {
                 }
             ),
             format!("tray       on {tray}"),
+            format!(
+                "minimised  {}",
+                if paint.minimised.is_empty() {
+                    "nothing is put away".to_string()
+                } else {
+                    paint
+                        .minimised
+                        .iter()
+                        .map(|entry| entry.window.label().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                }
+            ),
             format!(
                 "workspaces {}  (*you are here, ~other monitor, !has windows)",
                 workspaces.join(" ")
@@ -814,6 +988,7 @@ impl Bars {
 /// Paint one bar from the cached values.
 fn apply(view: &BarView, paint: &Paint, reading: Option<&Reading>, updates: i32) {
     view.render_hypr(&paint.hypr);
+    view.render_minimised(&paint.minimised);
     view.render_clock(&paint.clock);
     view.set_island_open(paint.island_open);
     view.set_status_open(paint.status_open);

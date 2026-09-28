@@ -143,6 +143,34 @@ button.tray-item.needs-attention {
     background-color: @crit_tint;
 }
 
+/* ---- the windows that are put away ---------------------------------------- */
+/* One icon per window the bar has minimised, at the left of the same row as the
+ * application indicators - it is the same gesture (a click on a small picture),
+ * so it should look like one. Tighter than a pill and not quite as tight as an
+ * indicator: the stand-in letter needs a little air around it. */
+button.minimised-item {
+    padding: 0 3px;
+    margin: 3px 1px;
+    border-radius: 8px;
+}
+
+button.minimised-item:hover {
+    background-color: @surface_h;
+}
+
+button.minimised-item:active {
+    background-color: @accent_tint;
+}
+
+/* The stand-in for an application the icon theme has nothing for: its first
+ * letter, in the accent, in the box the icon would have filled. The window cards
+ * draw the same letter, so a window that has no icon has none anywhere. */
+button.minimised-item label.initial {
+    color: @accent;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 /* ---- the status pill (and the system popup's handle) --------------------- */
 /* One pill for the wireless link, the sound and the battery - the three things
  * about the machine you glance at, which used to be three pills. Its states

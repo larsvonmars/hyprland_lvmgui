@@ -25,7 +25,7 @@ are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
-| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray, the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup. |
+| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
 | Island popup | `hypr-osd-island` | What is playing (with transport and progress), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
 | System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
@@ -207,12 +207,20 @@ hypr-osd-bar hide       # take it away until the next rebuild
 hypr-osd-bar toggle     # show or hide
 hypr-osd-bar refresh    # re-read every pill now
 hypr-osd-bar status     # print what every pill currently reads, no bar
+hypr-osd-bar minimise   # put the focused window away, into the tray
+hypr-osd-bar restore    # bring the last put-away window back
+hypr-osd-bar minimised  # list what is put away, no bar
 ```
 
-It has no keybinding, because a bar is not something you call for. `status` is
-the one to remember: it prints the workspace row, the focused window's title,
-what is playing, the sink's level, the battery, and the wireless link as the bar
-sees them — which answers "why does the volume pill say 0 %" without guessing.
+It has one keybinding, and it only has that one because the bar is where the
+tray is: `SUPER + H` puts the focused window away and `SUPER + SHIFT + H` brings
+the last one back (see the tray below). Everything else about it is a verb,
+because a bar is not something you call for. `status` is the one to remember: it
+prints the workspace row, the focused window's title, what is playing, what is
+put away, the sink's level, the battery, and the wireless link as the bar sees
+them — which answers "why does the volume pill say 0 %" without guessing. `restore`
+takes an optional argument in place of the last one: the number the icon has in
+`minimised` (counting from 1), or the window's `0x…` address.
 
 The bar's left half is the workspaces (click to focus one, wheel to walk to the
 next or previous) and the focused window's title. Right half: the media pill
@@ -225,6 +233,24 @@ temperature 75/90 °C) — then the volume pill (click mutes, wheel steps the vo
 *through the volume element*, right-click opens `pavucontrol`, middle-click mutes
 the microphone), the battery, the tray, and the power button (which opens the
 session card). Every pill has a tooltip with the whole story behind it.
+
+The tray at the right end carries two kinds of icon. The **application
+indicators** (Steam, the Nextcloud client, nm-applet …) come from the
+StatusNotifierItem protocol — the bar *is* the tray host, which is what makes
+them visible at all. To their left stand the windows you have **put away**:
+Hyprland has no minimise of its own, so `SUPER + H` moves the focused window onto
+a special workspace that is never shown and the bar draws it as one more small
+icon. A click brings that window back to the workspace it came from, `SUPER +
+SHIFT + H` brings back the one you put away last, and `hypr-osd-bar minimised`
+lists them all. The tooltip of an icon says which window it is, which application
+it belongs to, and where a click will put it.
+
+There is no state in between: the list of icons is read from Hyprland every time,
+so it survives the bar being restarted — a restart only loses *where* each window
+came from, which the tooltip admits (those windows come back to the workspace you
+are on). A put-away window is on `special:minimized`, one workspace name rather
+than a mechanism of the bar's own, which is why the switcher and the overview
+leave it out: they offer the windows you can actually switch to.
 
 **`hypr-osd-island` — the clock's popup**
 
@@ -413,7 +439,7 @@ element config: it is the palette, and it is [its own section](#look-and-feel).
 | `clock_format` | `%H:%M` | the clock's `strftime` format |
 | `battery`, `adapter` | `BAT1`, `ADP1` | the battery to watch, and the mains supply that says whether it is charging |
 | `network_interface` | `wlan0` | the wireless interface to read through `iw` |
-| `tray_icon_size` | `18` | tray icon size in pixels |
+| `tray_icon_size` | `18` | tray icon size in pixels (the application indicators and the put-away windows alike) |
 | `tick_ms` | `1000` | the heartbeat; the clock's resolution |
 | `volume_every_ms`, `network_every_ms`, `battery_every_ms` | `1000`, `5000`, `30000` | how often the slow pills are re-read |
 | `stats_every_ms` | `1000` | how often CPU, memory and temperature are read |
@@ -659,6 +685,30 @@ session lock signal slots in without touching them.
   bursts and are coalesced into one read, and the read is a GIO stream on the
   main loop, so nothing blocks. The timer that remains is a safety net for a
   socket that quietly died.
+- **There is no minimise; there is a hidden workspace.** `SUPER + H` moves the
+  focused window onto `special:minimized`, a special workspace that is never
+  toggled onto a screen — the mechanism a scratchpad uses, pointed at the tray
+  instead. Three details are what make it behave like a minimised window. The
+  compositor goes on reporting the window as *mapped*, so the workspace name (not
+  `mapped`) is the only thing that tells it apart from a window you can switch to,
+  and `windows::list` filters it out on exactly that basis — which is why the
+  switcher and the overview never offer a put-away window. Moving a window *onto*
+  a special workspace makes Hyprland **show** it (that is what the gesture is for
+  on a scratchpad: put it there and look at it) and keeps the moved window
+  focused while it is shown, so a minimise is two dispatches and not one — the
+  move, and hiding the workspace again, which is what actually takes the window
+  off the screen. `specialWorkspace` on the monitor is the field that says
+  whether it is on screen; `activeWorkspace` says nothing about it. And the
+  workspace the window came from is remembered by the bar, in memory, because the
+  compositor keeps the window and not its history.
+- **A put-away window can still be the focused one.** On a workspace whose only
+  window is the one being put away, hiding it leaves the compositor with nothing
+  to hand the focus to, and it goes on considering the hidden window the focused
+  one. That is why the bar's title refuses to name a window that is put away:
+  nothing on screen may be named there. The state is a dead end for the user's
+  typing and nowhere else — the next click, workspace switch or tray icon leaves
+  it — and the alternative (focusing another monitor's workspace to clear it)
+  would move their attention somewhere they did not ask for.
 - **The tray is a D-Bus service the bar owns.** `hypr-osd-bar` claims
   `org.kde.StatusNotifierWatcher`, because without a host application indicators
   are simply invisible, and then renders each registered item: its own pixmap when
@@ -818,6 +868,8 @@ Debugging:
 | No bar on one of the monitors | With `output` set in `bar.conf`, only that connector gets one — clear it to put a bar on every screen. Otherwise `hypr-osd-bar status` prints the screens it is on (and which of them carries the tray). A monitor GDK does not know about — a nested session, a headless output — cannot have a surface. |
 | A tray icon is missing | The indicator registered with the watcher before the bar owned it — indicators register once, when they start, so restart the application (or log out and in). `busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems` lists what the bar knows about. |
 | A right click on a tray icon does nothing | The item has no `ContextMenu` of its own, and the bar does not draw `dbusmenu` menus — see [How it works](#how-it-works). The left click is the one that works everywhere. |
+| A put-away window is missing from `ALT + TAB` | That is what putting it away means: the switcher and the overview offer the windows you can switch to, and the tray is where a put-away window is offered instead. `hypr-osd-bar minimised` names them. |
+| A put-away window came back to the wrong workspace | It is on the workspace you were on, because the bar was restarted or replaced in between and the workspace it came from went with the old process: the icon's tooltip said so before you clicked it. Click it on the workspace it belongs on, or move it there. |
 | The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Is `island.conf`'s `hot_width` wide enough for the clock pill, and do `bar_height`/`bar_margin_top` match `bar.conf`? `hypr-osd-island status` prints the geometry it works with. |
 | The island opens or closes too eagerly | `open_delay_ms` and `close_delay_ms` in `island.conf`: the first is how long the pointer has to rest on the clock, the second how long it may be away before the panel closes. |
 | The clock pill stays lit with no panel behind it | A stale “panel is open” flag — the island writes it on show/hide, so a `kill` leaves it behind. It is cleared at start-up: `pkill -f hypr-osd-island; hypr-osd-island &`. |

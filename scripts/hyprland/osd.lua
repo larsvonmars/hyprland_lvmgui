@@ -78,14 +78,17 @@ end
 -- no helper scripts, and nothing to configure here beyond starting it. Set
 -- `output` in ~/.config/hypr-osd/bar.conf to put it on one screen only.
 --
--- It deliberately has no keybinding. Its verbs exist for scripting and for
--- testing, and reach the running bar over D-Bus:
+-- It has no keybinding of its own, with one deliberate exception: the tray's,
+-- which is the only action here that needs the bar's own memory (see the tray
+-- section below). Its verbs exist for scripting and for testing, and reach the
+-- running bar over D-Bus:
 --
 --     hypr-osd-bar hide | show | toggle | refresh | status
+--     hypr-osd-bar minimise | restore [n|0x…] | minimised
 --
 -- `status` prints what every pill currently reads and which screens the bars are
 -- on, which is the fastest way to answer "why does the volume pill say 0 %" and
--- "why is there no bar on that monitor".
+-- "why is there no bar on that monitor". The last three are the tray, below.
 --
 -- Two of its pills are *handles* for the popups: the clock unfolds the island
 -- (hover), and the status pill unfolds the system popup. Both panels decide for
@@ -102,7 +105,50 @@ end
 --
 -- Hovering the clock unfolds the island popup, and hovering the status pill
 -- unfolds the system popup (see the popups section below). Nothing else about
--- the bar needs a key or a rule.
+-- the bar needs a key or a rule - the tray's key is the only exception, and it
+-- is the next section.
+
+
+----------------------------------------
+---- THE TRAY (WINDOWS PUT AWAY) -------
+----------------------------------------
+
+-- Hyprland has no minimise. What it has is special workspaces, so that is what
+-- the bar uses: SUPER + H moves the focused window onto `special:minimized`,
+-- which is never toggled onto a screen. The window is out of the way, still
+-- running, and the bar draws it as an icon in its tray, at the left of the
+-- application indicators - a taskbar's own gesture, in the place this desktop
+-- keeps small pictures that are worth a click.
+--
+-- A click on that icon brings the window back where it was, and SUPER + SHIFT + H
+-- brings back the one put away last, which is the keyboard way to undo a press of
+-- SUPER + H. Both reach the bar as verbs, because the *bar* is what keeps the
+-- step: Hyprland's special workspace holds the window, not where it came from, so
+-- the workspace it goes back to is remembered in the bar's own memory (and, since
+-- a bar that is restarted has forgotten it, the icon says so on hover and the
+-- window comes back to the workspace you are on).
+--
+--     hypr-osd-bar minimise        put the focused window away
+--     hypr-osd-bar restore [n]     bring one back - 1 is the leftmost icon
+--     hypr-osd-bar restore 0x…     ... or name the window by its address
+--     hypr-osd-bar minimised       list what is put away, one per line
+--
+-- `hypr-osd-bar status` prints the same list among the pills. The workspace name
+-- is not configurable, and only the bar knows it: `special:minimized` is what
+-- keeps a put-away window out of the switcher and the overview, which offer the
+-- windows you can actually switch to.
+--
+-- A window that already lives on a special workspace (the scratchpad, SUPER + S)
+-- is refused and left alone: it is put away in the sense that matters, and moving
+-- it to ours would trade one hidden workspace for another - including the way
+-- back, which would lead to a workspace that is just as hidden.
+hl.bind("SUPER + H", hl.dsp.exec_cmd(bar .. " minimise"), {
+    description = "Tray: put this window away",
+})
+
+hl.bind("SUPER + SHIFT + H", hl.dsp.exec_cmd(bar .. " restore"), {
+    description = "Tray: bring the last window back",
+})
 
 
 ---------------------

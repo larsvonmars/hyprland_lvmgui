@@ -9,12 +9,33 @@
 //! order, because 0 is the window you are in, 1 the one you were in before it,
 //! and so on.
 //!
+//! One distinction is worth more than it looks: a window the bar has minimised
+//! sits on a hidden special workspace ([`PUT_AWAY`]) while Hyprland goes on
+//! reporting it as mapped, so it is in this list and still cannot be switched
+//! to. [`split`] is what tells the two apart, and [`list`] hands out the half
+//! that can be switched to.
+//!
 //! Everything here is what Hyprland said, in Hyprland's terms: this module sorts
 //! and filters, it does not decide what makes a good card. That is the element's
 //! business.
 
 use crate::hyprctl;
 use serde_json::Value;
+
+/// The special workspace a window is put away on: what the bar's minimise does
+/// to it.
+///
+/// Hyprland has no minimise of its own, so this is the mechanism a scratchpad
+/// uses - a special workspace that is never toggled onto a screen, which the
+/// bar draws as icons in its tray instead. It is named here rather than in the
+/// bar because two halves of the collection have to agree about it: the bar
+/// moves windows in and out, and the switcher and the overview must *not* offer
+/// a window nobody can see ([`list`] leaves them out).
+///
+/// It is spelled with an American `z` because it is the name of a workspace that
+/// already exists in running sessions; the prose around it is British, as
+/// everywhere else in this collection.
+pub const PUT_AWAY: &str = "special:minimized";
 
 /// One window, as much as a card needs to know about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +61,13 @@ pub struct Window {
 }
 
 impl Window {
+    /// Whether this window is put away, i.e. sitting on [`PUT_AWAY`] because
+    /// somebody minimised it. Hyprland still reports such a window as *mapped* -
+    /// it is hidden, not gone - so this cannot be read off `mapped`.
+    pub fn is_put_away(&self) -> bool {
+        self.workspace == PUT_AWAY
+    }
+
     /// What a tile is labelled with: the title, or the class when there is no
     /// title yet - a window that is still starting up has none, and a tile with
     /// no label at all reads as a broken card.
@@ -83,10 +111,13 @@ pub struct Workspace {
     pub windows: i32,
 }
 
-/// Every mapped window, most recently used first.
+/// Every window on the desktop that can be switched to, most recently used
+/// first.
 ///
 /// Windows on other workspaces are included on purpose: switching to one is
-/// supposed to bring it up, workspace and all.
+/// supposed to bring it up, workspace and all. Windows that are *put away* (see
+/// [`PUT_AWAY`]) are not: they are hidden, focusing one would leave it exactly as
+/// hidden as it was, and the bar's tray is where they are offered instead.
 pub fn list() -> Vec<Window> {
     let Some(clients) = hyprctl::json(&["clients"]) else {
         eprintln!("hypr-osd: hyprctl clients did not answer");
@@ -96,7 +127,7 @@ pub fn list() -> Vec<Window> {
         eprintln!("hypr-osd: hyprctl clients answered something unexpected");
         return Vec::new();
     };
-    sorted(clients)
+    split(clients).switchable
 }
 
 /// Every workspace that exists, by number.
@@ -119,19 +150,56 @@ pub fn focused_workspace() -> Option<String> {
     workspace.get("name")?.as_str().map(str::to_owned)
 }
 
-/// The clients in `clients`, most recently used first.
+/// The windows in `clients`, split into the ones you can switch to and the ones
+/// that are put away (see [`PUT_AWAY`]). Both halves are most recently used
+/// first.
 ///
 /// Split out from [`list`] because this is the part with decisions in it, and a
-/// decision is worth a test that does not need a compositor.
-fn sorted(clients: &[Value]) -> Vec<Window> {
+/// decision is worth a test that does not need a compositor. It takes the
+/// clients rather than reading them for a second reason: the bar reads this list
+/// over Hyprland's socket (a key press must not pay for a process), so the
+/// reading and the deciding have to be separable.
+pub fn split(clients: &[Value]) -> Split {
     let mut windows: Vec<(i64, Window)> = clients.iter().filter_map(window_of).collect();
     // `focusHistoryID` is the whole point of using clients over anything else:
     // the window you used last comes first, whatever order the array was in.
     windows.sort_by_key(|(history, _)| *history);
-    windows.into_iter().map(|(_, window)| window).collect()
+
+    let mut split = Split {
+        switchable: Vec::new(),
+        put_away: Vec::new(),
+    };
+    for (_, window) in windows {
+        if window.is_put_away() {
+            split.put_away.push(window);
+        } else {
+            split.switchable.push(window);
+        }
+    }
+    split
 }
 
-fn window_of(client: &Value) -> Option<(i64, Window)> {
+/// What [`split`] answers with.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Split {
+    /// The windows on the desktop, most recently used first.
+    pub switchable: Vec<Window>,
+    /// The windows that are put away, most recently used first - what the bar's
+    /// tray draws as its own icons.
+    pub put_away: Vec<Window>,
+}
+
+/// One window, in the shape Hyprland writes one.
+///
+/// `clients` is a list of these, and `activewindow` answers with a single one -
+/// which is why this is public rather than buried in [`split`]: an element that
+/// only wants the window you are in (the bar, when a key asks it to put that
+/// window away) reads that one object and parses it here.
+///
+/// `None` for anything that is not a window to act on: the empty object Hyprland
+/// answers with when nothing has the focus, and a window it does not consider on
+/// screen.
+pub fn parse(client: &Value) -> Option<Window> {
     // A window that is not on screen is not something to switch to. Windows on
     // other *workspaces* are mapped and stay in the list; a minimised, still
     // starting or otherwise absent one is not.
@@ -142,26 +210,28 @@ fn window_of(client: &Value) -> Option<(i64, Window)> {
     {
         return None;
     }
+    Some(Window {
+        address: text(client, "address"),
+        class: text(client, "class"),
+        title: text(client, "title"),
+        workspace: client
+            .get("workspace")
+            .map(|workspace| text(workspace, "name"))
+            .unwrap_or_default(),
+        stable_id: text(client, "stableId"),
+        size: size(client),
+    })
+}
+
+fn window_of(client: &Value) -> Option<(i64, Window)> {
+    let window = parse(client)?;
     // A window that has never been focused has no history id; it sorts last,
     // which is where a window you have not used yet belongs.
     let history = client
         .get("focusHistoryID")
         .and_then(Value::as_i64)
         .unwrap_or(i64::MAX);
-    Some((
-        history,
-        Window {
-            address: text(client, "address"),
-            class: text(client, "class"),
-            title: text(client, "title"),
-            workspace: client
-                .get("workspace")
-                .map(|workspace| text(workspace, "name"))
-                .unwrap_or_default(),
-            stable_id: text(client, "stableId"),
-            size: size(client),
-        },
-    ))
+    Some((history, window))
 }
 
 /// `size` arrives as `[width, height]`; anything else is no size at all.
@@ -226,13 +296,21 @@ mod tests {
         json
     }
 
+    /// A window as Hyprland writes one that is on a special workspace: the
+    /// workspace is named, and its id is negative.
+    fn put_away_client(class: &str, title: &str, history: i64) -> Value {
+        let mut json = client(class, title, Some(history), true);
+        json["workspace"] = serde_json::json!({ "id": -98, "name": PUT_AWAY });
+        json
+    }
+
     #[test]
     fn the_window_used_last_comes_first() {
         let clients = [
             client("code-oss", "art.rs", Some(1), true),
             client("firefox", "docs", Some(0), true),
         ];
-        let windows = sorted(&clients);
+        let windows = split(&clients).switchable;
         assert_eq!(
             windows.iter().map(|w| w.class.as_str()).collect::<Vec<_>>(),
             ["firefox", "code-oss"]
@@ -242,13 +320,13 @@ mod tests {
     #[test]
     fn a_window_that_is_not_on_screen_is_not_offered() {
         let clients = [client("steam", "loading", Some(0), false)];
-        assert!(sorted(&clients).is_empty());
+        assert!(split(&clients).switchable.is_empty());
     }
 
     #[test]
     fn a_window_without_a_title_is_labelled_by_its_class() {
         let clients = [client("kitty", "", Some(0), true)];
-        assert_eq!(sorted(&clients)[0].label(), "kitty");
+        assert_eq!(split(&clients).switchable[0].label(), "kitty");
     }
 
     #[test]
@@ -257,13 +335,42 @@ mod tests {
             client("mystery", "never used", None, true),
             client("firefox", "docs", Some(4), true),
         ];
-        assert_eq!(sorted(&clients)[0].class, "firefox");
+        assert_eq!(split(&clients).switchable[0].class, "firefox");
     }
 
     #[test]
     fn the_workspace_travels_with_the_window() {
         let clients = [client("firefox", "docs", Some(0), true)];
-        assert_eq!(sorted(&clients)[0].workspace, "3");
+        assert_eq!(split(&clients).switchable[0].workspace, "3");
+    }
+
+    #[test]
+    fn a_put_away_window_is_offered_by_neither_half_twice() {
+        let clients = [
+            client("firefox", "docs", Some(0), true),
+            put_away_client("kitty", "README.md", 1),
+        ];
+        let split = split(&clients);
+        // The hidden window is not something to switch to...
+        assert_eq!(
+            split
+                .switchable
+                .iter()
+                .map(|w| w.class.as_str())
+                .collect::<Vec<_>>(),
+            ["firefox"]
+        );
+        // ...and it is still in the list, for the tray that offers it back.
+        assert_eq!(
+            split
+                .put_away
+                .iter()
+                .map(|w| w.class.as_str())
+                .collect::<Vec<_>>(),
+            ["kitty"]
+        );
+        assert!(split.put_away[0].is_put_away());
+        assert!(!split.switchable[0].is_put_away());
     }
 
     #[test]
@@ -272,7 +379,7 @@ mod tests {
         json["size"] = serde_json::json!([1324, 820]);
         json["stableId"] = serde_json::json!("1800000b");
 
-        let window = &sorted(&[json])[0];
+        let window = &split(&[json]).switchable[0];
         assert_eq!(window.size, (1324, 820));
         assert_eq!(window.stable_id, "1800000b");
         // The shape a tile is drawn in: the window's own, not a guess.
@@ -281,7 +388,7 @@ mod tests {
 
     #[test]
     fn a_window_hyprland_gave_no_size_has_no_shape() {
-        let window = &sorted(&[client("steam", "loading", Some(0), true)])[0];
+        let window = &split(&[client("steam", "loading", Some(0), true)]).switchable[0];
         assert_eq!(window.size, (0, 0));
         assert_eq!(window.aspect(), None);
         assert_eq!(window.stable_id, "");
