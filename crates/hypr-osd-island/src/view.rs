@@ -4,7 +4,7 @@
 //!
 //! ```text
 //!  ┌───────────── handle ─────────────┐
-//!  │ 16:04                  [now playing] [3 unread] │
+//!  │ 16:04                    [playing] [hidden]  │
 //!  │ Friday, 25 September   ─────────────────────────  │
 //!  │ ┌─ now playing ─────┐ ┌─ calendar ─────────────┐ │
 //!  │ │ title             │ │ ‹ September 2026 ›     │ │
@@ -12,18 +12,29 @@
 //!  │ │ ▁▁▁▁▁▁ 1:15 4:02  │ │ …                      │ │
 //!  │ │ [‹] [▶] [›]       │ │                        │ │
 //!  │ └───────────────────┘ └────────────────────────┘ │
-//!  │ ┌─ notifications ───┐                            │
-//!  │ │ 3 unread          │                            │
-//!  │ │ [dnd] [open]      │                            │
-//!  │ │ [hide] [clear]    │                            │
-//!  │ └───────────────────┘                            │
+//!  │ ┌─ notifications ──────────────────┐            │
+//!  │ │ 3 unread notifications           │            │
+//!  │ │ ▣ Firefox                     now│            │
+//!  │ │   Test summary here              │            │
+//!  │ │ ▣ Signal                   12 min│            │
+//!  │ │   Another summary                │            │
+//!  │ │ +1 more                          │            │
+//!  │ │ [DND off] [Open]                 │            │
+//!  │ │ [Hide] [Clear]                   │            │
+//!  │ └──────────────────────────────────┘            │
 //!  └──────────────────────────────────────────────────┘
 //! ```
 //!
 //! The view paints what it is handed and runs the commands its buttons mean. It
 //! does not read anything itself: `main` polls MPRIS while the panel is up, the
-//! notification feed arrives on its own, and the clock ticks - so there is one
-//! place that decides *when* to read, and one place that decides how to draw.
+//! notification feed arrives on its own - both the state from `swaync` and the
+//! rows off the bus (see `notify`) - and the clock ticks, so there is one place
+//! that decides *when* to read, and one place that decides how to draw.
+//!
+//! One detail follows from the hover design: the panel's width is what its hot
+//! zone is measured against, so a widget that wants more room than it was given
+//! is a bug and not a layout surprise. Every label a notification can fill in is
+//! therefore capped with [`text::cap_width`].
 //!
 //! The card itself - the fill, the border, the shadow, the 16px radius - is the
 //! shell's (`box.card` in `base.css`), because this panel is a card like every
@@ -31,14 +42,16 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gtk::glib;
 use gtk::prelude::*;
 
 use hypr_osd_core::mpris::Playback;
+use hypr_osd_core::{icons, text};
 
 use crate::calendar::Month;
-use crate::notify::{self, Notifications};
+use crate::notify::{self, History, Item, Notifications};
 use crate::Settings;
 
 const CLOCK: &str = "\u{f017}";
@@ -54,6 +67,17 @@ const TRASH: &str = "\u{f1f8}";
 const CHEVRON_LEFT: &str = "\u{f104}";
 const CHEVRON_RIGHT: &str = "\u{f105}";
 const MUSIC: &str = "\u{f001}";
+
+/// The numbers a notification row is measured against. The first two are the
+/// horizontal padding of `box.tile` and `box.notif-row` in `island.css`, and the
+/// third is the icon badge plus the gap beside it: a row's text column is what is
+/// left of the panel's left column once they are taken off.
+const TILE_PAD_X: i32 = 10;
+const ROW_PAD_X: i32 = 6;
+const ROW_ART: i32 = 24 + 8;
+/// The width of the age at the end of a row's first line - `59 min` is the
+/// longest it ever gets.
+const ROW_AGE: i32 = 38;
 
 /// The weekday headings, Monday first - the same order [`Month::weeks`] lays the
 /// grid out in.
@@ -76,6 +100,14 @@ pub struct IslandView {
     progress_row: gtk::Box,
     transport: gtk::Box,
     notif_count: gtk::Label,
+    /// Where the notification rows are built.
+    notif_rows: gtk::Box,
+    /// The age label of every row, with the notification it belongs to: the one
+    /// part of a row that has to change while nothing else does.
+    ages: RefCell<Vec<(gtk::Label, Item)>>,
+    /// How many rows the tile draws, and how wide the column they sit in is.
+    rows: usize,
+    column_width: i32,
     notif_actions: gtk::Box,
     dnd: gtk::Button,
     hide: gtk::Button,
@@ -162,6 +194,11 @@ impl IslandView {
         notif_count.add_css_class("notif-count");
         notif_count.set_xalign(0.0);
 
+        // The rows. Nothing is put in here at build time: the first line of the
+        // feed fills them in, and until then the count above says it all.
+        let notif_rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        notif_rows.add_css_class("notif-rows");
+
         let dnd = chip_button(BELL, "DND off", {
             let client = settings.notifications_command.clone();
             move || notify_command(&client, notify::Command::ToggleDnd)
@@ -194,6 +231,7 @@ impl IslandView {
 
         let notifications = tile("notifications", BELL);
         notifications.append(&notif_count);
+        notifications.append(&notif_rows);
         notifications.append(&notif_actions);
 
         let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -263,6 +301,10 @@ impl IslandView {
             progress_row,
             transport,
             notif_count,
+            notif_rows,
+            ages: RefCell::new(Vec::new()),
+            rows: settings.notification_rows,
+            column_width: settings.left_width,
             notif_actions,
             dnd,
             hide,
@@ -330,14 +372,18 @@ impl IslandView {
             .set_label(if playback.playing { PAUSE } else { PLAY });
     }
 
-    /// The notification tile, and the two buttons that only make sense when there
-    /// is something to act on.
-    pub fn render_notifications(&self, notifications: &Notifications) {
-        self.notif_count.set_text(&match notifications.count {
+    /// The notification tile: the count, the rows, and the buttons that only make
+    /// sense when there is something to act on.
+    pub fn render_notifications(&self, notifications: &Notifications, history: &History) {
+        let count = notifications.count;
+        self.notif_count.set_text(&match count {
             0 => "All caught up".to_string(),
             1 => "1 unread notification".to_string(),
             count => format!("{count} unread notifications"),
         });
+        // Nothing waiting is good news, and good news need not be the brightest
+        // thing in the tile.
+        set_class(&self.notif_count, "quiet", count == 0);
 
         label_of(&self.dnd).set_text(if notifications.dnd {
             "DND on"
@@ -348,10 +394,75 @@ impl IslandView {
         set_class(&self.dnd, "on", notifications.dnd);
 
         // Hiding or clearing nothing is not a thing to offer.
-        let has_notifications = notifications.count > 0;
+        let has_notifications = count > 0;
         self.hide.set_sensitive(has_notifications);
         self.clear.set_sensitive(has_notifications);
         self.notif_actions.set_visible(true);
+
+        self.render_rows(history, notifications);
+    }
+
+    /// The rows: the newest few notifications the bus carried, made again for a
+    /// new list.
+    ///
+    /// Made again rather than reconciled, because the list changes when a
+    /// notification arrives - a handful of times an hour - and working out which
+    /// row moved would be more code than building them over. The ages are the
+    /// part that changes *without* a new list, and they are kept in `ages` for
+    /// [`IslandView::render_ages`] to touch while the panel is up.
+    fn render_rows(&self, history: &History, notifications: &Notifications) {
+        while let Some(child) = self.notif_rows.first_child() {
+            self.notif_rows.remove(&child);
+        }
+        self.ages.borrow_mut().clear();
+
+        let now = Instant::now();
+        let shown: Vec<&Item> = history.items().iter().take(self.rows).collect();
+        for (position, item) in shown.iter().enumerate() {
+            if position > 0 {
+                // A hairline between two notifications rather than a box around
+                // each: the tile is a surface already, and a box inside a box
+                // inside a box is where a panel starts to look noisy.
+                let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+                separator.add_css_class("notif-sep");
+                self.notif_rows.append(&separator);
+            }
+            let (row, age) = notification_row(item, self.text_width(), now);
+            self.notif_rows.append(&row);
+            self.ages.borrow_mut().push((age, (*item).clone()));
+        }
+
+        // What the tile cannot show, admitted rather than hidden: the count is the
+        // daemon's, and the rows are the ones that arrived while this process was
+        // watching. With no row on screen at all - a panel that has just started,
+        // or a bus that refuses to be monitored - there is nothing to count
+        // against, so the line above stands alone.
+        let hidden = usize::try_from(notifications.count)
+            .unwrap_or(0)
+            .saturating_sub(shown.len());
+        if hidden > 0 && !shown.is_empty() {
+            let more = gtk::Label::new(Some(&format!("+{hidden} more")));
+            more.add_css_class("notif-more");
+            more.set_xalign(0.0);
+            self.notif_rows.append(&more);
+        }
+    }
+
+    /// Keep the ages honest: a row that says `5 min` has to become `6 min` with
+    /// nothing having arrived in between. Called on the heartbeat, and only while
+    /// the panel is up.
+    pub fn render_ages(&self) {
+        let now = Instant::now();
+        for (label, item) in self.ages.borrow().iter() {
+            label.set_text(&item.age(now));
+        }
+    }
+
+    /// How wide a row's text column is: the panel's left column, less the padding
+    /// the tile and the row put around it, less the icon badge and the gap beside
+    /// it.
+    fn text_width(&self) -> i32 {
+        (self.column_width - 2 * TILE_PAD_X - 2 * ROW_PAD_X - ROW_ART).max(40)
     }
 
     /// The state chips in the header: what is playing, what is waiting, and
@@ -459,6 +570,93 @@ fn tile(title: &str, glyph: &str) -> gtk::Box {
     tile.add_css_class("tile");
     tile.append(&line);
     tile
+}
+
+/// One notification row: the application's badge, what it said, and how long ago.
+///
+/// The age label comes back with the row because it is the one part of a row that
+/// changes while nothing else does - see [`IslandView::render_ages`].
+fn notification_row(item: &Item, text_width: i32, now: Instant) -> (gtk::Box, gtk::Label) {
+    // The badge the icon sits on. It is drawn whether or not there is a picture,
+    // so every row has the same shape: the icon theme's answer decides what sits
+    // inside it, not the box.
+    const ART: i32 = 24;
+    let art = gtk::Stack::new();
+    art.add_css_class("notif-art");
+    art.set_size_request(ART, ART);
+    art.set_halign(gtk::Align::Start);
+    art.set_valign(gtk::Align::Center);
+    let image = gtk::Image::new();
+    image.set_pixel_size(ART - 8);
+    let letter = gtk::Label::new(Some(&text::initial(&item.app)));
+    letter.add_css_class("notif-letter");
+    art.add_named(&image, Some("icon"));
+    art.add_named(&letter, Some("letter"));
+    art.set_visible_child_name("letter");
+    // The hint is an icon name or the path of a file the sender attached, and
+    // `by_name` answers both. With no hint at all the application's own name is
+    // the best guess - and that one goes through the desktop entries, because a
+    // name is not an icon name until it has been looked up (`Telegram` is the
+    // application, `telegram` the icon). An application the theme has nothing for
+    // stands on its first letter, which still says which one it is.
+    let paintable = if item.icon.is_empty() {
+        icons::paintable(&item.app, ART - 8)
+    } else {
+        icons::by_name(&item.icon, ART - 8)
+    };
+    if let Some(paintable) = paintable {
+        image.set_paintable(Some(&paintable));
+        art.set_visible_child_name("icon");
+    }
+
+    // The application and the age on one line, with the age pushed to the end.
+    // A sender that names no application gets its summary up there instead - and
+    // then there is nothing left for a second line.
+    let named = !item.app.is_empty();
+    let app = gtk::Label::new(Some(if named { &item.app } else { &item.title }));
+    app.add_css_class("notif-app");
+    app.set_xalign(0.0);
+    app.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    app.set_hexpand(true);
+    let age = gtk::Label::new(Some(&item.age(now)));
+    age.add_css_class("notif-age");
+    age.set_xalign(1.0);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    head.append(&app);
+    head.append(&age);
+
+    let title = gtk::Label::new(Some(&item.title));
+    title.add_css_class("notif-text");
+    title.set_xalign(0.0);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+    let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    words.set_hexpand(true);
+    words.append(&head);
+    if named {
+        words.append(&title);
+    }
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.add_css_class("notif-row");
+    if item.urgency >= 2 {
+        // What swaync holds on screen until it is dealt with, so it is worth
+        // noticing at a glance in the list as well.
+        row.add_css_class("critical");
+    }
+    // What the sender wrote, in full: the row has room for one line of it.
+    row.set_tooltip_text(Some(&item.tooltip()));
+    row.append(&art);
+    row.append(&words);
+
+    // Capped, both of them: an ellipsised label still asks for its whole text when
+    // it is measured, and a row that asked for too much would widen the column -
+    // and with it the card, whose width is what the panel's hover zone is
+    // measured against.
+    text::cap_width(&app, text_width - ROW_AGE - 6);
+    text::cap_width(&title, text_width);
+
+    (row, age)
 }
 
 /// A button with an icon and a word, the way every control in this panel is

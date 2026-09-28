@@ -32,6 +32,14 @@ pub fn stats_panel() -> PathBuf {
     runtime_dir().join("hypr-osd-stats-panel")
 }
 
+/// The flag the applications panel keeps: `1` while it is on screen. The bar's
+/// left-end button reads it to light up, which is the only thing that tells the
+/// two halves apart - the panel is a process of its own (see `state`'s module
+/// comment), and the button is what asked for it.
+pub fn apps_panel() -> PathBuf {
+    runtime_dir().join("hypr-osd-apps-panel")
+}
+
 /// The directory session state belongs in, falling back to `/tmp` the way every
 /// other Hyprland client does when `$XDG_RUNTIME_DIR` is unset.
 fn runtime_dir() -> PathBuf {

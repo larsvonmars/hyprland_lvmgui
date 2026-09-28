@@ -4,7 +4,8 @@
 //! window's application icon and title. Tab walks it, Enter or releasing Alt
 //! switches to the selected window, Escape walks away.
 //!
-//! This is one of the two elements that take the keyboard. An OSD that eats a
+//! This is one of the three elements that take the keyboard (the others are the
+//! workspace overview and the launcher). An OSD that eats a
 //! keystroke is a bug - the volume card must not stop you typing - but a
 //! switcher is *driven* by the keys you are holding: it has to see the Alt
 //! release that ends the switch, and the only way to see it is to own the

@@ -1,0 +1,186 @@
+/* The applications panel's own rules: a filter, a sidebar of drawers, and a grid
+ * of tiles.
+ *
+ * Everything shared - the palette read from ~/.config/hypr-osd/theme.css, the
+ * typography, the card recipe - comes from base.css. What is here is only what
+ * the panel has that no other element does.
+ *
+ * The card is the collection's usual `box.card`; the element's content (this
+ * file's `box.apps-panel`) is inset by the shell's `CARD_PAD_*`, so nothing here
+ * adds padding to the card itself.
+ */
+
+box.apps-panel {
+    min-width: 0;
+}
+
+/* ---- the filter: the same capsule the launcher wears --------------------- */
+box.search-row {
+    background-color: @surface;
+    border: 1px solid @border_soft;
+    border-radius: 12px;
+    padding: 9px 12px;
+}
+
+/* A GtkEntry arrives from the theme wearing a background, its own border, a
+ * minimum height and a focus ring drawn on its `text` node - which is why the
+ * wildcard is here: it is the one selector that cannot miss the node. */
+entry.search,
+entry.search * {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+/* `* { font-size: 13px }` in base.css beats inheritance, so the size has to be
+ * set on the node that draws the characters rather than on the entry. */
+entry.search text {
+    font-size: 15px;
+    caret-color: @accent;
+}
+
+entry.search placeholder {
+    color: @fg_faint;
+}
+
+entry.search selection {
+    background-color: @accent_tint;
+    color: @fg;
+}
+
+label.search-glyph {
+    font-size: 14px;
+    color: @fg_dim;
+}
+
+/* ---- the sidebar: the drawers -------------------------------------------- */
+box.sidebar {
+    background-color: @surface;
+    border-radius: 12px;
+    padding: 6px;
+}
+
+/* A button arrives from the theme wearing a background, a border, its own
+ * padding and a shadow. A drawer is a quiet row until it is the one shown. */
+button.drawer {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 6px 8px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg_dim;
+}
+
+button.drawer:hover {
+    background-color: @surface_h;
+    color: @fg;
+}
+
+button.drawer.selected {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+label.drawer-name {
+    font-size: 12px;
+}
+
+label.drawer-count {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+button.drawer.selected label.drawer-count {
+    color: @accent;
+}
+
+/* ---- the grid: the applications ----------------------------------------- */
+scrolledwindow.tiles,
+scrolledwindow.tiles viewport {
+    background: none;
+    border: none;
+}
+
+/* The theme's scrollbar is a heavy bar for a document; this pane is a short list
+ * beside a sidebar, and a thin quiet capsule reads as one.
+ *
+ * Only the *colours* are overridden. The theme's slider is drawn with an 8px
+ * transparent border and a matching negative margin, which is how it gets a fat
+ * hit area around a thin bar - so taking the border away (the obvious way to make
+ * it thin) leaves a minimum width of minus eight, and GTK says so on stderr:
+ * "GtkGizmo (slider) reported min width -13, but sizes must be >= 0". */
+/* The theme draws the slider the way an overlay scrollbar needs to be drawn: an
+ * 8px bar with an 8px *transparent* border around it and a matching negative
+ * margin, so the hit area is much fatter than the mark. Only the colour is
+ * changed here - and the shape is restated beside it, because a colour-only
+ * override made GTK complain that the slider's minimum size came out negative
+ * ("GtkGizmo (slider) reported min width -13, but sizes must be >= 0"): the
+ * geometry the theme relies on has to travel with the colour. */
+scrolledwindow.tiles scrollbar slider {
+    background-color: @surface_h;
+    background-clip: padding-box;
+    border: 8px solid transparent;
+    border-radius: 99px;
+    min-width: 8px;
+    min-height: 8px;
+    margin: -8px;
+}
+
+scrolledwindow.tiles scrollbar slider:hover {
+    background-color: @accent_tint;
+}
+
+button.tile {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    box-shadow: none;
+    padding: 6px 4px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+button.tile:hover {
+    background-color: @surface;
+}
+
+/* The selection is the same accent the launcher puts on the row you are about to
+ * open, and the switcher on the tile it would switch to. */
+button.tile.selected {
+    background-color: @accent_tint;
+    border-color: @border;
+}
+
+label.tile-label {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+button.tile.selected label.tile-label {
+    color: @fg;
+}
+
+/* The stand-in for an application the icon theme has nothing for. */
+label.tile-glyph {
+    font-size: 26px;
+    color: @fg_faint;
+}
+
+/* The pin mark in a tile's corner: the accent2 green, so "this one is pinned"
+ * reads differently from "this one is selected". */
+label.pin {
+    font-size: 10px;
+    color: @accent2;
+    padding: 2px 4px 0 0;
+}

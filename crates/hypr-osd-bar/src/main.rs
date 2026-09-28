@@ -159,6 +159,11 @@ pub struct Settings {
     /// by the pointer, so one click would leave it up for good (see the pill's
     /// handlers in `view`).
     stats_command: String,
+    /// The applications panel the left-end button opens. Unlike the two popups
+    /// this one is asked to *toggle*: it is a panel you deliberately opened and
+    /// that keeps the keyboard while it is up, so the button is the way back out
+    /// of it (see `hypr-osd-apps`).
+    apps_command: String,
     /// What prints the pending-update list (`checkupdates`). Empty turns the
     /// update count off: the pill then shows only the three readings.
     updates_command: String,
@@ -204,6 +209,7 @@ impl Settings {
             session_command: config.string("session_command", "hypr-osd-session"),
             terminal_command: config.string("terminal_command", "kitty"),
             stats_command: config.string("stats_command", "hypr-osd-stats"),
+            apps_command: config.string("apps_command", "hypr-osd-apps"),
             updates_command: config.string("updates_command", "checkupdates"),
         }
     }
@@ -449,11 +455,12 @@ struct Paint {
     /// The clock, already formatted - `now` is the only code that knows the
     /// configured format.
     clock: String,
-    /// Whether each popup is unfolded, so its pill can wear the accent. Two
-    /// flags, because the two panels are two processes and either can be up on
-    /// its own.
+    /// Whether each panel is unfolded, so the pill that opened it can wear the
+    /// accent. Three flags, because the three panels are three processes and any
+    /// of them can be up on its own.
     island_open: bool,
     status_open: bool,
+    apps_open: bool,
     /// The track and whether it is playing. The two travel together, because a
     /// pill drawn from one without the other would be a lie.
     media: Option<Track>,
@@ -694,6 +701,7 @@ impl Bars {
         let clock = now(&settings.clock_format);
         let island_open = state::read(&state::island_panel());
         let status_open = state::read(&state::stats_panel());
+        let apps_open = state::read(&state::apps_panel());
         self.edit(|paint| {
             paint.hypr = snapshot;
             if let Some(minimised) = minimised {
@@ -702,6 +710,7 @@ impl Bars {
             paint.clock = clock;
             paint.island_open = island_open;
             paint.status_open = status_open;
+            paint.apps_open = apps_open;
             paint.volume = volume;
             paint.network = Some(network);
             paint.battery = battery;
@@ -758,10 +767,12 @@ impl Bars {
 
         self.edit(|paint| {
             paint.clock = now(&settings.clock_format);
-            // While a popup is unfolded, its pill wears the accent. The flags are
-            // files because each popup is a separate process (see `state`).
+            // While a popup is unfolded, the pill that opened it wears the accent.
+            // The flags are files because each panel is a separate process (see
+            // `state`).
             paint.island_open = state::read(&state::island_panel());
             paint.status_open = state::read(&state::stats_panel());
+            paint.apps_open = state::read(&state::apps_panel());
 
             if due(settings.volume_every) {
                 paint.volume = sources::volume();
@@ -992,6 +1003,7 @@ fn apply(view: &BarView, paint: &Paint, reading: Option<&Reading>, updates: i32)
     view.render_clock(&paint.clock);
     view.set_island_open(paint.island_open);
     view.set_status_open(paint.status_open);
+    view.set_apps_open(paint.apps_open);
     view.render_media(paint.media.as_ref(), paint.playing);
     view.set_volume(paint.volume);
     if let Some(network) = paint.network.clone() {

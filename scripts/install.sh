@@ -13,10 +13,14 @@
 #
 # On Hyprland it also wires up the compositor side (Wayland cannot be driven from
 # inside an app):
-#   - ~/.config/hypr/osd.lua            the bar, autostart, volume keys, layer rule
+#   - ~/.config/hypr/osd.lua            the bar, autostart, keys, layer rule
 #   - a `require("osd")` line in ~/.config/hypr/hyprland.lua
 #   - waybar is taken out of the autostart (see --keep-waybar), because the bar
 #     in this repository replaces it
+#   - the launcher takes over SUPER + SPACE from linux-launchpad, whose
+#     `require("launchpad")` line is commented out (see --keep-launchpad); the
+#     applications panel is the old launcher's *main window*, and is opened by
+#     the button at the bar's left end
 #   - ~/.config/hypr/hyprlock.conf      the lock screen, when hyprlock is there
 #   - ~/.config/hypr/hypridle.conf      idle timers, when hypridle is there
 #
@@ -25,6 +29,7 @@
 #   ./scripts/install.sh --no-hyprland      # skip the Hyprland integration
 #   ./scripts/install.sh --take-over-keys   # comment out the old wpctl keybinds
 #   ./scripts/install.sh --keep-waybar      # leave the old bar running alongside
+#   ./scripts/install.sh --keep-launchpad   # leave the old SUPER + SPACE binding
 #
 set -euo pipefail
 
@@ -32,17 +37,19 @@ cd "$(dirname "$0")/.."
 
 # The elements this script installs. Add an element here (and to osd.lua) when
 # the collection grows. Order is only the order they are reported in.
-ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview)
+ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview hypr-osd-launcher hypr-osd-apps)
 
 SKIP_HYPRLAND=0
 TAKE_OVER_KEYS=0
 KEEP_WAYBAR=0
+KEEP_LAUNCHPAD=0
 for arg in "$@"; do
   case "$arg" in
     --no-hyprland) SKIP_HYPRLAND=1 ;;
     --take-over-keys) TAKE_OVER_KEYS=1 ;;
     --keep-waybar) KEEP_WAYBAR=1 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    --keep-launchpad) KEEP_LAUNCHPAD=1 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -85,7 +92,7 @@ command -v wpctl >/dev/null || {
 # The bar reads the system directly, and reports what it cannot read by leaving a
 # pill out. These are the tools whose absence costs a pill or two, not the whole
 # bar - so they are reported, never required.
-for tool in iw playerctl swaync-client hyprctl; do
+for tool in iw playerctl swaync-client busctl hyprctl; do
   command -v "$tool" >/dev/null || {
     case "$tool" in
       iw) echo "WARNING: iw not found - the bar's network pill stays hidden." >&2 ;;
@@ -93,6 +100,10 @@ for tool in iw playerctl swaync-client hyprctl; do
                  echo "         has nothing to watch." >&2 ;;
       swaync-client) echo "WARNING: swaync-client not found - the island popup's notification" >&2
                      echo "         tile stays empty." >&2 ;;
+      busctl) echo "WARNING: busctl not found - the island cannot read what the" >&2
+              echo "         notifications say (it needs systemd 257 or later for" >&2
+              echo "         `busctl monitor --json=`), so the tile shows the count" >&2
+              echo "         and the buttons only." >&2 ;;
       hyprctl) echo "WARNING: hyprctl not found - the bar cannot see workspaces or windows." >&2 ;;
     esac
   }
@@ -230,6 +241,9 @@ stats_command = __BIN_DIR__/hypr-osd-stats
 # The clock's left click opens the notification centre, the right one toggles
 # do-not-disturb.
 notifications_command = swaync-client
+# The applications button at the bar's *left* end: a left click asks this element
+# to open the applications panel (the drawer of every installed application).
+apps_command = __BIN_DIR__/hypr-osd-apps
 # Where the popups put the things they open: btop, nmtui, bluetoothctl, pacman.
 terminal_command = kitty
 EOF
@@ -237,6 +251,24 @@ EOF
   echo "   -> $OSD_CONFIG_DIR/bar.conf (new)"
 else
   echo "   -> $OSD_CONFIG_DIR/bar.conf (left alone)"
+fi
+
+# A bar.conf that was written before the applications panel existed has no
+# `apps_command` in it, and the built-in default is the bare program name - which
+# only works when ~/.local/bin happens to be on the bar's PATH, and a Hyprland
+# started by the session manager usually does not have it. The template is never
+# overwritten, so the one key the bar needs is appended here, once. Every other
+# new key of this collection lives in the regenerated osd.lua or in a new
+# element's own config file, which is why this repair is the only one.
+if ! grep -qE '^[[:space:]]*apps_command' "$OSD_CONFIG_DIR/bar.conf"; then
+  cat >> "$OSD_CONFIG_DIR/bar.conf" <<EOF
+
+# The applications button at the bar's *left* end: a left click asks this element
+# to open the applications panel. (Added by the installer; the built-in default is
+# the bare name, which needs ~/.local/bin on the bar's PATH.)
+apps_command = $BIN_DIR/hypr-osd-apps
+EOF
+  echo "   -> $OSD_CONFIG_DIR/bar.conf (apps_command added)"
 fi
 
 if [ ! -f "$OSD_CONFIG_DIR/island.conf" ]; then
@@ -281,6 +313,17 @@ poll_ms = 50
 # metadata changes).
 tick_ms = 1000
 media_every_ms = 700
+
+# How many notifications the notification tile lists, newest first, with the
+# application's icon and what it said. The hub remembers a few more than it
+# draws, so dismissing one promotes the next, and it says "+N more" when the
+# daemon is holding notifications this panel never saw (they arrived before it
+# started, and swaync does not hand them over). Zero lists none.
+#
+# The rows are read off the bus (`busctl monitor`, i.e. systemd 257 or later),
+# because swaync publishes no list: where the bus refuses to be monitored, the
+# count, the dnd switch and the buttons stand on their own.
+notification_rows = 3
 
 # What the notification buttons run.
 notifications_command = swaync-client
@@ -517,6 +560,121 @@ else
   echo "   -> $OSD_CONFIG_DIR/overview.conf (left alone)"
 fi
 
+if [ ! -f "$OSD_CONFIG_DIR/launcher.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/launcher.conf" <<'EOF'
+# hypr-osd-launcher - settings for the search card (SUPER + SPACE), the element
+# that replaces the Tauri/Next.js launchpad. Read once at start-up:
+#     pkill -f hypr-osd-launcher && ~/.local/bin/hypr-osd-launcher &
+# (`-f`, because the element's name is longer than the 15 characters that
+#  `pkill -x` can match.)
+
+# The card's width in pixels. The rows inside it are full width and their text is
+# ellipsised to fit, so this is the one number that decides how much of a file
+# name is readable.
+width = 640
+
+# How many results the list holds. Applications and files share the slots. The
+# card always reserves room for all of them - a mapped layer surface grows with
+# its content but does not shrink with it, and a card that changed size under the
+# pointer would be worse anyway - so this is also how tall the card is.
+max_results = 7
+
+# Application (and file-type) icon size in pixels.
+icon_size = 22
+
+# Whether files and folders are searched as well as applications. On, the card
+# walks ~/Documents, ~/Downloads, ~/Desktop, ~/Pictures, ~/Music, ~/Videos,
+# ~/Projects, ~/Templates and ~/Public - no index, no watcher, just a bounded
+# walk on its own thread. Off, the card is an application launcher only, and no
+# filesystem work happens at all.
+files = true
+
+# How long a keystroke waits before the file walk is started, in milliseconds.
+# The application half answers the keystroke immediately, so this is only about
+# not walking the disk once per character while you type.
+debounce_ms = 120
+
+# Close the card after this long with no key press and no pointer movement over
+# it, in milliseconds. The card takes the keyboard while it is up (a layer surface
+# cannot be typed into otherwise), and this is what keeps that safe: a session
+# lock takes the keyboard from every other surface, so a card that was up when
+# the screen locked hears nothing - not even the Escape meant for it. 0 never
+# closes by itself.
+idle_close_ms = 60000
+EOF
+  echo "   -> $OSD_CONFIG_DIR/launcher.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/launcher.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/apps.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/apps.conf" <<'EOF'
+# hypr-osd-apps - settings for the applications panel: every application
+# installed on the machine, in drawers, with the search field the launcher has.
+# This is the old launchpad's *main window*, rebuilt as a card that unfolds from
+# the button at the bar's left end (the Tauri/Next.js window it replaces is
+# gone). Read once at start-up:
+#     pkill -f hypr-osd-apps && ~/.local/bin/hypr-osd-apps &
+# (`-f`, because the element's name is longer than the 15 characters that
+#  `pkill -x` can match.)
+#
+# Without a card, the verbs answer on the command line - which is also how the
+# panel is tested:
+#     hypr-osd-apps status        # how many applications, which drawers, open?
+#     hypr-osd-apps toggle        # the bar's button does this
+#     hypr-osd-apps show          # the panel, without touching the bar
+#     hypr-osd-apps drawer Pinned # open on a drawer by name (or by number)
+#     hypr-osd-apps apps          # one line per application: drawer, id, name
+
+# The panel's width in pixels, and how much of it the drawer list takes. The
+# tile grid gets what is left (minus the gap between the two panes), so these
+# two decide how many tiles fit in a row - the arrows and the grid both count
+# them the same way. `hypr-osd-apps status` prints what it worked out.
+width = 760
+sidebar_width = 168
+
+# The height of the tile pane - and therefore the height the panel settles at,
+# whichever drawer you are on. Make it a whole number of tile rows
+# (`rows * tile_height + (rows - 1) * tile_gap`, so 4 rows of the defaults below
+# = 402), or the last row sits sliced in half at the pane's edge.
+grid_height = 402
+
+# One tile, in pixels, and the application icon inside it. The name under the
+# icon gets two lines and is then ellipsised.
+tile_width = 100
+tile_height = 96
+icon_size = 40
+
+# Space between tiles in a row and between the rows above.
+tile_gap = 6
+
+# Where the bar is, so the panel can hang below it and line its left edge up with
+# the bar's. These have to match ~/.config/hypr-osd/bar.conf: the bar tells the
+# panel nothing, it works the geometry out from these numbers.
+bar_height = 40
+bar_margin_top = 8
+bar_margin_x = 12
+
+# The distance between the bar's bottom edge and the panel's top edge.
+gap = 6
+
+# Close the panel after this long with no key press and no pointer movement over
+# it, in milliseconds. The panel takes the keyboard while it is up (a layer
+# surface cannot be typed into otherwise), and this is what keeps that safe: a
+# session lock takes the keyboard from every other surface, so a panel that was
+# up when the screen locked hears nothing - not even the Escape meant for it. 0
+# never closes by itself.
+idle_close_ms = 60000
+
+# Pinned applications are not here: they are a state file, not a setting -
+# ~/.config/hypr-osd/apps-pinned, one application id per line, written by a
+# right click on a tile. Delete the file to unpin everything.
+EOF
+  echo "   -> $OSD_CONFIG_DIR/apps.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/apps.conf (left alone)"
+fi
+
 # ---------------------------------------------------------------------------
 # The screen locker
 # ---------------------------------------------------------------------------
@@ -610,6 +768,8 @@ elif [ -d "$HYPR_DIR" ]; then
       -e "s|@SESSION_OSD_BIN@|$BIN_DIR/hypr-osd-session|g" \
       -e "s|@SWITCHER_OSD_BIN@|$BIN_DIR/hypr-osd-switcher|g" \
       -e "s|@OVERVIEW_OSD_BIN@|$BIN_DIR/hypr-osd-overview|g" \
+      -e "s|@LAUNCHER_OSD_BIN@|$BIN_DIR/hypr-osd-launcher|g" \
+      -e "s|@APPS_OSD_BIN@|$BIN_DIR/hypr-osd-apps|g" \
       scripts/hyprland/osd.lua > "$HYPR_DIR/osd.lua"
     echo "   -> $HYPR_DIR/osd.lua"
 
@@ -654,6 +814,49 @@ EOF
       echo "   -> waybar and its two hover panels stopped"
     else
       echo "   -> no waybar autostart found in hyprland.lua"
+    fi
+
+    # -----------------------------------------------------------------------
+    # The old launcher
+    # -----------------------------------------------------------------------
+    # `hypr-osd-launcher` takes over SUPER + SPACE, which the Tauri launcher
+    # (linux-launchpad) had first. Both `require`s would bind the key, and one
+    # press would open *two* search bars on top of each other - so the line is
+    # commented out.
+    #
+    # Commented out rather than deleted, and the launcher itself is left alone:
+    # this is the user's config, the app stays installed and its launchpad.lua is
+    # untouched, so removing the comment is all it takes to go back.
+    if [ "$KEEP_LAUNCHPAD" -eq 1 ]; then
+      echo "   -> launchpad left where it is (--keep-launchpad)"
+      {
+        echo "   ! both launchpad.lua and osd.lua bind SUPER + SPACE now: one of"
+        echo "     the two will win, and if both fire you get two search bars."
+      } >&2
+    elif grep -qE '^[[:space:]]*require\("launchpad"\)' "$HYPR_DIR/hyprland.lua" 2>/dev/null; then
+      cp -n "$HYPR_DIR/hyprland.lua" "$HYPR_DIR/hyprland.lua.bak-launchpad" 2>/dev/null || true
+      sed -i -E '/^[[:space:]]*require\("launchpad"\)/ s|^|-- replaced by hypr-osd-launcher: |' \
+        "$HYPR_DIR/hyprland.lua"
+      echo "   -> launchpad disabled (backup: hyprland.lua.bak-launchpad)"
+      # And stop the daemon it left running, so the change is visible in this
+      # session rather than the next one.
+      pkill -f 'bin/launchpad --hidde[n]' 2>/dev/null || true
+      echo "   -> the running launchpad daemon was stopped"
+    else
+      echo "   -> no require(\"launchpad\") found in hyprland.lua"
+    fi
+
+    # Launchpad's in-app "Launch on startup" toggle writes its *own* XDG autostart
+    # entry, which a systemd session turns into a user unit - so the daemon can
+    # come back at login even with the `require` gone. It is launchpad's own file,
+    # so it is reported rather than edited.
+    if [ -f "$CONFIG_HOME/autostart/launchpad.desktop" ]; then
+      {
+        echo "   ! $CONFIG_HOME/autostart/launchpad.desktop still starts the old"
+        echo "     launcher at login (its in-app \"Launch on startup\" toggle wrote"
+        echo "     it). To let the new one have the key to itself:"
+        echo "       rm $CONFIG_HOME/autostart/launchpad.desktop"
+      } >&2
     fi
 
     # The desktop's background, its lock screen and the idle timers. All three
@@ -791,6 +994,9 @@ if [ "$hypr_installed" -eq 1 ]; then
   echo "   $BIN_DIR/hypr-osd-island show         # the clock's popup, without hovering"
   echo "   ALT + TAB                             # the window switcher"
   echo "   SUPER + SHIFT + TAB                   # every workspace, every window"
+  echo "   SUPER + SPACE                         # search applications and files"
+  echo "   the grid button at the bar's left     # every application, in drawers"
+  echo "   $BIN_DIR/hypr-osd-apps show           # ... the panel, without the button"
   echo "   SUPER + L                             # lock the screen (hyprlock)"
   echo "or just log out and back in."
   echo

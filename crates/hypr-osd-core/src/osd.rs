@@ -99,6 +99,13 @@ pub enum Placement {
     /// also why `margin_right` is the bar's own `margin_x` rather than a number
     /// of the popup's own.
     TopRight { margin_top: i32, margin_right: i32 },
+    /// The mirror of [`Placement::TopRight`]: a card hanging under the bar's
+    /// left-hand end, with its left edge lined up with the bar's. The
+    /// applications panel unfolds from the button at the bar's left end, which is
+    /// the same gesture as the island and the system popup - a panel that comes
+    /// out of the pill you pressed - and `margin_left` is the bar's `margin_x`
+    /// for the same reason `margin_right` is on the other side.
+    TopLeft { margin_top: i32, margin_left: i32 },
 }
 
 /// What the card does with the keyboard.
@@ -108,11 +115,12 @@ pub enum Keyboard {
     /// point of an OSD and the default for the whole collection.
     None,
     /// Grabs it while the card is up. Only for a card that *is driven* by keys:
-    /// the switcher has to see the Alt release that ends a switch, and the
-    /// overview has to hear Escape and the arrows - none of which can be allowed
-    /// to reach the window underneath, or the card would be fighting the
-    /// application for the same keystroke. An OSD that eats a keystroke is a bug;
-    /// this is the exception, and it is for cards you opened on purpose.
+    /// the switcher has to see the Alt release that ends a switch, the overview
+    /// has to hear Escape and the arrows, and the launcher has to be typed into -
+    /// none of which can be allowed to reach the window underneath, or the card
+    /// would be fighting the application for the same keystroke. An OSD that eats
+    /// a keystroke is a bug; this is the exception, and it is for cards you opened
+    /// on purpose.
     Exclusive,
 }
 
@@ -668,6 +676,10 @@ impl Osd {
                 window.set_anchor(Edge::Top, true);
                 window.set_anchor(Edge::Right, true);
             }
+            Placement::TopLeft { .. } => {
+                window.set_anchor(Edge::Top, true);
+                window.set_anchor(Edge::Left, true);
+            }
             Placement::Bar {
                 height,
                 margin_top,
@@ -746,6 +758,17 @@ impl Osd {
                 card.set_margin_top(SHADOW_PAD);
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(SHADOW_PAD);
+                card.set_margin_end(SHADOW_PAD);
+            }
+            Placement::TopLeft {
+                margin_top,
+                margin_left,
+            } => {
+                card.add_css_class("card");
+                card.set_size_request(self.opts.width, -1);
+                card.set_margin_top(margin_top);
+                card.set_margin_bottom(SHADOW_PAD);
+                card.set_margin_start(margin_left);
                 card.set_margin_end(SHADOW_PAD);
             }
         }

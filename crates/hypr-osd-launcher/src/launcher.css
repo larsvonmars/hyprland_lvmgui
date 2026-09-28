@@ -1,0 +1,121 @@
+/* The launcher's own rules: a search field over a list of results.
+ *
+ * Everything shared - the palette read from ~/.config/hypr-osd/theme.css, the
+ * typography, the card recipe - comes from base.css. What is here is only what
+ * the launcher has that no other element does.
+ *
+ * The card is the collection's usual `box.card`; the element's content (this
+ * file's `box.launcher`) is inset by the shell's `CARD_PAD_*`, so nothing here
+ * adds padding to the card itself.
+ */
+
+/* A column that does not fight the card's width: rows are full width, the text
+ * inside them is capped in code (`view.rs`), and the card's own `Opts::width` is
+ * what decides how wide the whole thing is. */
+box.launcher {
+    min-width: 0;
+}
+
+/* ---- the search field: a capsule the card's own colour sits in ----------- */
+/* The field is the one thing in this card that is always there, so it carries
+ * the accent border - it is the invitation. */
+box.search-row {
+    background-color: @surface;
+    border: 1px solid @border_soft;
+    border-radius: 12px;
+    padding: 9px 12px;
+}
+
+/* A GtkEntry arrives from the theme wearing a background, its own border, a
+ * minimum height and a focus ring. Inside the capsule above, all of that is
+ * noise: what is left is the caret and the text. The ring is the theme's
+ * `:focus-within > text` rule, which is why the wildcard is here - it is the
+ * one selector that cannot miss the node it is drawn on. */
+entry.search,
+entry.search * {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+/* `* { font-size: 13px }` in base.css beats inheritance, so the size has to be
+ * set on the node that draws the characters rather than on the entry. */
+entry.search text {
+    font-size: 15px;
+    caret-color: @accent;
+}
+
+entry.search placeholder {
+    color: @fg_faint;
+}
+
+entry.search selection {
+    background-color: @accent_tint;
+    color: @fg;
+}
+
+label.search-glyph {
+    font-size: 14px;
+    color: @fg_dim;
+}
+
+/* ---- the results: flat rows, one of them selected ------------------------ */
+/* A button arrives from the theme wearing a background, a border, its own
+ * padding and a shadow. A result is a quiet row until it is selected. */
+button.result {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    box-shadow: none;
+    padding: 7px 8px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg;
+}
+
+button.result:hover {
+    background-color: @surface;
+}
+
+/* The selection is the same accent the session card puts on a row you are about
+ * to act on, and the switcher on the tile it would switch to. */
+button.result.selected {
+    background-color: @accent_tint;
+    border-color: @border;
+}
+
+/* The rows that only hold space, so the list is a fixed height while you type
+ * (see `view.rs`). They can never be hovered or selected; this is belt and
+ * braces, and it also keeps the theme from painting one. */
+button.result.blank {
+    background: none;
+    border: none;
+}
+
+label.result-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: @fg;
+}
+label.result-sub {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+/* The stand-in for an application the icon theme has nothing for (its first
+ * letter), and for a file (a folder/file glyph). */
+label.row-glyph {
+    font-size: 17px;
+    color: @fg_dim;
+}
+
+label.empty {
+    color: @fg_faint;
+    padding: 10px 4px;
+}

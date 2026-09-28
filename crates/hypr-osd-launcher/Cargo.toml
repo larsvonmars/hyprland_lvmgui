@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-launcher"
+description = "Spotlight-style launcher for Hyprland: a centred search card over the installed applications (and the files in your home), opened with SUPER + SPACE."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-launcher"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

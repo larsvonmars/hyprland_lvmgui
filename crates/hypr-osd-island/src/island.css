@@ -136,6 +136,76 @@ label.notif-count {
     color: @fg;
 }
 
+/* Nothing waiting is good news, and good news need not be the brightest thing
+ * in the tile. */
+label.notif-count.quiet {
+    color: @fg_faint;
+}
+
+/* One notification, as the bus carried it. Flat rows separated by a hairline
+ * rather than a box each: the tile is a surface already, and a box inside a box
+ * inside a box is where a panel starts to look noisy. */
+box.notif-row {
+    padding: 3px 6px;
+    border-radius: 8px;
+}
+
+/* Urgent: what swaync keeps on screen until it is dealt with. The theme's own
+ * red for "you should look at this", at the tint strength a background wants. */
+box.notif-row.critical {
+    background-color: @crit_tint;
+}
+
+/* The badge under an application's icon. Drawn even when the icon theme has an
+ * answer, so that every row has the same shape. */
+stack.notif-art {
+    background-color: @surface_h;
+    border-radius: 7px;
+}
+
+/* The stand-in for an application whose icon could not be had: its first letter,
+ * exactly as the switcher and the overview draw one. */
+label.notif-letter {
+    font-size: 13px;
+    font-weight: 600;
+    color: @fg_dim;
+}
+
+/* The application, and how long ago it arrived: the loud half of a row. */
+label.notif-app {
+    font-size: 11px;
+    font-weight: 600;
+    color: @fg;
+}
+
+/* The age is reference rather than news, so it is the quietest thing in the row. */
+label.notif-age {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+/* What the notification actually says, one step down from the application's
+ * name so the two read as a heading and its line. */
+label.notif-text {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+/* How many the tile did not have room for. */
+label.notif-more {
+    font-size: 10px;
+    color: @fg_faint;
+    padding: 3px 6px 0 6px;
+}
+
+/* Between two rows. `separator.sep` (base.css) is the one under a panel's header
+ * - wider margins, and it is not inside a tile. */
+separator.notif-sep {
+    background-color: @hairline;
+    min-height: 1px;
+    margin: 2px 6px;
+}
+
 /* `button.chipbtn` and its states are shared (base.css) - what is local is only
  * the two chips that mean something specific here. */
 

@@ -24,6 +24,7 @@
 //!   toggle               close it if it is up, otherwise show it
 //!   show                 put it up and keep it there (no pointer tracking)
 //!   status               print what the panel would show, up or not
+//!                        (including the notifications the bus carried)
 //!   (no verb)            start the daemon and wait for the bar
 //! ```
 
@@ -74,6 +75,9 @@ const DEFAULT_TICK_MS: u64 = 1000;
 /// moving, because `playerctl --follow` deliberately only speaks when the
 /// metadata changes - position is not metadata.
 const DEFAULT_MEDIA_EVERY_MS: u64 = 700;
+/// How many notifications the tile lists. The hub remembers a few more than it
+/// draws (see `notify`), so dismissing one promotes the next.
+const DEFAULT_NOTIFICATION_ROWS: i32 = 3;
 
 /// What the config file resolved to.
 struct Settings {
@@ -88,6 +92,9 @@ struct Settings {
     poll: Duration,
     tick: Duration,
     media_every: u64,
+    /// How many notifications the tile lists. Zero is a legitimate answer: the
+    /// count and the buttons then stand on their own.
+    notification_rows: usize,
     notifications_command: String,
 }
 
@@ -113,6 +120,11 @@ impl Settings {
             media_every: config
                 .millis("media_every_ms", DEFAULT_MEDIA_EVERY_MS)
                 .as_millis() as u64,
+            // Five is where the tile stops being a glance and starts being a
+            // list; the hub does not remember more than a few anyway.
+            notification_rows: config
+                .i32("notification_rows", DEFAULT_NOTIFICATION_ROWS)
+                .clamp(0, 5) as usize,
             notifications_command: config.string("notifications_command", "swaync-client"),
         }
     }
@@ -145,6 +157,19 @@ struct Panel {
     /// The last thing MPRIS said, so the header chips and the media tile agree.
     playback: RefCell<Option<Playback>>,
     notifications: RefCell<Notifications>,
+    /// What the notifications *say*, read off the bus - the other half of the hub
+    /// (see `notify`). The state above arrives without it; this fills the rows in.
+    history: RefCell<notify::History>,
+}
+
+impl Panel {
+    /// The notification tile, drawn from both halves of the hub at once, so the
+    /// two can never be out of step.
+    fn render_notifications(&self) {
+        let notifications = *self.notifications.borrow();
+        let history = self.history.borrow();
+        self.node.render_notifications(&notifications, &history);
+    }
 }
 
 fn main() -> glib::ExitCode {
@@ -188,6 +213,7 @@ fn main() -> glib::ExitCode {
                 monitor: RefCell::new(None),
                 playback: RefCell::new(None),
                 notifications: RefCell::new(Notifications::default()),
+                history: RefCell::new(notify::History::new()),
             }));
             let _ = panel.set(panel_state.clone());
 
@@ -198,10 +224,26 @@ fn main() -> glib::ExitCode {
                 move |notifications| {
                     let panel = panel_state.borrow();
                     *panel.notifications.borrow_mut() = notifications;
-                    panel.node.render_notifications(&notifications);
+                    panel.render_notifications();
                     panel
                         .node
                         .render_chips(panel.playback.borrow().as_ref(), &notifications);
+                }
+            });
+
+            // What the notifications say is a feed of its own, for the same
+            // reason and from start-up as well: only what the bus carries while
+            // this process is watching can be listed, so a late start would show
+            // an empty tile however many notifications were waiting.
+            let history_follower = notify::follow_history({
+                let panel_state = panel_state.clone();
+                move |line| {
+                    let panel = panel_state.borrow();
+                    // Only redraw when the picture changed: the reply to a `Notify`
+                    // call fills in an id and nothing else.
+                    if panel.history.borrow_mut().apply(line) {
+                        panel.render_notifications();
+                    }
                 }
             });
 
@@ -216,6 +258,10 @@ fn main() -> glib::ExitCode {
                     ticks.set(count);
                     if panel.borrow().machine.is_open() {
                         panel.borrow().node.render_clock();
+                        // A row that says "5 min" has to become "6 min" without
+                        // anything having happened, so the ages are refreshed with
+                        // the clock rather than with the list.
+                        panel.borrow().node.render_ages();
                         if every(count, settings.media_every, settings.tick) {
                             poll_media(&panel);
                         }
@@ -240,7 +286,10 @@ fn main() -> glib::ExitCode {
                 });
             }
 
-            osd.on_shutdown(move || follower.stop());
+            osd.on_shutdown(move || {
+                follower.stop();
+                history_follower.stop();
+            });
 
             Content::Single(node.root.clone().upcast::<gtk::Widget>())
         })
@@ -405,6 +454,21 @@ fn status(panel: &Panel, settings: &Settings) -> String {
             .map(|text| text.to_string())
             .unwrap_or_default()
     };
+    // The rows the tile would draw. Their ages are worked out here rather than
+    // read back from the view, which only keeps them current while the panel is
+    // up - this verb has to answer with the card down as well.
+    let history = panel.history.borrow();
+    let latest = if history.items().is_empty() {
+        "nothing seen yet".to_string()
+    } else {
+        let now = Instant::now();
+        history
+            .items()
+            .iter()
+            .map(|item| format!("{} · {} · {}", item.app, item.title, item.age(now)))
+            .collect::<Vec<_>>()
+            .join("\n           ")
+    };
     [
         format!(
             "panel      {}px wide, {}px below the top",
@@ -453,6 +517,7 @@ fn status(panel: &Panel, settings: &Settings) -> String {
                 ""
             }
         ),
+        format!("latest     {latest}"),
     ]
     .join("\n")
 }

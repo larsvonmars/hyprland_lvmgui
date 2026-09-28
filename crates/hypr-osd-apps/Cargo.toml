@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-apps"
+description = "The applications panel for Hyprland: a grid of every installed application with drawers and a filter, unfolded from the button at the bar's left end."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-apps"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

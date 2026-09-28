@@ -19,7 +19,7 @@ Every other element owns exactly one **card**: a borderless layer-shell surface
 that appears when something happens (a volume key, a media key, the power key),
 shows the state, and gets out of the way again. A card draws above fullscreen
 windows and is styled from the same palette as the bar — see
-[Look and feel](#look-and-feel). It does not take the keyboard, with two
+[Look and feel](#look-and-feel). It does not take the keyboard, with four
 deliberate exceptions: cards that are *driven* by keys have to own them while they
 are up (see [How it works](#how-it-works)).
 
@@ -33,10 +33,12 @@ are up (see [How it works](#how-it-works)).
 | Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down. `SUPER + SHIFT + L`, or the hardware power key. |
 | Window switcher | `hypr-osd-switcher` | Every window you have open, most recently used first, with its application icon and title. `ALT + TAB`, and `ALT + SHIFT + TAB` to walk backwards. |
 | Workspace overview | `hypr-osd-overview` | The whole desktop as a picture of itself: every workspace as a chip, every window as a real thumbnail in its own shape, scaled to fit one screen. `SUPER + SHIFT + TAB`. |
+| Launcher | `hypr-osd-launcher` | A search card in the middle of the screen: it matches the applications installed on the machine (names, generic names, keywords, categories) and the files in your own directories, and opens the selected one. `SUPER + SPACE`. Replaces the Tauri/Next.js [`linux-launchpad`](../linux-launchpad) — see [Launcher](#launcher). |
+| Applications panel | `hypr-osd-apps` | Every application installed on the machine, as a grid of tiles with a drawer list down the side (and a **Pinned** one), searched through the same field the launcher has. The old launchpad's main window, rebuilt as a card and opened by the **grid button at the bar's left end** — see [Applications panel](#applications-panel). |
 
 Siblings of this repo, which share the design language:
-[`linux-launchpad`](../linux-launchpad) and
-[`hyprland-settings-gui`](../hyprland-settings-gui).
+[`linux-launchpad`](../linux-launchpad) — whose spotlight overlay this collection
+took over — and [`hyprland-settings-gui`](../hyprland-settings-gui).
 
 ```
 crates/
@@ -52,6 +54,8 @@ crates/
   hypr-osd-session/    element #3: the session card
   hypr-osd-switcher/   element #4: the Alt-Tab window switcher
   hypr-osd-overview/   element #5: the workspace overview
+  hypr-osd-launcher/   element #6: the search card on SUPER + SPACE
+  hypr-osd-apps/      element #7: the applications panel (the bar's grid button)
 scripts/
   install.sh           build + install + wire up Hyprland (and drop waybar)
   hyprland/osd.lua     the Hyprland side (autostart, keys, layer rule)
@@ -115,14 +119,15 @@ What it does:
 
 | | |
 | --- | --- |
-| `~/.local/bin/hypr-osd-*` | the seven binaries (the bar, the island, and the five cards) |
+| `~/.local/bin/hypr-osd-*` | the ten binaries (the bar, the island, and the eight cards) |
 | `~/.config/hypr-osd/theme.css` | the palette — only if the file is missing, so your edits survive |
 | `~/.config/hypr-osd/bar.conf` | the bar's settings (only created if missing) |
 | `~/.config/hypr-osd/island.conf` | the island popup's settings (only created if missing) |
 | `~/.config/hypr-osd/*.conf` | one config template per card (only created if missing) |
-| `~/.config/hypr/osd.lua` | the bar, the autostart, the volume keys and the layer rule, generated from `scripts/hyprland/osd.lua` |
+| `~/.config/hypr/osd.lua` | the bar, the autostart, every keybinding and the layer rule, generated from `scripts/hyprland/osd.lua` |
 | `~/.config/hypr/hyprland.lua` | one appended line: `require("osd")` (backup: `hyprland.lua.bak`), then `hyprctl reload` |
 | `~/.config/hypr/hyprland.lua` | waybar's autostart commented out, and waybar stopped (backup: `hyprland.lua.bak-waybar`) — see [Waybar](#waybar) |
+| `~/.config/hypr/hyprland.lua` | `require("launchpad")` commented out, and the old launcher daemon stopped, because `SUPER + SPACE` now belongs to `hypr-osd-launcher` (backup: `hyprland.lua.bak-launchpad`) — see [Launcher](#launcher) |
 | `~/.config/hypr/hyprpaper.conf` | the desktop wallpaper — only when hyprpaper is installed, and only if the file is missing |
 | `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed, and only if the file is missing |
 | `~/.config/hypr/hypridle.conf` | idle timers — only when `hypridle` is installed, and only if the file is missing |
@@ -143,8 +148,10 @@ Requirements: Hyprland ≥ 0.55 (Lua config), GTK4, `gtk4-layer-shell`, a Rust
 toolchain; at runtime `wpctl` (PipeWire/WirePlumber) and `hyprctl`. The bar reads a
 few more things and simply leaves a pill out when one is missing: `iw` (the
 network pill), `playerctl` (the media pill), `swaync-client` (the island's
-notification hub) and `wpctl` (the volume pill). The installer reports which of
-them it cannot find.
+notification hub) and `wpctl` (the volume pill). The island's notification *rows*
+are read off the session bus with `busctl` (systemd ≥ 257), because swaync
+publishes no list of them — without it the tile keeps its count and buttons and
+loses the rows. The installer reports which of them it cannot find.
 
 ```sh
 sudo pacman -S --needed base-devel pkgconf gtk4 gtk4-layer-shell rust
@@ -186,6 +193,102 @@ hyprctl reload && waybar &
 `stats_panel.py`) are replaced by the island popup, which is the same idea built
 as an element: it registers its own surface, follows the pointer only while it is
 open, and is styled from the same palette as everything else.
+
+## Launcher
+
+`SUPER + SPACE` is the same gesture it has been on this desktop for a while: a
+search bar in the middle of the screen, applications and files, Enter to open.
+What changed is what is behind it.
+
+The old one — [`linux-launchpad`](../linux-launchpad), a Tauri app with a Next.js
+front end — is a fine program built out of pieces this desktop does not want: a
+WebKitGTK webview, a Node build step, and a bundled browser engine, all of it
+resident, to draw a rectangle with a text field in it. It also kept a background
+thread over a SQLite FTS5 index of every file it had ever seen, with an inotify
+watcher to keep it fresh. `hypr-osd-launcher` is one GTK4 binary from this
+collection: a card, a `GtkEntry`, a list of rows, and a bounded `read_dir` walk
+for the file half. The search it does is the search the old overlay did — name,
+generic name, keywords and categories, ranked on the same ladder — with the file
+results merged into the same ranking instead of queued behind the applications.
+
+Two things are worth knowing, both deliberate:
+
+* **It takes the keyboard while it is up.** A layer-shell surface that wants to be
+  typed into has no other way, and needing a click before the field accepts a
+  character is not a launcher. The price is that a click elsewhere does not
+  dismiss it: the compositor cannot take the keyboard back from an exclusive
+  surface. So it ends the way the other keyboard cards do — Escape, or `SUPER +
+  SPACE` again — with `idle_close_ms` (a minute) as the safety net for having
+  walked away.
+* **The card keeps its size.** A mapped layer surface grows with its content but
+  does not shrink with it (measured: narrowing a full list down to one result left
+  the card 566 px tall), and a card that resized under the pointer while you typed
+  would be worse anyway. The list therefore reserves room for `max_results` rows
+  and pads the tail with rows that hold space and show nothing.
+
+Going back to the old launcher is the same shape as [Waybar](#waybar):
+
+```sh
+./scripts/install.sh --keep-launchpad   # don't touch it in the first place
+cp ~/.config/hypr/hyprland.lua.bak-launchpad ~/.config/hypr/hyprland.lua
+hyprctl reload && launchpad --hidden &
+```
+
+The installer only ever comments the `require("launchpad")` line out; the
+application and its own `launchpad.lua` are left exactly as they were. (The one
+key they cannot share is `SUPER + SPACE`: with both wired up, one press opens both
+search bars.)
+
+## Applications panel
+
+The old launcher had **two** windows. One was the overlay on `SUPER + SPACE`; the
+other was the main window behind it — a category list down the side, a grid of
+every application installed, a search field across the top and the favourites
+above the grid. [The card above](#launcher) is the first one; this element is the
+second, rebuilt the same way and for the same reasons (one GTK4 binary, no
+webview, no Node build), with one difference that is the whole point of it:
+
+**It is opened by a button on the bar, not by a key.** The far-left pill of the
+bar is a grid of squares; clicking it asks this element to `toggle`, and the pill
+lights up in the accent while the panel is up, so the button is also the way back
+out. A launcher you have to remember a key for is one you use when you already
+know what you want to run; a grid of everything installed is what you use when you
+do not, and the pointer is already on the bar. `osd.lua` has a commented
+`SUPER + A` bind if you want a key for it as well.
+
+| | |
+| --- | --- |
+| Open it | the grid button at the bar's **left** end, or `hypr-osd-apps toggle` |
+| Walk the tiles | the arrow keys (left/right/up/down, `Page Up`/`Page Down`, `Home`/`End`), or the pointer |
+| Change drawer | `Tab`/`Shift+Tab`, a click on a drawer row, or `hypr-osd-apps drawer <name\|number>` |
+| Open | `Enter`, or a left click on a tile |
+| Pin | a **right click** on a tile (`~/.config/hypr-osd/apps-pinned`, one id per line) |
+| Close | `Escape`, the button again, or `hypr-osd-apps hide` |
+
+The drawers are the freedesktop categories, mapped the way the old window mapped
+them (`Development`, `Graphics`, `Internet & Networking`, …) with anything that
+claims nothing in an `Other` drawer, and a `Pinned` drawer that exists only once
+something is pinned. `hypr-osd-apps apps` prints every application with the drawer
+it landed in, which is how "why is that one under Utilities?" gets answered, and
+`hypr-osd-apps status` prints the count, the drawers, the pinned list and the size
+the card came out at.
+
+Two things are worth knowing, and they are the same two as the launcher's:
+
+* **It takes the keyboard while it is up** — a layer surface that wants to be typed
+  into has no other way, and the search field is the point. So it ends the way the
+  other keyboard cards do: `Escape`, the button again, or `idle_close_ms` (a
+  minute by default) if you walked away.
+* **The card keeps its size.** Picking a drawer with two applications in it cannot
+  make the panel jump: the grid lives in a fixed-height scroller (`grid_height`,
+  which is why that key wants to be a whole number of tile rows), so the card is
+  the same shape whichever drawer you are on.
+
+Unlike the launcher, nothing here waits for a key press: the button is the
+trigger, and it is the *bar* that starts the element — `apps_command` in
+`bar.conf`. That is also why the panel is autostarted with the others: it reads
+the installed applications once, while nobody is waiting, so the first click paints
+at once.
 
 ## Use
 
@@ -264,9 +367,30 @@ hypr-osd-island status  # what the panel would show, without showing it
 
 Hovering the clock in the bar unfolds a panel below it: the time and date, what
 is playing (with transport buttons and a progress bar, when the player reports a
-track length), the notification hub (`swaync`: the count, do-not-disturb, and the
-buttons that open the control centre, hide what is showing or clear it), and a
-calendar you can page through by month, with today in the accent colour.
+track length), the notification hub, and a calendar you can page through by
+month, with today in the accent colour.
+
+The notification hub is read in two halves, because `swaync` publishes them
+separately. The *state* — how many are waiting, do-not-disturb, whether the
+control centre is up — comes from `swaync-client -swb`, one JSON line per change,
+and drives the count, the dnd switch and the four buttons (open the control
+centre, hide what is showing, clear everything). The *notifications themselves* —
+the application, the summary, the icon, how long ago — swaync does not publish at
+all: no verb lists them, and its own D-Bus objects expose nothing but GTK's own
+interfaces. So the rows are read off the bus instead, with
+`busctl --user --json=short monitor org.freedesktop.Notifications`, whose output
+is one JSON line per D-Bus message — the `Notify` calls going in (application,
+summary, body, icon hint, urgency) and the `NotificationClosed` signals coming
+back out, so a notification that is dismissed or expires leaves the list again.
+The newest few are drawn, each with the application's icon (or its first letter),
+the application's name, the summary and the age; a critical one wears the warning
+colour, `notification_rows` in `~/.config/hypr-osd/island.conf` says how many are
+shown, and `+N more` admits the ones the daemon is holding that arrived before the
+panel started.
+
+Monitoring the bus is a privileged operation, which is why the two halves are
+kept apart: where it is refused the rows stay away and the count, the dnd switch
+and the buttons still work.
 
 The island is a program of its own because a GTK widget can never paint outside
 its own window: an "expansion" of a 40-pixel pill is necessarily a second
@@ -372,7 +496,7 @@ hypr-osd-switcher cancel   # close without switching
 hypr-osd-switcher status   # the list, in switcher order, and no card
 ```
 
-It is one of the two elements that take the keyboard, and it has to be: a switch
+It is one of the four elements that take the keyboard, and it has to be: a switch
 ends when you let go of Alt, and the only way to see that release is to own the
 keyboard for as long as the card is up. So `ALT + TAB` is a *held* gesture. A
 tap and release swaps to the window you were in before this one; keep tapping Tab
@@ -412,12 +536,68 @@ backwards.
 
 Like the switcher, this card takes the keyboard while it is up: Escape and the
 arrows have to be the card's own keys, or they would be fighting whatever is
-behind the card. It is the second element that does, and both are cards you opened
-on purpose. Because it takes the keyboard, it also lets go of it by itself: after
+behind the card. It is one of the three elements that do, and all of them are
+cards you opened on purpose. Because it takes the keyboard, it also lets go of it
+by itself: after
 a minute with no key and no mouse movement over it (`idle_close_ms`) the card
 closes. The case that makes this necessary is a session lock — a lock takes the
 keyboard from every other surface, this one included, so a card that was up when
 the screen locked would otherwise sit there for good.
+
+**`hypr-osd-launcher` — the search card** (see [Launcher](#launcher))
+
+```sh
+hypr-osd-launcher toggle        # open it, or close it again (what SUPER+Space runs)
+hypr-osd-launcher show [query]  # open it, with an empty field or the query given
+hypr-osd-launcher hide          # take it away (`close` is the same thing)
+hypr-osd-launcher refresh       # re-scan the installed applications
+hypr-osd-launcher search <text> # print the ranked results, without a card
+hypr-osd-launcher apps          # list every application that was found
+hypr-osd-launcher status        # how many applications, which file roots, open or closed
+```
+
+`SUPER + SPACE` opens a card in the middle of the screen with the keyboard already
+in it: type, and the list narrows as you go. `↑`/`↓` (or `Page Up`/`Page Down`)
+walk it, Enter opens the selected row, Escape — or the key again — takes the card
+away. A click on a row opens it too.
+
+The applications come from the freedesktop `.desktop` entries, filtered to the
+ones that should be offered in this desktop (`Type=Application`, no `NoDisplay` or
+`Hidden`, and `OnlyShowIn`/`NotShowIn` honoured). What you type is matched against
+the name first, then the generic name, then the keywords, categories and comment;
+`search` prints the ranking it decided on, which is what to run when the card
+offers something you did not expect. Enter hands the entry to `gio launch`, so
+`Exec` field codes, `Terminal=true` and `TryExec` behave exactly as they do in the
+application menu.
+
+Files come second and are found the honest way: a bounded walk of `Documents`,
+`Downloads`, `Desktop`, `Pictures`, `Music`, `Videos`, `Projects`, `Templates` and
+`Public`, on its own thread, debounced per keystroke. There is no index and no
+watcher — the launcher this element replaces kept a SQLite FTS5 index of every file
+it had ever seen, which is the right answer for millions of files and a lot of
+machinery for a desktop. Applications and files are then ranked **together**, so a
+file whose name starts with what you typed beats an application that merely
+mentions it somewhere. `files = false` in `launcher.conf` turns the file half off
+entirely.
+
+**`hypr-osd-apps` — the applications panel** (see [Applications panel](#applications-panel))
+
+```sh
+hypr-osd-apps toggle           # open it, or close it again (what the bar's button runs)
+hypr-osd-apps show [query]     # open it, with an empty field or the query given
+hypr-osd-apps hide             # take it away (`close` is the same thing)
+hypr-osd-apps refresh          # re-scan the installed applications
+hypr-osd-apps drawer <name|n>  # open it on one drawer, by name or by number
+hypr-osd-apps pin <id>         # pin an application (a right click on a tile does this)
+hypr-osd-apps unpin <id>       # ... and undo it
+hypr-osd-apps apps             # one line per application: drawer, id, name
+hypr-osd-apps status           # applications, drawers, pins, open or closed, the size
+```
+
+The trigger is the grid button at the bar's left end; the panel's own notes are in
+the [section above](#applications-panel). `drawer 3` and `drawer Pinned` are the
+scriptable equivalents of clicking a drawer row, and `apps` is what answers "which
+drawer did that application land in?" without a card.
 
 ## Configure
 
@@ -449,6 +629,8 @@ element config: it is the palette, and it is [its own section](#look-and-feel).
 | `volume_command` | `hypr-osd-volume` | what the volume pill's click and wheel run |
 | `session_command` | `hypr-osd-session` | what the power button runs |
 | `island_command` | `hypr-osd-island` | what the clock's hover runs |
+| `stats_command` | `hypr-osd-stats` | what the status pill's hover and click run |
+| `apps_command` | `hypr-osd-apps` | what the grid button at the bar's **left** end runs (it asks the panel to `toggle`) |
 | `notifications_command` | `swaync-client` | what the clock's clicks run |
 | `terminal_command` | `kitty` | the terminal the network pill opens `nmtui` in |
 
@@ -542,6 +724,50 @@ is which.
 | `icon_size` | `64` | the icon in a tile that has no picture |
 | `thumbnails` | `true` | `false` skips the captures — the card becomes a workspace switcher drawn with icons |
 | `idle_close_ms` | `60000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
+**`launcher.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `width` | `640` | the card's width in pixels, and so how much of a file name is readable |
+| `max_results` | `7` | how many rows the list holds — and how tall the card is, because the list reserves room for all of them |
+| `icon_size` | `22` | application (and file type) icon size in pixels |
+| `files` | `true` | `false` searches applications only, and touches no directory |
+| `debounce_ms` | `120` | how long a keystroke waits before the file walk starts; applications answer immediately |
+| `idle_close_ms` | `60000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
+Applications are read from the freedesktop locations once, at start-up — which is
+why the element is autostarted rather than left to be started by the first key
+press: the scan is a few hundred small files, and paying for it while the card is
+supposed to appear would be visible. `hypr-osd-launcher refresh` re-reads them
+without a restart. Icons go through GTK's own icon theme, from the entry's `Icon=`
+value; an application the theme has nothing for gets its first letter, the same
+stand-in the switcher uses.
+
+**`apps.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `width` | `760` | the panel's width in pixels |
+| `sidebar_width` | `168` | how much of it the drawer list takes; the tile pane gets the rest |
+| `grid_height` | `402` | the height of the tile pane — and so the height the card settles at, whichever drawer you are on. Make it a whole number of rows (`rows * tile_height + (rows - 1) * tile_gap`), or the last row sits sliced in half |
+| `tile_width`, `tile_height` | `100`, `96` | one tile, and how much of a name fits under its icon (two lines, then ellipsised) |
+| `icon_size` | `40` | application icon size in pixels |
+| `tile_gap` | `6` | space between tiles, and between rows of them |
+| `gap` | `6` | the distance between the bar's bottom edge and the panel's top edge |
+| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `8`, `12` | where the bar is — these have to match `bar.conf` |
+| `idle_close_ms` | `60000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
+`width`, `sidebar_width` and `tile_width` are what decide how many tiles fit in a
+row (5 by default), and the element's arrow keys and the grid both count them the
+same way, so "down" always moves down a row. The pinned applications are **not** a
+setting: they are the state file `~/.config/hypr-osd/apps-pinned`, written by a
+right click on a tile — delete it to unpin everything.
+
+The scan itself is not duplicated: the launcher and the panel both read the
+applications through `hypr-osd-core`'s `apps` module (the same `.desktop` parser,
+the same category map and the same ranking), so an application is classified and
+scored identically in both cards.
 
 ## Lock screen
 
@@ -721,15 +947,17 @@ session lock signal slots in without touching them.
   (nothing is shown), or lazily by the first key press. A card, not a window:
   `gtk4-layer-shell` puts the surface on the *overlay* layer, so it appears above
   fullscreen windows and is not touched by the tiling layout.
-- **It never steals focus — except for the two cards that are driven by keys.**
+- **It never steals focus — except for the cards that are driven by keys.**
   The layer surface is created with `KeyboardMode::None`, so the window you were
   typing in keeps the keyboard while the card is up; pointer input still works —
-  the slider needs it. The switcher and the overview ask for the keyboard
-  (`Opts::keyboard`) for as long as their card is on screen, because both are
-  driven by keys that must not also reach the window underneath: an Alt release
-  ends a switch, and Escape and the arrows cancel an overview. Both cards are
-  opened on purpose, which is what makes eating a keystroke acceptable there, and
-  both of them close themselves if they are left alone.
+  the slider needs it. The switcher, the overview, the launcher and the
+  applications panel ask for the keyboard (`Opts::keyboard`) for as long as their
+  card is on screen, because all four are driven by keys that must not also reach
+  the window underneath: an Alt release ends a switch, Escape and the arrows
+  cancel an overview, and a launcher or the panel has to be *typed into*. All four
+  are opened on purpose, which is what makes eating a keystroke acceptable there,
+  and all four let go of the keyboard by themselves if they are left alone — the
+  switcher when Alt comes back up, the rest after `idle_close_ms`.
 - **The transparent frame is click-through.** The surface is the card plus an
   18px ring that lets the card's shadow breathe; `osd.lua`'s `ignore_alpha` layer
   rule makes those transparent pixels pass clicks to whatever is behind them, so
@@ -763,7 +991,7 @@ session lock signal slots in without touching them.
   fetched the glyph stays up: showing the previous track's cover would be a lie.
 - **Auto-hide.** `duration_ms` after the last change the card hides — unless the
   volume slider is being dragged, or (for the cards with buttons) the pointer is
-  resting on it, so they stay usable. The two keyboard cards instead close after
+  resting on it, so they stay usable. The keyboard cards instead close after
   `idle_commit_ms` / `idle_close_ms` of silence, which is a *different* timer: not
   "the news is stale", but "nobody is here to press Escape".
 - **The session card is a menu, not a notification.** A layer surface never gets
@@ -887,4 +1115,15 @@ Debugging:
 | The session card won't go away | Press `SUPER + SHIFT + L` again, or set `duration_ms` to something shorter in `session.conf` (`0` means “stay until dismissed”, which is also what a card with no way out looks like). |
 | The overview shows icons instead of pictures | No `grim`, or a compositor that cannot hand over a single window (`hypr-osd-overview status` says which windows have a capture id; a *nested* Hyprland cannot capture a toplevel, a real one can). `thumbnails = false` makes the icon tiles the deliberate look. |
 | The overview won't go away | It takes the keyboard while it is up: Escape, a click on the card where there is no tile, or the key again. `hypr-osd-overview close` works from anywhere, and after `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
-| A card is on screen but nothing responds to keys | A keyboard card is up (switcher or overview) and something else grabbed the keyboard first — usually a session lock. Wait for `idle_close_ms`, or `hypr-osd-overview close` / `hypr-osd-switcher cancel`. |
+| A card is on screen but nothing responds to keys | A keyboard card is up (switcher, overview, launcher or applications panel) and something else grabbed the keyboard first — usually a session lock. Wait for `idle_close_ms`, or `hypr-osd-overview close` / `hypr-osd-switcher cancel` / `hypr-osd-launcher hide` / `hypr-osd-apps hide`. |
+| `SUPER + SPACE` opens nothing | Is the launcher running (`pgrep -f hypr-osd-launcher`)? `hyprctl -j layers` shows the surface (namespace `hypr-osd`, overlay layer) when it is up, and `hypr-osd-launcher status` says `state open` or `closed`. |
+| Two search bars open at once | Both launchers are bound to `SUPER + SPACE`: `launchpad.lua` is still loaded. Re-run `./scripts/install.sh` (it comments the `require("launchpad")` line out), or bind one of them elsewhere. |
+| The launcher's results are not what I expected | `hypr-osd-launcher search <text>` prints the ranking it decided on, with the desktop file each application came from. Keywords and categories count as matches, which is why an application can appear for a word that is not in its name. |
+| The launcher lists applications but no files | Do the directories exist? `hypr-osd-launcher status` prints the file roots it found (`Documents`, `Downloads`, … — a root that is not a directory is skipped). `files = false` in `launcher.conf` turns the file half off on purpose. |
+| The launcher won't go away | It takes the keyboard while it is up: Escape, or `SUPER + SPACE` again. `hypr-osd-launcher hide` works from anywhere, and after `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
+| The bar has no grid button at its left end | The running bar is older than the panel: re-run `./scripts/install.sh` and restart it (`pkill -f hypr-osd-bar; hypr-osd-bar &`). The installer also appends `apps_command` to an existing `bar.conf`, which is the key the button needs. |
+| The grid button does nothing | `apps_command` in `bar.conf` does not resolve: is the element running (`pgrep -f hypr-osd-apps`), and does that command work in a terminal? The built-in default is the bare program name, which needs `~/.local/bin` on the bar's `PATH` — that is why the installer writes an absolute path. |
+| The button stays lit with no panel behind it | A stale “panel is open” flag, the same one the island's clock can leave behind: `hypr-osd-apps hide` clears it, and the element clears it at start-up. |
+| The applications panel won't go away | It takes the keyboard while it is up: `Escape`, the button again, or `hypr-osd-apps hide` from anywhere. After `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
+| Applications are in the wrong drawers | The drawer comes from the entry's `Categories=` (and, for entries that claim nothing, from its name and keywords). `hypr-osd-apps apps` prints every application with the drawer it landed in; changing it means changing the `.desktop` file. |
+| A pinned tile is not in the **Pinned** drawer | Pins are desktop file ids in `~/.config/hypr-osd/apps-pinned` (`hypr-osd-apps status` prints the list) — an id that no installed entry has any more is ignored. |

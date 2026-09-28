@@ -5,9 +5,9 @@
 --
 --     require("osd")
 --
--- This file is the source of truth for the bar, the volume keys, the autostart
--- and the layer rule on Hyprland (>= 0.55 Lua config). Re-run the installer to
--- regenerate it after editing this template in the repository.
+-- This file is the source of truth for the bar, the autostart, every
+-- keybinding and the layer rule on Hyprland (>= 0.55 Lua config). Re-run the
+-- installer to regenerate it after editing this template in the repository.
 --
 -- Nothing here is required for the elements to work: they are ordinary
 -- binaries, and `hypr-osd-bar` in a terminal does exactly what the autostart
@@ -23,6 +23,8 @@ local media_osd = "@MEDIA_OSD_BIN@"
 local session_osd = "@SESSION_OSD_BIN@"
 local switcher_osd = "@SWITCHER_OSD_BIN@"
 local overview_osd = "@OVERVIEW_OSD_BIN@"
+local launcher_osd = "@LAUNCHER_OSD_BIN@"
+local apps_osd = "@APPS_OSD_BIN@"
 
 -- Start the daemons at login. The bar is visible from that moment (it is the
 -- bar); the cards show nothing until they are asked to. They all sit in the
@@ -53,6 +55,13 @@ if AUTOSTART then
         hl.exec_cmd(session_osd)
         hl.exec_cmd(switcher_osd)
         hl.exec_cmd(overview_osd)
+        -- The launcher scans the installed applications once, while nobody is
+        -- waiting, so the first SUPER + SPACE draws at once instead of reading a
+        -- few hundred .desktop files first. The applications panel reads the
+        -- same list, and does it in the same pass-rich moment: it is a card the
+        -- bar's button opens, so it has to be ready to paint on the first click.
+        hl.exec_cmd(launcher_osd)
+        hl.exec_cmd(apps_osd)
 
         -- hypridle locks on idle and before sleep (see the lock screen section
         -- below). It is optional and independent of the OSDs, so it is started
@@ -286,11 +295,15 @@ hl.bind("XF86PowerOff", hl.dsp.exec_cmd(session_osd .. " toggle"), {
 -- Alt-Tab: every window you have open, in the order you last used them, with
 -- its application icon and its title, in a grid in the middle of the screen.
 --
--- This is the one element that takes the keyboard, and it has to be: a switch
--- ends when you let go of Alt, and the only way to see that release is to own
--- the keyboard for as long as the card is up. It is a held gesture, so nothing
--- else is affected - and the card is gone the moment you let go (or press
--- Enter, or Escape to walk away without switching).
+-- This is one of the three elements that take the keyboard, and it has to be: a
+-- switch ends when you let go of Alt, and the only way to see that release is to
+-- own the keyboard for as long as the card is up. It is a held gesture, so
+-- nothing else is affected - and the card is gone the moment you let go (or
+-- press Enter, or Escape to walk away without switching).
+--
+-- (The other three are the workspace overview below, which owns Escape and the
+-- arrows while it is up, and the launcher and the applications panel, which have
+-- to be typed into.)
 --
 -- No `repeating`: holding the key down *is* the walk, and those repeats arrive
 -- on the card's own keyboard rather than through this bind - which is also why
@@ -312,11 +325,70 @@ hl.bind("ALT + SHIFT + TAB", hl.dsp.exec_cmd(switcher_osd .. " prev"))
 -- A tap rather than a hold, and the key is a *toggle*: the same gesture takes
 -- the card away again. Like the switcher, this card takes the keyboard while it
 -- is up - Escape and the arrows have to be the card's own keys, or they would
--- be fighting whatever is behind it. It is the second element that does, and
--- both of them are cards you opened on purpose.
+-- be fighting whatever is behind it. It is one of the three elements that do,
+-- and all of them are cards you opened on purpose.
 --
 -- No `locked`: an overview of the desktop is nothing to show over a lock screen.
 hl.bind("SUPER + SHIFT + TAB", hl.dsp.exec_cmd(overview_osd .. " toggle"))
+
+
+------------------------------------
+---- THE LAUNCHER ------------------
+------------------------------------
+
+-- SUPER + SPACE: a search card in the middle of the screen. Type and it matches
+-- the applications installed on the machine - names, generic names, keywords and
+-- categories - and, a moment later, the files and folders in your own
+-- directories (Documents, Downloads, Desktop, ... - a bounded walk, not an
+-- index). Enter opens the selected one, Escape or the key again takes the card
+-- away, and the arrows walk the list.
+--
+-- This is where linux-launchpad used to be. That one was a Tauri app: a WebKit
+-- webview, a Node build and a bundled browser engine to draw one search bar,
+-- which is a lot of memory for a rectangle with a text field in it. The element
+-- replaces it - the installer comments its `require("launchpad")` line out (and
+-- leaves the app itself installed), so the key belongs to exactly one launcher.
+--
+-- Like the switcher and the overview, the card takes the keyboard while it is up:
+-- a layer-shell surface cannot be typed into otherwise. So it is dismissed by
+-- Escape, by the key again, or - if you walked away - by its own `idle_close_ms`
+-- (a minute by default), which is what makes that safe across a screen lock.
+-- No `locked`: a launcher over the lock screen is exactly the wrong thing.
+hl.bind("SUPER + SPACE", hl.dsp.exec_cmd(launcher_osd .. " toggle"), {
+    description = "Launcher: search applications and files",
+})
+
+
+------------------------------------
+---- THE APPLICATIONS PANEL -------
+------------------------------------
+
+-- The button at the bar's *left* end opens the applications panel: the drawer
+-- of every application that is installed, with the same search field the
+-- launcher has. This is the old launchpad's main window - the grid with the
+-- category list down the side and the favourites on top - rebuilt as a card of
+-- this collection. Nothing binds it: the trigger is the bar's own button, which
+-- is the point of it (a launcher you can reach without a key is one you can
+-- reach with the pointer that is already there).
+--
+-- The bar runs this element, so it is the *bar* that needs to know where the
+-- binary is: `apps_command` in ~/.config/hypr-osd/bar.conf. It is not wired
+-- here at all - the only thing this file does for the panel is start it.
+--
+-- Like the launcher it takes the keyboard while it is up (a layer surface cannot
+-- be typed into otherwise): arrow keys walk the tiles, Tab changes drawer,
+-- Enter opens, Escape - or the button again - closes it, and a right click on a
+-- tile pins it to the "Pinned" drawer. `idle_close_ms` in
+-- ~/.config/hypr-osd/apps.conf is the safety net for a panel that was up when
+-- the screen locked.
+--
+-- If you would rather have a key for it as well, this is the free one this
+-- desktop has (SUPER + SPACE is the search card, so the *browse* card is what
+-- this would add):
+--
+-- hl.bind("SUPER + A", hl.dsp.exec_cmd(apps_osd .. " toggle"), {
+--     description = "Applications: every application, in drawers",
+-- })
 
 
 --------------------------------
@@ -352,7 +424,8 @@ hl.bind("SUPER + L", hl.dsp.exec_cmd("sh -c 'pidof hyprlock >/dev/null || hyprlo
 -- windows: no window rules apply to them, and they need none. Hyprland places
 -- them (the bar across the top, a card at the bottom edge or in the middle, on
 -- the focused monitor, above fullscreen windows), and none of them ever takes
--- keyboard focus - with the two deliberate exceptions noted above.
+-- keyboard focus - with the four deliberate exceptions noted above (the
+-- switcher, the overview, the launcher and the applications panel).
 --
 -- The one thing worth configuring is what happens to the *transparent* frame
 -- around a card: it is part of the surface, so without this rule it would

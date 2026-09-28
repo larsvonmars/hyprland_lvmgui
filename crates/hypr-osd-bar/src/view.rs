@@ -1,10 +1,11 @@
 //! The bar itself: one row, three sections, and the pills in them.
 //!
-//! Left: the workspaces, then the focused window's title. Centre: the clock,
-//! which is also the handle for the island popup (hover it and the panel
-//! unfolds; see the `hypr-osd-island` element). Right: the media pill, the
-//! network, the system info pill (CPU, memory, temperature, pending updates),
-//! the volume, the battery, the tray - and the power button at the far end.
+//! Left: the button that opens the applications panel, then the workspaces, then
+//! the focused window's title. Centre: the clock, which is also the handle for the
+//! island popup (hover it and the panel unfolds; see the `hypr-osd-island`
+//! element). Right: the media pill, the network, the system info pill (CPU,
+//! memory, temperature, pending updates), the volume, the battery, the tray - and
+//! the power button at the far end.
 //!
 //! The view owns no state of its own beyond what the last render put on screen.
 //! Everything it shows is handed to it by `main` (a snapshot from Hyprland, a
@@ -46,6 +47,8 @@ const CLOCK: &str = "\u{f017}";
 const MEDIA_NOTE: &str = "\u{f001}";
 const MEDIA_PAUSE: &str = "\u{f04c}";
 const POWER: &str = "\u{f011}";
+/// The applications button at the far left: a grid of squares.
+const APPS: &str = "\u{f00a}";
 
 /// The three system info glyphs: processor, memory, thermometer - the same ones
 /// the bar this replaces used for them.
@@ -198,6 +201,8 @@ pub struct BarView {
     /// on this screen and measured against it.
     connector: String,
     pub root: gtk::CenterBox,
+    /// The button that opens the applications panel, at the far left.
+    apps: Pill,
     workspaces: gtk::Box,
     title: gtk::Label,
     clock: Pill,
@@ -265,8 +270,22 @@ impl BarView {
         // much room the right half of the bar gets.
         text::cap_width(&title, settings.title_width);
 
+        // The applications button is the first thing in the bar, at the far left -
+        // the corner every desktop keeps the thing that opens everything else. It
+        // *toggles* the panel rather than asking it to open: the panel keeps the
+        // keyboard while it is up, so the button has to be the way back out (see
+        // the handler in `view` and the element's own notes).
+        let apps = Pill::new("apps");
+        {
+            let command = settings.apps_command.clone();
+            apps.on_click(move || {
+                sources::launch(&command, &["toggle"]);
+            });
+        }
+
         let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         left.add_css_class("section");
+        left.append(&apps.button);
         left.append(&workspaces);
         left.append(&title);
 
@@ -481,6 +500,7 @@ impl BarView {
         let this = BarView {
             connector: connector.to_owned(),
             root,
+            apps,
             workspaces,
             title,
             clock,
@@ -500,6 +520,9 @@ impl BarView {
         this.power.set(POWER, &[]);
         this.power
             .tooltip(Some("Session: lock, suspend, log out, reboot, shut down"));
+        this.apps.set(APPS, &[]);
+        this.apps
+            .tooltip(Some("Applications: everything installed, in drawers"));
         this.media.set_visible(false);
         // The system info pill has nothing to show until the second CPU sample
         // a second from now; it is filled in by the first real reading.
@@ -671,6 +694,13 @@ impl BarView {
     /// two panels are two processes and either can be up on its own.
     pub fn set_status_open(&self, open: bool) {
         set_class(&self.status.button, "panel-open", open);
+    }
+
+    /// And the same for the applications panel, whose flag the panel itself keeps
+    /// (`state::apps_panel`) - the button that opened it wears the accent while it
+    /// is up, so the two read as one object.
+    pub fn set_apps_open(&self, open: bool) {
+        set_class(&self.apps.button, "panel-open", open);
     }
 
     /// The sound level. One of the three parts of the status pill, so it is

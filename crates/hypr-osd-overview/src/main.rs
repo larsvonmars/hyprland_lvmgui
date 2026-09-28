@@ -16,12 +16,13 @@
 //! workspace.) Where no picture can be had, the tile falls back to the
 //! application's icon and says so with its frame.
 //!
-//! This is the second element that takes the keyboard. The switcher does it to
-//! hear the Alt release that ends a switch; this one does it because a card you
+//! This is one of the three elements that take the keyboard. The switcher does it
+//! to hear the Alt release that ends a switch; this one does it because a card you
 //! opened on purpose owns Escape, the arrows and its digits while it is up, and
 //! there is no way to hear those keys and also let them through to whatever is
-//! behind the card. Both are cards you asked for; every other element still
-//! never takes a keystroke.
+//! behind the card. The launcher is the third, and it has to be typed into. All
+//! three are cards you asked for; every other element still never takes a
+//! keystroke.
 //!
 //! Verbs (`hypr-osd-overview <verb>`):
 //!

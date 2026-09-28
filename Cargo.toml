@@ -16,6 +16,8 @@ members = [
     "crates/hypr-osd-session",
     "crates/hypr-osd-switcher",
     "crates/hypr-osd-overview",
+    "crates/hypr-osd-launcher",
+    "crates/hypr-osd-apps",
 ]
 
 [workspace.package]

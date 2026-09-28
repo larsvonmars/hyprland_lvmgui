@@ -26,6 +26,9 @@
 //!   media card, the bar's media pill and the island popup.
 //! * [`windows`] - Hyprland's windows and workspaces, as far as a card needs
 //!   them, shared by the two elements that draw windows.
+//! * [`apps`] - the applications installed on this machine: the `.desktop`
+//!   parsing, the drawer each one belongs in, the score a query gives it, and how
+//!   to start it. Shared by the launcher and the applications panel.
 //! * [`icons`] - a window's class turned into the application's icon.
 //! * [`hyprctl`] - asking Hyprland itself (the focused output, the window list,
 //!   a dispatch) the same way audio goes through `wpctl`.
@@ -39,6 +42,7 @@
 //! element"): one binary, one app id under `com.schells2.osd.*`, one namespace
 //! prefix `hypr-osd`, verbs on the command line.
 
+pub mod apps;
 pub mod config;
 pub mod css;
 pub mod follow;
@@ -54,6 +58,7 @@ pub mod output;
 pub mod state;
 pub mod system;
 pub mod text;
+pub mod timer;
 pub mod windows;
 
 pub use config::Config;

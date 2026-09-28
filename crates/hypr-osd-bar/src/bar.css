@@ -93,6 +93,27 @@ label.title {
     padding: 0 4px;
 }
 
+/* ---- the applications button ---------------------------------------------- */
+/* It is the bar's own corner rather than a reading, so it is quiet until it is
+ * looked at - and while its panel is unfolded it wears the accent, exactly as
+ * the clock and the status pill do while their panels are. */
+button.apps {
+    padding: 0 10px;
+    border-radius: 999px;
+    color: @fg_dim;
+}
+
+button.apps:hover {
+    background-color: @surface_h;
+    color: @accent;
+}
+
+button.apps.panel-open {
+    background-color: @accent_tint;
+    color: @accent;
+    box-shadow: 0 0 14px @glow;
+}
+
 /* ---- the clock (and the island popup's handle) ---------------------------- */
 button.clock {
     padding: 0 14px;
