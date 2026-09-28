@@ -1,0 +1,4 @@
+<!-- Lucide's `chevron-right`, strokes outlined: see icons/README.md -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+	<path d="M 8 5.695 C 8 6.078, 9.209 7.653, 10.687 9.195 L 13.374 12 10.510 14.990 C 6.314 19.370, 8.413 20.054, 12.748 15.719 L 16.429 12.038 13.018 8.519 C 9.772 5.169, 8 4.172, 8 5.695" stroke="none" fill="black" fill-rule="evenodd"/>
+</svg>

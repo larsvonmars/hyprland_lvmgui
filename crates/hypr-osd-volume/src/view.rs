@@ -1,9 +1,9 @@
-//! The volume card: speaker glyph, slider, percentage.
+//! The volume card: speaker icon, slider, percentage.
 //!
-//! Layout and behaviour, in one place because they are one thing: the glyph and
+//! Layout and behaviour, in one place because they are one thing: the icon and
 //! the slider show the same value the slider *sets*, so a drag has to go back to
-//! the sink and the sink has to come back to the glyph. `render` is the only
-//! way in, `hook` is the only way out.
+//! the sink and the sink has to come back to the icon. `render` is the only way
+//! in, `hook` is the only way out.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -11,22 +11,20 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::Osd;
 
 use crate::sink::{self, Sink};
 use crate::Settings;
 
-/// The desktop's own three symbols (the same three the bar's volume pill uses),
-/// so the OSD and the bar never disagree about what a level looks like: off/low,
-/// down, up - one per third, with mute forcing the first one.
-const GLYPH_OFF: &str = "\u{f026}";
-const GLYPH_LOW: &str = "\u{f027}";
-const GLYPH_HIGH: &str = "\u{f028}";
+/// How large the speaker is drawn. The card is the bar's volume signal one size
+/// larger, so the icon is a step up from the 14px a pill draws.
+const ICON: i32 = 16;
 
 pub struct VolumeView {
     /// The card's content, handed to the shell.
     pub root: gtk::Box,
-    glyph: gtk::Label,
+    speaker: gtk::Image,
     scale: gtk::Scale,
     value: gtk::Label,
     /// The last percentage a *drag* pushed to the sink, so sweeping the pointer
@@ -39,9 +37,13 @@ pub struct VolumeView {
 
 impl VolumeView {
     pub fn new(settings: &Settings) -> Self {
-        let glyph = gtk::Label::new(None);
-        glyph.add_css_class("glyph");
-        glyph.set_valign(gtk::Align::Center);
+        // The icon is fixed-width rather than icon-width so the slider does not
+        // shift when the level moves between one third and the next: the three
+        // speakers are not the same width. Its size is the pixel size, not a
+        // font size - it is a drawing now, not a character.
+        let speaker = icons::lucide(names::VOLUME_HIGH, ICON);
+        speaker.add_css_class("speaker");
+        speaker.set_valign(gtk::Align::Center);
 
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, settings.max, 1.0);
         scale.add_css_class("volume");
@@ -60,13 +62,13 @@ impl VolumeView {
         value.set_width_chars(4);
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        root.append(&glyph);
+        root.append(&speaker);
         root.append(&scale);
         root.append(&value);
 
         VolumeView {
             root,
-            glyph,
+            speaker,
             scale,
             value,
             applied: Cell::new(-1),
@@ -121,11 +123,11 @@ impl VolumeView {
         self.applied.set(percent);
         self.scale.set_value(percent as f64);
         self.value.set_text(&format!("{percent}%"));
-        self.glyph.set_text(glyph(percent, sink.muted));
+        icons::set_lucide(&self.speaker, for_level(percent, sink.muted), ICON);
         // One signal, three places: the bar paints a muted sink red, so the
-        // glyph goes red, and the fill follows it.
+        // icon goes red, and the fill follows it.
         for widget in [
-            self.glyph.clone().upcast::<gtk::Widget>(),
+            self.speaker.clone().upcast::<gtk::Widget>(),
             self.scale.clone().upcast(),
             self.root.clone().upcast(),
         ] {
@@ -134,13 +136,18 @@ impl VolumeView {
     }
 }
 
-fn glyph(percent: i32, muted: bool) -> &'static str {
+/// Which of the three speakers a level wears: mute (or nothing) takes the
+/// crossed one whatever the number says, then the two thirds.
+///
+/// The three names are the collection's shared vocabulary, so this card and the
+/// bar's status pill cannot disagree about what a level looks like.
+fn for_level(percent: i32, muted: bool) -> &'static str {
     if muted || percent <= 33 {
-        GLYPH_OFF
+        names::VOLUME_OFF
     } else if percent <= 66 {
-        GLYPH_LOW
+        names::VOLUME_LOW
     } else {
-        GLYPH_HIGH
+        names::VOLUME_HIGH
     }
 }
 

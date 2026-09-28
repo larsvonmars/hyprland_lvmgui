@@ -9,7 +9,7 @@
  *
  * The layout is two columns of tiles: the machine's *load* on the left (three
  * gauges, then the bluetooth radios with one row per device), the machine's
- * *controls* on the right (glyph and name on the left, value or control on the
+ * *controls* on the right (icon and name on the left, value or control on the
  * right), with the pending updates under them.
  *
  * The hierarchy is carried by type size, not by rules and boxes: the gauges are
@@ -59,8 +59,10 @@ label.section {
     letter-spacing: 0.8px;
 }
 
-label.section-glyph {
-    font-size: 11px;
+/* A heading's mark, and the mark on a control row's name. Their size is the
+ * pixel size in view.rs - drawings have no font-size - so all that is left here
+ * is the colour they share with the word beside them. */
+image.section-icon {
     color: @fg_faint;
 }
 
@@ -78,8 +80,7 @@ box.metric-head {
     margin-bottom: 1px;
 }
 
-label.metric-glyph {
-    font-size: 10px;
+image.metric-icon {
     color: @fg_dim;
 }
 
@@ -204,7 +205,7 @@ box.bt-state {
 }
 
 /* The round buttons: the power switch, and the action at the end of a device's
- * row. One glyph, a tint on hover, and no word - the tooltip carries that. */
+ * row. One icon, a tint on hover, and no word - the tooltip carries that. */
 button.iconbtn {
     background-color: @surface;
     background-image: none;
@@ -242,7 +243,7 @@ button.iconbtn:disabled {
     color: @fg_faint;
 }
 
-/* The spinner that stands in for a glyph while a button is talking to the
+/* The spinner that stands in for an icon while a button is talking to the
  * controller (a scan, a connect): accent, because "something is happening"
  * is its whole message. */
 spinner.btn-spinner {
@@ -251,9 +252,9 @@ spinner.btn-spinner {
     color: @accent;
 }
 
-label.btn-glyph {
-    font-size: 11px;
-}
+/* A chip's icon is sized in view.rs (`BUTTON_ICON`); what a rule *here* would
+ * have to do is nothing, which is why there is no longer one - the old
+ * `label.btn-glyph` is gone with the font glyphs it sized. */
 
 /* The word inside a chip. It needs a rule of its own because `base.css` sets a
  * font size on `*`: a size on the *button* never reaches the label, so the words
@@ -269,7 +270,7 @@ box.actions label.btn-word {
     font-size: 10px;
 }
 
-/* A device: an edge mark when it is live, a badge with its class glyph, the
+/* A device: an edge mark when it is live, a badge with its class icon, the
  * name and its state, then the link meter, the battery pill, and the one
  * action that makes sense for it. The hover fill is what says the row is a
  * thing at all, since only the buttons at its end are clickable. */
@@ -309,12 +310,11 @@ box.dev-badge.live {
     background-color: @accent_tint;
 }
 
-box.dev-badge > label.dev-glyph {
-    font-size: 11px;
+box.dev-badge > image.dev-icon {
     color: @fg_dim;
 }
 
-box.dev-badge.live > label.dev-glyph {
+box.dev-badge.live > image.dev-icon {
     color: @accent;
 }
 
@@ -354,13 +354,13 @@ box.dev-batt.low {
     background-color: @warn_tint;
 }
 
-box.dev-batt label.batt-glyph,
+box.dev-batt image.batt-icon,
 box.dev-batt label.batt-value {
     font-size: 9px;
     color: @fg_dim;
 }
 
-box.dev-batt.low label.batt-glyph,
+box.dev-batt.low image.batt-icon,
 box.dev-batt.low label.batt-value {
     color: @warn;
 }

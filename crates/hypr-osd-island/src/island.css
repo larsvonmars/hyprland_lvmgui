@@ -67,8 +67,9 @@ label.section {
     color: @fg_faint;
 }
 
-label.section-glyph {
-    font-size: 11px;
+/* The heading's mark: the pixel size is in view.rs, so what is here is only the
+ * colour it shares with the word beside it. */
+image.section-icon {
     color: @fg_faint;
 }
 
@@ -116,7 +117,6 @@ button.transport-button {
     border-radius: 999px;
     background-color: @surface;
     color: @fg;
-    font-size: 12px;
     padding: 2px 0;
 }
 

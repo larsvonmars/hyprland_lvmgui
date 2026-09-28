@@ -2,7 +2,7 @@
 //! closes.
 //!
 //! The rows are the desktop's session menu as a card: the five actions, each
-//! an OSD: glyph plus label, a hover tint, `@crit` when a row is armed or
+//! an OSD: icon plus label, a hover tint, `@crit` when a row is armed or
 //! destructive - and the "click again" rule, which is the one thing here that has
 //! to be right. A card that appears under the pointer because a hardware key was
 //! pressed must not be able to shut the machine down with a single click.
@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::prelude::*;
+use hypr_osd_core::icons;
 use hypr_osd_core::Osd;
 
 use crate::actions::{self, Action};
@@ -20,6 +21,11 @@ use crate::actions::{self, Action};
 /// (config `duration_ms`) may be shorter than this, and an armed row must not
 /// vanish before it can be answered - so arming re-arms the timer with this.
 const CONFIRM_GRACE: Duration = Duration::from_secs(6);
+
+/// The icon column: as wide as every row's icon, and as wide as the largest of
+/// them is drawn, so the five labels line up whatever mark is beside them.
+const ICON: i32 = 17;
+const ICON_COLUMN: i32 = 26;
 
 pub struct SessionView {
     /// The card's content, handed to the shell.
@@ -140,11 +146,9 @@ struct Row {
 
 impl Row {
     fn new(action: Action) -> Self {
-        let glyph = gtk::Label::new(Some(action.glyph));
-        // No font-family: the base stylesheet already sets the bar's font, which
-        // is where these codepoints come from.
-        glyph.add_css_class("icon");
-        glyph.set_size_request(26, -1);
+        let icon = icons::lucide(action.icon, ICON);
+        icon.add_css_class("row-icon");
+        icon.set_size_request(ICON_COLUMN, -1);
 
         let label = gtk::Label::new(Some(&action.label));
         label.set_halign(gtk::Align::Start);
@@ -152,7 +156,7 @@ impl Row {
         label.set_hexpand(true);
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        content.append(&glyph);
+        content.append(&icon);
         content.append(&label);
 
         let button = gtk::Button::new();

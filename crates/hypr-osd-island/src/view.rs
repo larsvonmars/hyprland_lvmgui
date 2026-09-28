@@ -47,26 +47,20 @@ use std::time::Instant;
 use gtk::glib;
 use gtk::prelude::*;
 
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::Playback;
-use hypr_osd_core::{icons, text};
+use hypr_osd_core::text;
 
 use crate::calendar::Month;
 use crate::notify::{self, History, Item, Notifications};
 use crate::Settings;
 
-const CLOCK: &str = "\u{f017}";
-const PLAY: &str = "\u{f04b}";
-const PAUSE: &str = "\u{f04c}";
-const PREVIOUS: &str = "\u{f048}";
-const NEXT: &str = "\u{f051}";
-const BELL: &str = "\u{f0f3}";
-const BELL_OFF: &str = "\u{f1f6}";
-const LIST: &str = "\u{f03a}";
-const EYE_OFF: &str = "\u{f070}";
-const TRASH: &str = "\u{f1f8}";
-const CHEVRON_LEFT: &str = "\u{f104}";
-const CHEVRON_RIGHT: &str = "\u{f105}";
-const MUSIC: &str = "\u{f001}";
+/// How large the panel's own marks are drawn. Two sizes, because they answer
+/// two questions: a heading's or a chip's icon sits beside a 10px word and is
+/// part of it, while the transport and calendar buttons are what the pointer
+/// aims at.
+const SMALL_ICON: i32 = 12;
+const BUTTON_ICON: i32 = 14;
 
 /// The numbers a notification row is measured against. The first two are the
 /// horizontal padding of `box.tile` and `box.notif-row` in `island.css`, and the
@@ -167,13 +161,13 @@ impl IslandView {
         progress_row.append(&progress);
         progress_row.append(&times);
 
-        let previous = transport_button(PREVIOUS, "Previous track", || {
+        let previous = transport_button(names::SKIP_BACK, "Previous track", || {
             let _ = hypr_osd_core::mpris::skip(hypr_osd_core::mpris::Direction::Previous);
         });
-        let play = transport_button(PLAY, "Play or pause", || {
+        let play = transport_button(names::PLAY, "Play or pause", || {
             let _ = hypr_osd_core::mpris::play_pause();
         });
-        let next = transport_button(NEXT, "Next track", || {
+        let next = transport_button(names::SKIP_FORWARD, "Next track", || {
             let _ = hypr_osd_core::mpris::skip(hypr_osd_core::mpris::Direction::Next);
         });
         let transport = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -183,7 +177,7 @@ impl IslandView {
             transport.append(button);
         }
 
-        let media = tile("now playing", MUSIC);
+        let media = tile("now playing", names::MUSIC);
         media.append(&track);
         media.append(&artist);
         media.append(&progress_row);
@@ -199,19 +193,19 @@ impl IslandView {
         let notif_rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
         notif_rows.add_css_class("notif-rows");
 
-        let dnd = chip_button(BELL, "DND off", {
+        let dnd = chip_button(names::BELL, "DND off", {
             let client = settings.notifications_command.clone();
             move || notify_command(&client, notify::Command::ToggleDnd)
         });
-        let open = chip_button(LIST, "Open centre", {
+        let open = chip_button(names::LIST, "Open centre", {
             let client = settings.notifications_command.clone();
             move || notify_command(&client, notify::Command::ToggleCentre)
         });
-        let hide = chip_button(EYE_OFF, "Hide all", {
+        let hide = chip_button(names::EYE_OFF, "Hide all", {
             let client = settings.notifications_command.clone();
             move || notify_command(&client, notify::Command::HideShown)
         });
-        let clear = chip_button(TRASH, "Clear all", {
+        let clear = chip_button(names::TRASH, "Clear all", {
             let client = settings.notifications_command.clone();
             move || notify_command(&client, notify::Command::DismissAll)
         });
@@ -229,7 +223,7 @@ impl IslandView {
             notif_actions.append(&line);
         }
 
-        let notifications = tile("notifications", BELL);
+        let notifications = tile("notifications", names::BELL);
         notifications.append(&notif_count);
         notifications.append(&notif_rows);
         notifications.append(&notif_actions);
@@ -243,8 +237,8 @@ impl IslandView {
         // ---- calendar tile -------------------------------------------------
         let calendar_title = gtk::Label::new(None);
         calendar_title.add_css_class("cal-title");
-        let previous_month = icon_button(CHEVRON_LEFT, "Previous month");
-        let next_month = icon_button(CHEVRON_RIGHT, "Next month");
+        let previous_month = icon_button(names::CHEVRON_LEFT, "Previous month");
+        let next_month = icon_button(names::CHEVRON_RIGHT, "Next month");
         let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         title_row.add_css_class("cal-head-row");
         title_row.append(&previous_month);
@@ -257,7 +251,7 @@ impl IslandView {
         calendar_grid.set_column_spacing(2);
         calendar_grid.set_halign(gtk::Align::Center);
 
-        let calendar = tile("calendar", CLOCK);
+        let calendar = tile("calendar", names::CLOCK);
         calendar.append(&title_row);
         calendar.append(&calendar_grid);
 
@@ -348,7 +342,7 @@ impl IslandView {
             self.artist.set_visible(false);
             self.progress_row.set_visible(false);
             self.transport.set_sensitive(false);
-            self.play.set_label(PLAY);
+            set_button_icon(&self.play, names::PLAY);
             return;
         };
 
@@ -368,8 +362,14 @@ impl IslandView {
         }
 
         self.transport.set_sensitive(true);
-        self.play
-            .set_label(if playback.playing { PAUSE } else { PLAY });
+        set_button_icon(
+            &self.play,
+            if playback.playing {
+                names::PAUSE
+            } else {
+                names::PLAY
+            },
+        );
     }
 
     /// The notification tile: the count, the rows, and the buttons that only make
@@ -390,7 +390,14 @@ impl IslandView {
         } else {
             "DND off"
         });
-        set_glyph(&self.dnd, if notifications.dnd { BELL_OFF } else { BELL });
+        set_chip_icon(
+            &self.dnd,
+            if notifications.dnd {
+                names::BELL_OFF
+            } else {
+                names::BELL
+            },
+        );
         set_class(&self.dnd, "on", notifications.dnd);
 
         // Hiding or clearing nothing is not a thing to offer.
@@ -556,9 +563,9 @@ impl IslandView {
 // ---------------------------------------------------------------------------
 
 /// A tile: the nested surface inside the card, with its section heading.
-fn tile(title: &str, glyph: &str) -> gtk::Box {
-    let heading = gtk::Label::new(Some(glyph));
-    heading.add_css_class("section-glyph");
+fn tile(title: &str, icon: &str) -> gtk::Box {
+    let heading = icons::lucide(icon, SMALL_ICON);
+    heading.add_css_class("section-icon");
     let name = gtk::Label::new(Some(title));
     name.add_css_class("section");
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -661,9 +668,8 @@ fn notification_row(item: &Item, text_width: i32, now: Instant) -> (gtk::Box, gt
 
 /// A button with an icon and a word, the way every control in this panel is
 /// built: the icon carries the meaning, the word removes the doubt.
-fn chip_button(glyph: &str, label: &str, action: impl Fn() + 'static) -> gtk::Button {
-    let icon = gtk::Label::new(Some(glyph));
-    icon.add_css_class("chip-glyph");
+fn chip_button(icon: &str, label: &str, action: impl Fn() + 'static) -> gtk::Button {
+    let icon = icons::lucide(icon, SMALL_ICON);
     let text = gtk::Label::new(Some(label));
     text.add_css_class("chip-text");
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -680,8 +686,9 @@ fn chip_button(glyph: &str, label: &str, action: impl Fn() + 'static) -> gtk::Bu
 }
 
 /// A button that is only an icon, for the transport and the calendar paging.
-fn icon_button(glyph: &str, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::with_label(glyph);
+fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.set_child(Some(&icons::lucide(icon, BUTTON_ICON)));
     button.add_css_class("flat");
     button.set_tooltip_text(Some(tooltip));
     button.set_focus_on_click(false);
@@ -689,8 +696,8 @@ fn icon_button(glyph: &str, tooltip: &str) -> gtk::Button {
     button
 }
 
-fn transport_button(glyph: &str, tooltip: &str, action: impl Fn() + 'static) -> gtk::Button {
-    let button = icon_button(glyph, tooltip);
+fn transport_button(icon: &str, tooltip: &str, action: impl Fn() + 'static) -> gtk::Button {
+    let button = icon_button(icon, tooltip);
     button.add_css_class("transport-button");
     button.connect_clicked(move |_| action());
     button
@@ -707,20 +714,29 @@ fn label_of(button: &gtk::Button) -> gtk::Label {
         .expect("a chip button's second child is its label")
 }
 
-/// The icon label inside a [`chip_button`].
-fn glyph_of(button: &gtk::Button) -> gtk::Label {
+/// The icon inside a [`chip_button`] - the half that stays while the word
+/// beside it changes.
+fn icon_of(button: &gtk::Button) -> gtk::Image {
     button
         .child()
         .and_downcast::<gtk::Box>()
         .and_then(|row| row.first_child())
-        .and_downcast::<gtk::Label>()
-        .expect("a chip button's first child is its glyph")
+        .and_downcast::<gtk::Image>()
+        .expect("a chip button's first child is its icon")
 }
 
-fn set_glyph(button: &gtk::Button, glyph: &str) {
-    let label = glyph_of(button);
-    if label.text() != glyph {
-        label.set_text(glyph);
+/// Re-point a chip's icon at another drawing, which is how the DND switch says
+/// which way it is switched without the button being rebuilt.
+fn set_chip_icon(button: &gtk::Button, icon: &str) {
+    icons::set_lucide(&icon_of(button), icon, SMALL_ICON);
+}
+
+/// The same for a button that is *only* an icon (see [`icon_button`]): the play
+/// button becomes a pause in place, because rebuilding it would take the button
+/// out from under the pointer that is resting on it.
+fn set_button_icon(button: &gtk::Button, icon: &str) {
+    if let Some(image) = button.child().and_downcast::<gtk::Image>() {
+        icons::set_lucide(&image, icon, BUTTON_ICON);
     }
 }
 

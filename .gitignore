@@ -1,2 +1,6 @@
 # Rust build output. Cargo.lock IS committed: these are binaries, not libraries.
 /target
+
+# The outliner `icons/fetch-lucide.sh` installs to outline the icons. It is a
+# vendoring tool, not part of the build: the icons it produces are committed.
+crates/hypr-osd-core/icons/.outline/

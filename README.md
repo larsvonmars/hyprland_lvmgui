@@ -82,7 +82,9 @@ There is exactly one place to change a colour, and it is not in a program:
    resolve, silently, which from the outside looks like a styling bug.
 2. **The recipes are `base.css`.**
    `crates/hypr-osd-core/src/base.css` carries the typography
-   (`MesloLGS Nerd Font Mono` 13px/500), the transparent surface, the card and
+   (`MesloLGS Nerd Font Mono` 13px/500 — a text face; the icons are not
+   characters but Lucide drawings bundled into `hypr-osd-core`, see
+   `crates/hypr-osd-core/icons/`), the transparent surface, the card and
    the bar, plus the pieces both are built from (tiles, chips, the progress
    recipe). It lives in the binary rather than in the config directory because it
    is the same everywhere and is not something you retheme.
@@ -477,8 +479,9 @@ hypr-osd-session reboot   # run one action now: lock | suspend | logout | reboot
 
 The card's rows are the five actions the desktop offers for this: there is no
 second session menu anywhere now that waybar is gone, so the card is *the* menu
-(it was designed from the old `~/.config/waybar/scripts/popup.py`, whose glyphs
-and wording it keeps). The "destructive actions ask twice" rule still holds:
+(it was designed from the old `~/.config/waybar/scripts/popup.py`, whose
+commands and wording it keeps, and whose icons it now draws as Lucide marks).
+The "destructive actions ask twice" rule still holds:
 `Reboot` and `Shut down` arm on the first click and fire on the second, so a card
 that appeared under the pointer cannot end your session by accident. A verb is
 never confirmed — typing or binding it is already deliberate. **Lock** uses

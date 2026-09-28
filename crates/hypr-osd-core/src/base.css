@@ -24,6 +24,11 @@
  */
 
 /* ---- typography: the bar's face, size and weight ------------------------ */
+/* One monospace face for the whole desktop, which is what keeps the bar's
+ * readings from shifting as they change. It used to be a *Nerd Font* because
+ * every icon was a private-use codepoint in a label; the icons are drawings in
+ * the binary now (see `icons/`), so this is a text face and nothing more - a
+ * Nerd Font still works here, but nothing depends on it any more. */
 * {
     font-family: "MesloLGS Nerd Font Mono", "Noto Sans Mono", monospace;
     font-size: 13px;

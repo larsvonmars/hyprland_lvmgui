@@ -48,10 +48,23 @@ button.module:active {
     background-color: @accent_tint;
 }
 
+/* ---- the pieces a pill's face is made of -------------------------------- */
+/* A face is an icon and its readings, side by side, with a `·` between parts
+ * (see `Part` in view.rs) - so the gap and the separator's colour are set once
+ * here rather than per pill. The icons take their size from view.rs. */
+box.face {
+    border-radius: 4px;
+}
+
+box.face label.separator {
+    color: @fg_faint;
+}
+
 /* ---- workspaces ------------------------------------------------------------ */
 /* The five (or however many) pills that keep room for the workspaces you can
- * switch to. State is carried by colour, not by a different glyph, except for
- * the one you are on: that one gets the accent fill and a dark glyph. */
+ * switch to. State is carried by colour, not by a different mark, except for
+ * the one you are on: that one gets the accent fill, a dark dot and a dark
+ * number. */
 button.ws {
     min-width: 20px;
     padding: 0 5px;
@@ -261,9 +274,11 @@ button.stats.critical {
 }
 
 /* ---- power ---------------------------------------------------------------- */
+/* No font-size: the button is a mark now, and view.rs gives it its pixel size.
+ * The accent on hover is the one place the bar says "this is the dangerous
+ * one" without a word. */
 button.power {
     color: @fg_dim;
-    font-size: 15px;
     margin-right: 3px;
 }
 

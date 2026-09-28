@@ -25,9 +25,16 @@ use std::rc::Rc;
 
 use gtk::gdk;
 use gtk::prelude::*;
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::text;
 
 use crate::Settings;
+
+/// How large the panel's own marks are drawn: the search symbol, which is as big
+/// as the field's text, and the pin in a tile's corner, which is a note rather
+/// than a control.
+const SEARCH_ICON: i32 = 16;
+const PIN_ICON: i32 = 12;
 
 /// What separates the two panes of the body. Public because the element works the
 /// tile pane's width out from it (`Settings::grid_width`), and the two must not be
@@ -64,7 +71,7 @@ pub struct Tile {
 /// The widgets of one tile, kept between renders (see the module comment).
 struct TileWidgets {
     button: gtk::Button,
-    pin: gtk::Label,
+    pin: gtk::Image,
     pinned: Cell<bool>,
     /// Where the tile sits in the *current* rendering. The click handler is
     /// connected once, when the tile is built, so this is how it learns which row
@@ -122,8 +129,12 @@ impl AppsView {
     /// Build the widgets from the same settings the element laid the card out
     /// with, so the two cannot disagree about how wide the sidebar is.
     pub fn new(settings: &Settings) -> Self {
-        let search_glyph = gtk::Label::new(Some("\u{f002}"));
-        search_glyph.add_css_class("search-glyph");
+        // The same Lucide search symbol the launcher's field wears: the two are
+        // the same control asking the same question, and neither should depend on
+        // which icon theme the desktop happens to have.
+        let search = icons::lucide(names::SEARCH, SEARCH_ICON);
+        search.add_css_class("search-icon");
+        search.set_valign(gtk::Align::Center);
 
         let entry = gtk::Entry::new();
         entry.add_css_class("search");
@@ -132,7 +143,7 @@ impl AppsView {
 
         let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         search_row.add_css_class("search-row");
-        search_row.append(&search_glyph);
+        search_row.append(&search);
         search_row.append(&entry);
 
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -462,7 +473,7 @@ impl AppsView {
 
         // The pin mark rides in the corner of the tile; an application that is not
         // pinned does not draw it, so the tile is otherwise the same either way.
-        let pin = gtk::Label::new(Some("\u{f08d}"));
+        let pin = icons::lucide(names::PIN, PIN_ICON);
         pin.add_css_class("pin");
         pin.set_halign(gtk::Align::End);
         pin.set_valign(gtk::Align::Start);
@@ -524,7 +535,7 @@ impl AppsView {
             }
             None => {
                 let label = gtk::Label::new(Some(&spec.glyph));
-                label.add_css_class("tile-glyph");
+                label.add_css_class("tile-letter");
                 holder.append(&label);
             }
         }

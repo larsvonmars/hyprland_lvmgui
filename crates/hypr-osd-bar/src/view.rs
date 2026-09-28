@@ -24,7 +24,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use hypr_osd_core::hardware::{self as sources, Battery, Charging, Network, Volume};
-use hypr_osd_core::icons;
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::Track;
 use hypr_osd_core::system::Reading;
 use hypr_osd_core::text;
@@ -35,54 +35,62 @@ use crate::minimise::{self, Minimised};
 use crate::Settings;
 
 // ---------------------------------------------------------------------------
-// Glyphs
+// Icons
 // ---------------------------------------------------------------------------
 
-/// Workspaces: a filled circle for the one you are on, a hollow one otherwise -
-/// the same pair the bar this replaces used, so the row reads the same way.
-const WS_ACTIVE: &str = "\u{f111}";
-const WS_IDLE: &str = "\u{f10c}";
+/// How large a pill's marks are drawn.
+///
+/// The bar is the tightest place in the collection, so most of them sit inside
+/// 13px text: the workspace row is a step down from that (its dots live in a
+/// 20px pill beside 12px numbers), the applications button and the power button
+/// at the two ends a step up, because those two are aimed at rather than read.
+const ICON: i32 = 14;
+const WS_ICON: i32 = 10;
+const APPS_ICON: i32 = 15;
+const POWER_ICON: i32 = 16;
 
-const CLOCK: &str = "\u{f017}";
-const MEDIA_NOTE: &str = "\u{f001}";
-const MEDIA_PAUSE: &str = "\u{f04c}";
-const POWER: &str = "\u{f011}";
-/// The applications button at the far left: a grid of squares.
-const APPS: &str = "\u{f00a}";
+/// What separates the parts of a pill's face. A word of its own rather than a
+/// character inside one of the readings, so it reads as a separator and not as
+/// another number; Pango's `<small>` is what keeps it quiet.
+const SEPARATOR: &str = "<small>·</small>";
 
-/// The three system info glyphs: processor, memory, thermometer - the same ones
-/// the bar this replaces used for them.
-const STATS_CPU: &str = "\u{f2db}";
-const STATS_MEMORY: &str = "\u{f538}";
-const STATS_TEMP: &str = "\u{f2c7}";
+/// Battery, empty to full, and the charging mark - the one state that is not a
+/// level. Four steps where the font had five: Lucide draws four batteries, and
+/// the top two of the old ladder were two pixels apart anyway.
+const BATTERY_STEPS: [&str; 4] = [
+    names::BATTERY_EMPTY,
+    names::BATTERY_LOW,
+    names::BATTERY_MEDIUM,
+    names::BATTERY_FULL,
+];
 
-/// What separates the parts of a pill's face. Pango's `<small>` is what makes it
-/// read as a separator rather than as another reading.
-const SEPARATOR: &str = " <small>·</small> ";
+/// Signal strength, weak to strong - the wifi arcs, not Lucide's `signal-*` bar
+/// chart: that family puts its ink in the lower left of the box, which at the
+/// size a pill draws it is a dot in a corner (measured - see the `icon-sheet`
+/// example in `hypr-osd-core`).
+const NETWORK_STEPS: [&str; 4] = [
+    names::WIFI_ZERO,
+    names::WIFI_LOW,
+    names::WIFI_HIGH,
+    names::WIFI,
+];
 
-/// Volume, at three levels - the same three the bars and the volume card use.
-const VOLUME_MUTED: &str = "\u{f026}";
-const VOLUME_LOW: &str = "\u{f027}";
-const VOLUME_HIGH: &str = "\u{f028}";
-
-/// Battery, empty to full, and the charging bolt.
-const BATTERY_STEPS: [&str; 5] = ["\u{f244}", "\u{f243}", "\u{f242}", "\u{f241}", "\u{f240}"];
-const BATTERY_CHARGING: &str = "\u{f0e7}";
-
-/// Signal strength, weak to strong.
-const NETWORK_STEPS: [&str; 4] = ["\u{f092}", "\u{f091}", "\u{f090}", "\u{f1eb}"];
-const NETWORK_OFF: &str = "\u{f127}";
-
-/// A player's own glyph, the way the bar this replaces chose one. Unknown
-/// players get the note, which is at least true.
-fn player_glyph(player: &str) -> &'static str {
+/// A player's own mark, the way the bar this replaces chose one.
+///
+/// It is the *kind* of thing a player plays rather than the player itself, and
+/// that is forced by the icon set rather than chosen here: Lucide dropped brand
+/// marks on purpose, so Firefox cannot be Firefox. A browser is a compass and a
+/// browser on Chromium a globe, a video player a clapperboard, a streamer the
+/// audio lines of one - and unknown players get the note, which is at least
+/// true.
+fn player_icon(player: &str) -> &'static str {
     match player.to_ascii_lowercase().as_str() {
-        "vlc" => "\u{f04b}",
-        "mpv" | "celluloid" => "\u{f03d}",
-        "spotify" => "\u{f1bc}",
-        "firefox" | "firefoxdeveloperedition" => "\u{f269}",
-        "chromium" | "chrome" | "google-chrome" | "brave" => "\u{f268}",
-        _ => MEDIA_NOTE,
+        "vlc" => names::PLAY,
+        "mpv" | "celluloid" => names::CLAPPERBOARD,
+        "spotify" => names::AUDIO_LINES,
+        "firefox" | "firefoxdeveloperedition" => names::COMPASS,
+        "chromium" | "chrome" | "google-chrome" | "brave" => names::GLOBE,
+        _ => names::MUSIC,
     }
 }
 
@@ -90,7 +98,31 @@ fn player_glyph(player: &str) -> &'static str {
 // Pills
 // ---------------------------------------------------------------------------
 
-/// One pill: a flat button with a label in it.
+/// One part of a pill's face: a mark and the reading it belongs to.
+///
+/// A pill used to be a single label with the glyph baked into its text, which no
+/// longer works: GTK *paints* an icon, it cannot parse one out of a string. So a
+/// face is built from parts instead, and the parts are what a repaint compares.
+struct Part {
+    /// The mark that says what the reading is.
+    icon: &'static str,
+    /// The reading, in Pango markup, because the one number that is a *task*
+    /// rather than a reading (the pending updates) is bold. Empty for a part
+    /// that is only a mark - and then no label is made at all, since an empty
+    /// `GtkLabel` still draws a stray mark of its own.
+    text: String,
+}
+
+impl Part {
+    fn new(icon: &'static str, text: impl Into<String>) -> Self {
+        Part {
+            icon,
+            text: text.into(),
+        }
+    }
+}
+
+/// One pill: a flat button with an icon and its readings in it.
 ///
 /// A button rather than a plain label so that hover, click and the
 /// press-and-hold state come from GTK (and from the stylesheet's `:hover`),
@@ -98,27 +130,33 @@ fn player_glyph(player: &str) -> &'static str {
 /// because the bar has no keyboard to walk a focus chain with.
 struct Pill {
     button: gtk::Button,
-    label: gtk::Label,
-    /// What is on the label now, so a repaint that changes nothing does not make
-    /// GTK re-measure it. The markup beside it means the label cannot be asked:
-    /// `label.text()` is the *parsed* text, not what was set.
-    face: RefCell<String>,
+    /// The icon-and-reading row inside the button.
+    face: gtk::Box,
+    /// What is on the face now, so a repaint that changes nothing does not make
+    /// GTK rebuild and re-measure it. The markup and the icons beside it mean the
+    /// face cannot be asked: `label.text()` is the *parsed* text, not what was
+    /// set, and a box has no text at all.
+    shown: RefCell<String>,
+    /// How large this pill draws its marks.
+    icon_size: i32,
 }
 
 impl Pill {
-    fn new(class: &str) -> Self {
+    fn new(class: &str, icon_size: i32) -> Self {
         let button = gtk::Button::new();
         button.add_css_class("module");
         button.add_css_class(class);
         button.set_has_frame(false);
         button.set_focus_on_click(false);
         button.set_can_focus(false);
-        let label = gtk::Label::new(None);
-        button.set_child(Some(&label));
+        let face = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        face.add_css_class("face");
+        button.set_child(Some(&face));
         Pill {
             button,
-            label,
-            face: RefCell::new(String::new()),
+            face,
+            shown: RefCell::new(String::new()),
+            icon_size,
         }
     }
 
@@ -153,28 +191,55 @@ impl Pill {
         self
     }
 
-    /// Show a different face without rebuilding the widget.
-    fn set(&self, text: &str, states: &[(&str, bool)]) {
-        self.paint(text, states, false);
+    /// Show a different face without rebuilding the button.
+    ///
+    /// One part per reading, each with the mark that says what the reading is,
+    /// and the bar's separator between them.
+    fn set(&self, parts: &[Part], states: &[(&str, bool)]) {
+        self.paint(parts, states);
     }
 
-    /// The same, with Pango markup - which is how the system info pill keeps its
-    /// hierarchy (a bold update count, small separators) without hard-coding a
-    /// colour, exactly as the bar this replaces did.
-    fn set_markup(&self, markup: &str, states: &[(&str, bool)]) {
-        self.paint(markup, states, true);
+    /// The same, for a pill whose whole face is one part.
+    fn set_one(&self, icon: &'static str, text: &str, states: &[(&str, bool)]) {
+        self.set(&[Part::new(icon, text)], states);
     }
 
-    fn paint(&self, face: &str, states: &[(&str, bool)], markup: bool) {
+    /// A face that is *only* a mark: the two buttons at the ends of the bar
+    /// (the applications panel and the session card) have no reading to show.
+    fn set_icon(&self, icon: &'static str) {
+        self.set(&[Part::new(icon, "")], &[]);
+    }
+
+    fn paint(&self, parts: &[Part], states: &[(&str, bool)]) {
+        // The signature is what the face *shows* - the marks and the readings -
+        // so a repaint that changes nothing (the volume ticking over every
+        // second, the same workspaces arriving again) leaves the widgets alone.
+        let signature = parts
+            .iter()
+            .map(|part| format!("{}|{}", part.icon, part.text))
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
         {
-            let mut current = self.face.borrow_mut();
-            if *current != face {
-                if markup {
-                    self.label.set_markup(face);
-                } else {
-                    self.label.set_text(face);
+            let mut shown = self.shown.borrow_mut();
+            if *shown != signature {
+                *shown = signature;
+                while let Some(child) = self.face.first_child() {
+                    self.face.remove(&child);
                 }
-                *current = face.to_string();
+                for (index, part) in parts.iter().enumerate() {
+                    if index > 0 {
+                        let separator = gtk::Label::new(None);
+                        separator.set_markup(SEPARATOR);
+                        separator.add_css_class("separator");
+                        self.face.append(&separator);
+                    }
+                    self.face.append(&icons::lucide(part.icon, self.icon_size));
+                    if !part.text.is_empty() {
+                        let label = gtk::Label::new(None);
+                        label.set_markup(&part.text);
+                        self.face.append(&label);
+                    }
+                }
             }
         }
         for (class, on) in states {
@@ -275,7 +340,7 @@ impl BarView {
         // *toggles* the panel rather than asking it to open: the panel keeps the
         // keyboard while it is up, so the button has to be the way back out (see
         // the handler in `view` and the element's own notes).
-        let apps = Pill::new("apps");
+        let apps = Pill::new("apps", APPS_ICON);
         {
             let command = settings.apps_command.clone();
             apps.on_click(move || {
@@ -290,7 +355,7 @@ impl BarView {
         left.append(&title);
 
         // --- centre: the clock, and the island popup's handle ---------------
-        let clock = Pill::new("clock");
+        let clock = Pill::new("clock", ICON);
         // Hovering the clock unfolds the island popup. The bar only *asks*: the
         // island decides when to go away again, because leaving a popup is the
         // pointer moving somewhere the bar cannot see (onto the popup itself).
@@ -322,7 +387,7 @@ impl BarView {
         }
 
         // --- right: media, tray, status, power -----------------------------
-        let media = Pill::new("media");
+        let media = Pill::new("media", ICON);
         media
             .on_click(move || {
                 sources::launch("playerctl", &["play-pause"]);
@@ -359,7 +424,7 @@ impl BarView {
         // They belong together because they are one question ("is this machine
         // alright?") and because they are all *handles*: this pill unfolds the
         // system popup, which is where the detail lives now.
-        let status = Pill::new("status");
+        let status = Pill::new("status", ICON);
         {
             let stats = settings.stats_command.clone();
             // The left click is the popup's other handle, but it is wired
@@ -402,7 +467,7 @@ impl BarView {
 
         // The system info pill sits to the left of the status pill: what the
         // machine is doing first, then what it is connected to and holding.
-        let stats = Pill::new("stats");
+        let stats = Pill::new("stats", ICON);
         if !settings.updates_command.is_empty() {
             // The count is the one part of this pill with something behind it, and
             // the old pill's tooltip promised exactly this: the full list, in a
@@ -422,7 +487,7 @@ impl BarView {
             });
         }
 
-        let power = Pill::new("power");
+        let power = Pill::new("power", POWER_ICON);
         {
             let session = settings.session_command.clone();
             power.on_click(move || {
@@ -517,10 +582,10 @@ impl BarView {
         };
         // A first paint, so the bar that appears is already correct rather than
         // appearing empty and filling in over the next second.
-        this.power.set(POWER, &[]);
+        this.power.set_icon(names::POWER);
         this.power
             .tooltip(Some("Session: lock, suspend, log out, reboot, shut down"));
-        this.apps.set(APPS, &[]);
+        this.apps.set_icon(names::GRID);
         this.apps
             .tooltip(Some("Applications: everything installed, in drawers"));
         this.media.set_visible(false);
@@ -630,9 +695,23 @@ impl BarView {
             self.workspaces.remove(&child);
         }
         for workspace in workspaces {
-            let pill = Pill::new("ws");
-            pill.set(
-                if workspace.active { WS_ACTIVE } else { WS_IDLE },
+            let pill = Pill::new("ws", WS_ICON);
+            // The mark, and *only* the mark: the row is a row of dots and the
+            // number is in the tooltip, which is how the bar this replaces drew
+            // it. (The pill has room for a reading - see `Part` - but a
+            // workspace does not need one: its position already says which.)
+            //
+            // The one you are on is a solid dot, the rest hollow - Lucide draws
+            // outlines, so the solid one is ours (see `icons/local/`), and it is
+            // what tells the workspace you are on from the ones you can go to on
+            // top of the colour the pill already carries.
+            pill.set_one(
+                if workspace.active {
+                    names::WORKSPACE_ACTIVE
+                } else {
+                    names::WORKSPACE_IDLE
+                },
+                "",
                 &[
                     ("active", workspace.active),
                     ("visible", workspace.visible),
@@ -679,7 +758,7 @@ impl BarView {
     /// The clock, every second. `time` and `date` are already formatted by the
     /// caller, which is the only place that knows the configured formats.
     pub fn render_clock(&self, time: &str) {
-        self.clock.set(&format!("{CLOCK} {time}"), &[]);
+        self.clock.set_one(names::CLOCK, time, &[]);
         self.clock.tooltip(Some(time));
     }
 
@@ -729,7 +808,7 @@ impl BarView {
     /// pill at all, rather than an empty capsule that would read as a reading.
     fn paint_status(&self) {
         let status = self.readings.borrow();
-        let mut parts: Vec<String> = Vec::new();
+        let mut parts: Vec<Part> = Vec::new();
         let mut states: Vec<(&str, bool)> = Vec::new();
         let mut tooltip: Vec<String> = Vec::new();
 
@@ -738,7 +817,7 @@ impl BarView {
             // say about a link, so the pill says nothing about one either.
             None | Some(Err(())) => {}
             Some(Ok(None)) => {
-                parts.push(format!("{NETWORK_OFF} off"));
+                parts.push(Part::new(names::WIFI_OFF, "off"));
                 states.push(("disconnected", true));
                 tooltip.push("Not connected".to_string());
             }
@@ -750,7 +829,7 @@ impl BarView {
                     51..=75 => 2,
                     _ => 3,
                 };
-                parts.push(format!("{} {}%", NETWORK_STEPS[step], link.signal));
+                parts.push(Part::new(NETWORK_STEPS[step], format!("{}%", link.signal)));
                 tooltip.push(format!(
                     "{} · {} dBm · {}% signal",
                     link.ssid, link.dbm, link.signal
@@ -759,14 +838,14 @@ impl BarView {
         }
 
         if let Some(volume) = status.volume {
-            let glyph = if volume.muted || volume.percent == 0 {
-                VOLUME_MUTED
+            let icon = if volume.muted || volume.percent == 0 {
+                names::VOLUME_OFF
             } else if volume.percent < 50 {
-                VOLUME_LOW
+                names::VOLUME_LOW
             } else {
-                VOLUME_HIGH
+                names::VOLUME_HIGH
             };
-            parts.push(format!("{glyph} {}%", volume.percent));
+            parts.push(Part::new(icon, format!("{}%", volume.percent)));
             states.push(("muted", volume.muted));
             tooltip.push(if volume.muted {
                 format!("Sound: {}% (muted)", volume.percent)
@@ -779,20 +858,19 @@ impl BarView {
         // three that ever means "do something now".
         let (mut warning, mut critical) = (false, false);
         if let Some(battery) = status.battery {
-            let glyph = match battery.charging {
-                Charging::Yes | Charging::Plugged => BATTERY_CHARGING,
+            let icon = match battery.charging {
+                Charging::Yes | Charging::Plugged => names::BATTERY_CHARGING,
                 _ => {
                     let step = match battery.percent {
                         ..=10 => 0,
-                        11..=35 => 1,
-                        36..=60 => 2,
-                        61..=85 => 3,
-                        _ => 4,
+                        11..=40 => 1,
+                        41..=70 => 2,
+                        _ => 3,
                     };
                     BATTERY_STEPS[step]
                 }
             };
-            parts.push(format!("{glyph} {}%", battery.percent));
+            parts.push(Part::new(icon, format!("{}%", battery.percent)));
             warning = battery.warning();
             critical = battery.critical();
             tooltip.push(match battery.charging {
@@ -819,7 +897,7 @@ impl BarView {
         states.push(("critical", critical || muted));
         states.push(("warning", warning || disconnected));
 
-        self.status.set_markup(&parts.join(SEPARATOR), &states);
+        self.status.set(&parts, &states);
         tooltip.push("Left click: the system panel".to_string());
         tooltip.push("Right click: wifi on/off · middle click: mute the microphone".to_string());
         tooltip.push("Scroll: the volume - and hovering shows the same panel".to_string());
@@ -832,10 +910,10 @@ impl BarView {
             self.media.set_visible(false);
             return;
         };
-        let glyph = if playing {
-            player_glyph(&track.player)
+        let icon = if playing {
+            player_icon(&track.player)
         } else {
-            MEDIA_PAUSE
+            names::PAUSE
         };
         // The artist is dropped before the title is: on a bar, "what is this" is
         // more useful than "who is this".
@@ -844,8 +922,7 @@ impl BarView {
         } else {
             format!("{} · {}", track.title, track.artist)
         };
-        self.media
-            .set(&format!("{glyph} {summary}"), &[("playing", playing)]);
+        self.media.set_one(icon, &summary, &[("playing", playing)]);
         self.media.tooltip(Some(&format!(
             "{}\n{}",
             summary,
@@ -862,20 +939,21 @@ impl BarView {
     /// waiting is one story about the machine, and the state colour is the same
     /// answer either way - amber for "have a look", red for "look now".
     pub fn render_stats(&self, reading: &Reading, updates: i32) {
-        let mut parts = vec![format!("{STATS_CPU} {:.0}%", reading.cpu)];
-        parts.push(format!("{STATS_MEMORY} {:.0}%", reading.memory));
+        let mut parts = vec![
+            Part::new(names::CPU, format!("{:.0}%", reading.cpu)),
+            Part::new(names::MEMORY, format!("{:.0}%", reading.memory)),
+        ];
         // A machine with no such sensor says nothing rather than 0°.
         if let Some(temperature) = reading.temperature {
-            parts.push(format!("{STATS_TEMP} {temperature:.0}°"));
+            parts.push(Part::new(names::TEMPERATURE, format!("{temperature:.0}°")));
         }
-        let mut face = parts.join(SEPARATOR);
         if updates > 0 {
             // Bold, the way the update count stood out before: it is the one
             // number here that is a *task* rather than a reading.
-            face.push_str(&format!("{SEPARATOR}<b>{updates}</b>"));
+            parts.push(Part::new(names::UPDATES, format!("<b>{updates}</b>")));
         }
-        self.stats.set_markup(
-            &face,
+        self.stats.set(
+            &parts,
             &[
                 ("warning", reading.warning()),
                 ("critical", reading.critical()),
@@ -1001,10 +1079,10 @@ mod tests {
     }
 
     #[test]
-    fn a_players_glyph_is_its_own_when_we_know_it() {
-        assert_eq!(player_glyph("vlc"), "\u{f04b}");
-        assert_eq!(player_glyph("mpv"), "\u{f03d}");
+    fn a_players_mark_is_its_own_when_we_know_it() {
+        assert_eq!(player_icon("vlc"), names::PLAY);
+        assert_eq!(player_icon("mpv"), names::CLAPPERBOARD);
         // Unknown (and empty) players fall back to the note.
-        assert_eq!(player_glyph("some-new-player"), MEDIA_NOTE);
+        assert_eq!(player_icon("some-new-player"), names::MUSIC);
     }
 }

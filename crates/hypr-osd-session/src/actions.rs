@@ -1,23 +1,17 @@
 //! What the card can do, and how it does it.
 //!
 //! The five actions are the ones the bar's own session menu offers (see
-//! `~/.config/waybar/scripts/popup.py`): the same nerd-font glyphs, the same
-//! commands, the same "destructive actions ask twice" rule. Two session menus on
-//! one desktop should not disagree about what "Shut down" does, or where its icon
-//! is.
+//! `~/.config/waybar/scripts/popup.py`): the same commands, the same icons and
+//! the same "destructive actions ask twice" rule. Two session menus on one
+//! desktop should not disagree about what "Shut down" does, or which mark it
+//! wears.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 use gtk::glib;
-
-/// The glyphs the bar's menu uses for each action.
-const GLYPH_LOCK: &str = "\u{f023}";
-const GLYPH_SUSPEND: &str = "\u{f186}";
-const GLYPH_LOGOUT: &str = "\u{f2f5}";
-const GLYPH_REBOOT: &str = "\u{f021}";
-const GLYPH_POWER: &str = "\u{f011}";
+use hypr_osd_core::icons::names;
 
 /// Which action a click leads to, and the verb that runs it from a keybinding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -56,7 +50,10 @@ impl Id {
 /// One row of the menu.
 pub struct Action {
     pub id: Id,
-    pub glyph: &'static str,
+    /// The Lucide icon the row wears, from the collection's shared vocabulary -
+    /// the same marks the weather-adjacent rows of the system popup use, so a
+    /// moon means "sleep" in both of them.
+    pub icon: &'static str,
     pub label: String,
     /// What the row says once it is armed, or `None` for an action that fires on
     /// the first click.
@@ -102,7 +99,7 @@ pub fn all() -> Vec<Action> {
     vec![
         Action {
             id: Id::Lock,
-            glyph: GLYPH_LOCK,
+            icon: names::LOCK,
             // The bar's menu annotates the row when locking is impossible;
             // greying it out silently would look like a bug.
             label: match locker {
@@ -116,7 +113,7 @@ pub fn all() -> Vec<Action> {
         },
         Action {
             id: Id::Suspend,
-            glyph: GLYPH_SUSPEND,
+            icon: names::MOON,
             label: "Suspend".to_string(),
             confirm_label: None,
             danger: false,
@@ -125,7 +122,7 @@ pub fn all() -> Vec<Action> {
         },
         Action {
             id: Id::Logout,
-            glyph: GLYPH_LOGOUT,
+            icon: names::LOG_OUT,
             label: "Log out (close Hyprland)".to_string(),
             confirm_label: None,
             danger: false,
@@ -141,7 +138,7 @@ pub fn all() -> Vec<Action> {
         },
         Action {
             id: Id::Reboot,
-            glyph: GLYPH_REBOOT,
+            icon: names::ROTATE_CW,
             label: "Reboot".to_string(),
             confirm_label: Some("Click again to reboot"),
             danger: true,
@@ -150,7 +147,7 @@ pub fn all() -> Vec<Action> {
         },
         Action {
             id: Id::PowerOff,
-            glyph: GLYPH_POWER,
+            icon: names::POWER,
             label: "Shut down".to_string(),
             confirm_label: Some("Click again to shut down"),
             danger: true,

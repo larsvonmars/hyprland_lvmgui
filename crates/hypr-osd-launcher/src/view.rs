@@ -23,15 +23,30 @@ use std::rc::Rc;
 
 use gtk::gdk;
 use gtk::prelude::*;
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::{text, CARD_PAD_X};
+
+/// How large the search symbol is drawn, and what stands in for a row the icon
+/// theme has nothing for.
+const SEARCH_ICON: i32 = 16;
+
+/// What a row draws when the icon theme has nothing for it.
+///
+/// Two kinds, because the two kinds of row are answered differently: an
+/// application stands on its first letter - which still says *which* one it is,
+/// and no generic mark can - while a file gets the Lucide mark for what it is,
+/// which is always there and needs no theme.
+pub enum Stand {
+    Letter(String),
+    Icon(&'static str),
+}
 
 /// One drawn result.
 pub struct Row {
     /// The application's (or file type's) icon, when the theme has one.
     pub icon: Option<gdk::Paintable>,
-    /// A character to draw instead when there is no icon: a letter for an
-    /// application, a glyph for a file.
-    pub glyph: String,
+    /// What to draw instead when there is no icon.
+    pub glyph: Stand,
     pub title: String,
     /// What sits under the title: a generic name, or a file's directory.
     pub subtitle: String,
@@ -71,10 +86,12 @@ impl LauncherView {
     /// is what the text caps are derived from so the two cannot drift, and
     /// `capacity` is how many rows the list reserves room for.
     pub fn new(width: i32, icon_size: i32, capacity: usize) -> Self {
-        // The glyph is part of the search row rather than a themed icon: it is
-        // always there, it scales with the font, and it costs no lookup.
-        let search_glyph = gtk::Label::new(Some("\u{f002}"));
-        search_glyph.add_css_class("search-glyph");
+        // A Lucide search symbol rather than the icon theme's: it is the field's
+        // own furniture and it should look the same as the one in the
+        // applications panel, whatever theme the desktop wears.
+        let search = icons::lucide(names::SEARCH, SEARCH_ICON);
+        search.add_css_class("search-icon");
+        search.set_valign(gtk::Align::Center);
 
         let entry = gtk::Entry::new();
         entry.add_css_class("search");
@@ -83,7 +100,7 @@ impl LauncherView {
 
         let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         search_row.add_css_class("search-row");
-        search_row.append(&search_glyph);
+        search_row.append(&search);
         search_row.append(&entry);
 
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -264,7 +281,7 @@ impl LauncherView {
 
         let texts = self.texts(&Row {
             icon: None,
-            glyph: String::new(),
+            glyph: Stand::Letter(String::new()),
             // A glyph, so the line is measured like a real row's - and then not
             // painted at all.
             title: "0".to_string(),
@@ -315,8 +332,8 @@ impl LauncherView {
         texts
     }
 
-    /// The icon, or the letter/glyph that stands in for it, in a box of a fixed
-    /// size so every row's title starts at the same place.
+    /// The icon, or the mark that stands in for it, in a box of a fixed size so
+    /// every row's title starts at the same place.
     fn icon(&self, row: &Row) -> gtk::Box {
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_size_request(self.icon_size, self.icon_size);
@@ -332,13 +349,22 @@ impl LauncherView {
                 image.set_valign(gtk::Align::Center);
                 holder.append(&image);
             }
-            None => {
-                let label = gtk::Label::new(Some(&row.glyph));
-                label.add_css_class("row-glyph");
-                label.set_halign(gtk::Align::Center);
-                label.set_valign(gtk::Align::Center);
-                holder.append(&label);
-            }
+            None => match &row.glyph {
+                Stand::Letter(letter) => {
+                    let label = gtk::Label::new(Some(letter));
+                    label.add_css_class("row-letter");
+                    label.set_halign(gtk::Align::Center);
+                    label.set_valign(gtk::Align::Center);
+                    holder.append(&label);
+                }
+                Stand::Icon(icon) => {
+                    let image = icons::lucide(icon, self.icon_size);
+                    image.add_css_class("row-icon");
+                    image.set_halign(gtk::Align::Center);
+                    image.set_valign(gtk::Align::Center);
+                    holder.append(&image);
+                }
+            },
         }
         holder
     }

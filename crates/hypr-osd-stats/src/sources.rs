@@ -30,6 +30,7 @@ use gtk::glib;
 
 use hypr_osd_core::hardware;
 use hypr_osd_core::hypripc;
+use hypr_osd_core::icons::names;
 use hypr_osd_core::output;
 
 // ---------------------------------------------------------------------------
@@ -95,29 +96,39 @@ pub enum DeviceIcon {
     Display,
     Network,
     /// Everything BlueZ did not name, and every device whose `info` was not
-    /// read: a row always gets a glyph, because a row without one reads broken.
+    /// read: a row always gets an icon, because a row without one reads
+    /// broken.
     #[default]
     Other,
 }
 
 impl DeviceIcon {
-    /// The glyph the row shows, from the same Nerd Font the rest of the
-    /// collection draws from.
-    pub fn glyph(self) -> &'static str {
+    /// The icon the row shows, from the collection's shared vocabulary - the
+    /// same drawings the system popup's own headings use, so a keyboard is a
+    /// keyboard wherever it appears.
+    ///
+    /// Two of these had one drawing between them before (`Computer` and
+    /// `Display` were the desktop and the monitor of the same font), which at a
+    /// badge's size is a row you cannot tell from its neighbour; Lucide has a
+    /// mark for each.
+    pub fn icon(self) -> &'static str {
         match self {
-            DeviceIcon::Headphones => "\u{f025}",
-            DeviceIcon::Speaker => "\u{f028}",
-            DeviceIcon::Keyboard => "\u{f11c}",
-            DeviceIcon::Mouse => "\u{f8cc}",
-            DeviceIcon::Phone => "\u{f10b}",
-            DeviceIcon::Computer => "\u{f108}",
-            DeviceIcon::Gamepad => "\u{f11b}",
-            DeviceIcon::Watch => "\u{f017}",
-            DeviceIcon::Camera => "\u{f030}",
-            DeviceIcon::Printer => "\u{f02f}",
-            DeviceIcon::Display => "\u{f26c}",
-            DeviceIcon::Network => "\u{f1eb}",
-            DeviceIcon::Other => "\u{f293}",
+            DeviceIcon::Headphones => names::HEADPHONES,
+            DeviceIcon::Speaker => names::SPEAKER,
+            DeviceIcon::Keyboard => names::KEYBOARD,
+            DeviceIcon::Mouse => names::MOUSE,
+            DeviceIcon::Phone => names::SMARTPHONE,
+            DeviceIcon::Computer => names::MONITOR,
+            DeviceIcon::Gamepad => names::GAMEPAD,
+            DeviceIcon::Watch => names::WATCH,
+            DeviceIcon::Camera => names::CAMERA,
+            DeviceIcon::Printer => names::PRINTER,
+            DeviceIcon::Display => names::DISPLAY,
+            DeviceIcon::Network => names::WIFI,
+            // BlueZ named nothing (or its `info` was not read): the bluetooth
+            // mark itself, which is at least honest about the radio the row
+            // came from.
+            DeviceIcon::Other => names::BLUETOOTH,
         }
     }
 }
@@ -173,12 +184,14 @@ pub enum DeviceAction {
 }
 
 impl DeviceAction {
-    pub fn glyph(self) -> &'static str {
+    /// The icon at the end of a device's row. The tooltip says what the mark
+    /// means, because a row's button has no room for words.
+    pub fn icon(self) -> &'static str {
         match self {
-            DeviceAction::Pair => "\u{f067}",       // plus
-            DeviceAction::Connect => "\u{f0c1}",    // link
-            DeviceAction::Disconnect => "\u{f127}", // broken link
-            DeviceAction::Remove => "\u{f00d}",     // cross
+            DeviceAction::Pair => names::PLUS,
+            DeviceAction::Connect => names::LINK,
+            DeviceAction::Disconnect => names::UNLINK,
+            DeviceAction::Remove => names::CLOSE,
         }
     }
 
@@ -1177,7 +1190,9 @@ mod tests {
         assert_eq!(DeviceIcon::from("video-display"), DeviceIcon::Display);
         // A class nobody has seen before still draws something.
         assert_eq!(DeviceIcon::from("something-new"), DeviceIcon::Other);
-        assert_eq!(DeviceIcon::Other.glyph(), "\u{f293}");
+        assert_eq!(DeviceIcon::Other.icon(), names::BLUETOOTH);
+        // Two kinds that used to share one drawing still have one each.
+        assert_ne!(DeviceIcon::Computer.icon(), DeviceIcon::Display.icon());
     }
 
     #[test]

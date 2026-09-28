@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::{self, Direction, Track};
 use hypr_osd_core::{Osd, CARD_PAD_X};
 
@@ -23,22 +24,18 @@ const GAP: i32 = 14;
 
 /// The two skip buttons and the gap between them, pinned.
 ///
-/// The CSS asks for 32px buttons, but what a button *is* also includes the
-/// theme's own padding and the glyph's font metrics - it comes out 36px here,
-/// and only once the theme has been resolved, which is later than the first
-/// measurement. Pinning the pair keeps the text column below exact, so the card
+/// The buttons are 32px - that is what the CSS asks for and, with an icon in
+/// them instead of a text glyph, what they measure: a button's size used to
+/// follow the font metrics of the character in it, which is why this constant
+/// was 36+36+6. Pinning the pair keeps the text column below exact, so the card
 /// is exactly as wide as the config asks for instead of a few pixels more.
-const CONTROLS: i32 = 36 + 36 + 6;
+const CONTROLS: i32 = 32 + 32 + 6;
 
-/// The generic "something is playing" icon - the same one the bar's media pill
-/// falls back to - used when a player reports no artwork, or artwork that cannot
-/// be fetched.
-const GLYPH_MUSIC: &str = "\u{f001}";
-
-/// The skip keys wear step-backward/forward, which is what the bar's media pill
-/// uses for them too.
-const GLYPH_PREVIOUS: &str = "\u{f048}";
-const GLYPH_NEXT: &str = "\u{f051}";
+/// How large the icons are drawn: the two buttons, and the stand-in on the
+/// cover's tile when a player reports no artwork (or artwork we could not
+/// fetch).
+const CONTROL_ICON: i32 = 16;
+const ART_ICON: i32 = 26;
 
 pub struct MediaView {
     /// The card's content, handed to the shell.
@@ -69,7 +66,10 @@ impl MediaView {
         // inside its rounded tile.
         cover.set_overflow(gtk::Overflow::Hidden);
 
-        let fallback = gtk::Label::new(Some(GLYPH_MUSIC));
+        // The stand-in for artwork that is not there (or not fetchable): the
+        // same "something is playing" icon the bar's media pill falls back to,
+        // in the tile the cover would have filled.
+        let fallback = icons::lucide(names::MUSIC, ART_ICON);
         fallback.add_css_class("art-fallback");
         fallback.set_size_request(ART, ART);
 
@@ -95,8 +95,8 @@ impl MediaView {
         text.append(&title);
         text.append(&subtitle);
 
-        let previous = control(GLYPH_PREVIOUS, "Previous track");
-        let next = control(GLYPH_NEXT, "Next track");
+        let previous = control(names::SKIP_BACK, "Previous track");
+        let next = control(names::SKIP_FORWARD, "Next track");
         let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         controls.set_valign(gtk::Align::Center);
         controls.set_size_request(CONTROLS, -1);
@@ -196,8 +196,12 @@ impl MediaView {
     }
 }
 
-fn control(glyph: &str, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::with_label(glyph);
+/// One of the two skip buttons: the icon, a chip shape from the stylesheet, and
+/// the tooltip that says what it does - the icon alone is a picture, and a
+/// picture is not a label.
+fn control(icon: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.set_child(Some(&icons::lucide(icon, CONTROL_ICON)));
     button.add_css_class("control");
     button.set_tooltip_text(Some(tooltip));
     button.set_valign(gtk::Align::Center);

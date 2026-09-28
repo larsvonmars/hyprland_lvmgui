@@ -1,0 +1,4 @@
+<!-- Lucide's `terminal`, strokes outlined: see icons/README.md -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+	<path d="M 3 4.695 C 3 5.078, 4.209 6.653, 5.687 8.195 L 8.374 11 5.510 13.990 C 1.314 18.370, 3.413 19.054, 7.748 14.719 L 11.429 11.038 8.018 7.519 C 4.772 4.169, 3 3.172, 3 4.695 M 11 19 C 11 19.550, 13.250 20, 16 20 C 18.750 20, 21 19.550, 21 19 C 21 18.450, 18.750 18, 16 18 C 13.250 18, 11 18.450, 11 19" stroke="none" fill="black" fill-rule="evenodd"/>
+</svg>

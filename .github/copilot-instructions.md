@@ -100,6 +100,15 @@ bar's left-end button opens).
   that role). `configs/hyprlock.conf` mirrors it by hand, because hyprlock cannot
   read CSS. Never hard-code a colour in an element's CSS — use the `@tokens`
   (`@accent`, `@card_top`, `@fg_dim`, …).
+- **Icons are Lucide SVGs, bundled — never a font glyph.** `core::icons::lucide`
+  draws one from `crates/hypr-osd-core/icons/`, which `core/build.rs` bakes into
+  the binary as a GResource; `core::icons::names` is the vocabulary every element
+  draws from. An icon's size is the `size` argument (there is no font-size for a
+  drawing), and its colour is the CSS `color` it inherits. The files in
+  `icons/lucide/` are Lucide's drawings *outlined* rather than stroked, because
+  GTK's own SVG engine fills paths and does not stroke them — see
+  `icons/README.md` before touching them. `cargo run -p hypr-osd-core --example
+  icon-sheet` is the contact sheet that shows whether a drawing came out right.
 - **Namespace:** every element uses the `hypr-osd` layer-shell namespace prefix,
   so the single layer rule (`ignore_alpha`, which makes the transparent frame
   click-through) covers all of them.
@@ -145,6 +154,11 @@ pkill -f 'hypr-osd-app[s]'              # a bracket: the pattern matches the
 ## Verification
 
 - CSS errors are printed to stderr with line numbers (do not swallow them).
+- `cargo test` holds the icon vocabulary against the bundle, so a name with no
+  drawing behind it is a test failure instead of a card that draws GTK's "image
+  missing" placeholder. `cargo run -p hypr-osd-core --example icon-sheet` shows
+  every icon at the sizes and colours the elements use — the fastest way to see
+  that a drawing arrived as a silhouette rather than an outline.
 - `hyprctl -j layers` shows the surface, its namespace and its geometry — the
   fastest way to distinguish "not mapped" from "mapped off-screen". A bar should
   appear as one `hypr-osd` surface on the *top* layer per monitor.

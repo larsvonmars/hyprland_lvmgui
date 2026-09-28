@@ -59,8 +59,10 @@ entry.search selection {
     color: @fg;
 }
 
-label.search-glyph {
-    font-size: 14px;
+/* The search symbol: its size is the pixel size in view.rs - a drawing has no
+ * font-size - so what is left here is the colour it shares with the placeholder
+ * text beside it. */
+image.search-icon {
     color: @fg_dim;
 }
 
@@ -108,10 +110,16 @@ label.result-sub {
     color: @fg_dim;
 }
 
-/* The stand-in for an application the icon theme has nothing for (its first
- * letter), and for a file (a folder/file glyph). */
-label.row-glyph {
+/* The stand-in for a row the icon theme has nothing for: an application's first
+ * letter, or - for a file - the Lucide mark for what it is, which is always
+ * there. The icon takes its size from view.rs; the letter is the only thing here
+ * with a font-size, because it is a letter and not a mark. */
+label.row-letter {
     font-size: 17px;
+    color: @fg_dim;
+}
+
+image.row-icon {
     color: @fg_dim;
 }
 

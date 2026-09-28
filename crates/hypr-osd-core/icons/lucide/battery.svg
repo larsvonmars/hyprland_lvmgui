@@ -1,0 +1,4 @@
+<!-- Lucide's `battery`, strokes outlined: see icons/README.md -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+	<path d="M 1.427 6.329 C 1.130 7.104, 1.024 10.160, 1.193 13.119 L 1.500 18.500 10 18.500 L 18.500 18.500 18.500 12 L 18.500 5.500 10.234 5.209 C 3.844 4.985, 1.846 5.239, 1.427 6.329 M 3 12 L 3 17 10 17 L 17 17 17 12 L 17 7 10 7 L 3 7 3 12 M 21 12 C 21 13.650, 21.450 15, 22 15 C 22.550 15, 23 13.650, 23 12 C 23 10.350, 22.550 9, 22 9 C 21.450 9, 21 10.350, 21 12" stroke="none" fill="black" fill-rule="evenodd"/>
+</svg>

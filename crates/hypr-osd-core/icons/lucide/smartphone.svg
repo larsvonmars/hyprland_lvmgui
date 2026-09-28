@@ -1,0 +1,4 @@
+<!-- Lucide's `smartphone`, strokes outlined: see icons/README.md -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+	<path d="M 4.446 2.281 C 4.157 3.034, 4.051 7.891, 4.210 13.075 L 4.500 22.500 12 22.500 L 19.500 22.500 19.500 12 L 19.500 1.500 12.236 1.206 C 6.800 0.986, 4.839 1.257, 4.446 2.281 M 6 12 L 6 21 12 21 L 18 21 18 12 L 18 3 12 3 L 6 3 6 12 M 11 18 C 11 18.550, 11.450 19, 12 19 C 12.550 19, 13 18.550, 13 18 C 13 17.450, 12.550 17, 12 17 C 11.450 17, 11 17.450, 11 18" stroke="none" fill="black" fill-rule="evenodd"/>
+</svg>

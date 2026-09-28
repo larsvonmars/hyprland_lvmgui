@@ -1,0 +1,24 @@
+<!--
+  The one icon in this collection that is ours rather than Lucide's.
+
+  Lucide draws outlines only, and the bar needs a *solid* dot for the workspace
+  you are on - that difference is what tells it apart from the hollow circles
+  beside it, on top of the colour the pill already carries. This is Lucide's
+  `circle` with `fill="currentColor"` added to the one path, so the shape, the
+  radius and the stroke are the icon everybody else draws; only the inside is
+  painted in.
+-->
+<svg
+  class="lucide lucide-circle"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <circle cx="12" cy="12" r="10" fill="currentColor" />
+</svg>

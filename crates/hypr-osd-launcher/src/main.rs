@@ -58,8 +58,9 @@ use hypr_osd_core::{
 
 use files::FileEntry;
 use hypr_osd_core::apps::{self, App};
+use hypr_osd_core::icons::names;
 use hypr_osd_core::timer::{self, Timer};
-use view::{LauncherView, Row};
+use view::{LauncherView, Row, Stand};
 
 /// D-Bus application id - and therefore the single-instance key.
 const APP_ID: &str = "com.schells2.osd.launcher";
@@ -299,7 +300,7 @@ impl Launcher {
                 };
                 Row {
                     icon: self.app_icon(app),
-                    glyph: text::initial(&app.name),
+                    glyph: Stand::Letter(text::initial(&app.name)),
                     title: app.name.clone(),
                     subtitle: app
                         .generic
@@ -310,11 +311,11 @@ impl Launcher {
             }
             Item::File(entry) => Row {
                 icon: self.file_icon(entry.is_dir),
-                glyph: if entry.is_dir {
-                    "\u{f07b}".to_string()
+                glyph: Stand::Icon(if entry.is_dir {
+                    names::FOLDER
                 } else {
-                    "\u{f15b}".to_string()
-                },
+                    names::FILE
+                }),
                 title: entry.name.clone(),
                 subtitle: shorten_home(&entry.parent),
             },
@@ -637,7 +638,7 @@ fn results_for(
 fn empty_row() -> Row {
     Row {
         icon: None,
-        glyph: "?".to_string(),
+        glyph: Stand::Letter("?".to_string()),
         title: String::new(),
         subtitle: String::new(),
     }

@@ -975,6 +975,13 @@ pub type Handle = Rc<dyn Fn(&Rc<Osd>, &[String]) -> Result<String, String>>;
 /// of the binary reaches this process instead of opening a second card) is the
 /// shell's.
 pub fn run(opts: Opts, build: Build, handle: Handle) -> glib::ExitCode {
+    // The elements' own icons (Lucide, linked into this library) have to be in
+    // the process before the first card is built - including for a `status`
+    // verb, which prints readings and builds no widgets at all. Registering
+    // resources needs no display; attaching them to the icon theme does, and
+    // that happens when the first icon is drawn (`icons::lucide`).
+    crate::icons::register();
+
     let app = gtk::Application::builder()
         .application_id(opts.app_id.as_str())
         // Verbs arrive on the command line, so GApplication must not try to

@@ -53,8 +53,10 @@ entry.search selection {
     color: @fg;
 }
 
-label.search-glyph {
-    font-size: 14px;
+/* The search symbol: its size is the pixel size in view.rs - a drawing has no
+ * font-size - so what is left here is the colour it shares with the placeholder
+ * text beside it. */
+image.search-icon {
     color: @fg_dim;
 }
 
@@ -171,16 +173,17 @@ button.tile.selected label.tile-label {
     color: @fg;
 }
 
-/* The stand-in for an application the icon theme has nothing for. */
-label.tile-glyph {
+/* The stand-in for an application the icon theme has nothing for: its first
+ * letter, which still says *which* one it is - no generic mark can. It is a
+ * letter and not an icon, so it is the one thing in a tile with a font size. */
+label.tile-letter {
     font-size: 26px;
     color: @fg_faint;
 }
 
 /* The pin mark in a tile's corner: the accent2 green, so "this one is pinned"
  * reads differently from "this one is selected". */
-label.pin {
-    font-size: 10px;
+image.pin {
     color: @accent2;
     padding: 2px 4px 0 0;
 }

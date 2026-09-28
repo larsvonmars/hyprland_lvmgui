@@ -23,7 +23,9 @@
  *    carries in the binary, because it is the same for every element and is not
  *    something you retheme. It is: 16px for cards and the bar, 12px for tiles,
  *    10px for flat rows, 999px for capsules, and the face is
- *    "MesloLGS Nerd Font Mono" at 13px/500.
+ *    "MesloLGS Nerd Font Mono" at 13px/500 - a text face only: the icons are
+ *    Lucide drawings inside the binaries, not characters from a font (see
+ *    `crates/hypr-osd-core/icons/`).
  */
 
 /* ---- surfaces ---- */

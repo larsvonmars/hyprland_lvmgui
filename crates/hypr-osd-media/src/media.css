@@ -16,13 +16,13 @@ image.cover {
     border-radius: 12px;
 }
 
-/* No artwork (or none we could fetch): the bar's player glyph on a tile. */
-label.art-fallback {
+/* No artwork (or none we could fetch): the player's icon on a tile. Its size is
+ * the pixel size in view.rs - a drawing has no font-size. */
+image.art-fallback {
     background-color: @surface;
     border: 1px solid @border;
     border-radius: 12px;
     color: @fg_faint;
-    font-size: 22px;
 }
 
 /* ---- the text ---- */
@@ -41,7 +41,8 @@ label.subtitle {
 
 /* A chip, like theme.py's `chipbtn`, but square-ish and round: 32px, 999px
  * radius, @surface at rest and the accent on hover - the state vocabulary the
- * bar uses for everything you can click. */
+ * bar uses for everything you can click. The 32px is also the icon's room: the
+ * icon inside is 16px, so the button is exactly its minimum and no wider. */
 button.control {
     background-color: @surface;
     color: @fg_dim;
@@ -49,7 +50,6 @@ button.control {
     min-width: 32px;
     min-height: 32px;
     padding: 0;
-    font-size: 14px;
     box-shadow: none;
 }
 
