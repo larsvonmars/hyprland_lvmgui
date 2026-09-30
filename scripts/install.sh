@@ -314,6 +314,12 @@ poll_ms = 50
 tick_ms = 1000
 media_every_ms = 700
 
+# How often the player tile re-reads the list of players it can offer a chip for
+# (a row that only appears while more than one is running). Slower than the track
+# on purpose: listing them forks `playerctl` a second time, and the list only
+# changes when a player comes or goes.
+players_every_ms = 3000
+
 # How many notifications the notification tile lists, newest first, with the
 # application's icon and what it said. The hub remembers a few more than it
 # draws, so dismissing one promotes the next, and it says "+N more" when the

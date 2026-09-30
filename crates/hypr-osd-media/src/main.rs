@@ -19,7 +19,6 @@
 //!   (no verb)            start the daemon and wait for something to play
 //! ```
 
-mod art;
 mod view;
 
 use std::cell::OnceCell;
@@ -28,7 +27,7 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::mpris::{self, Direction};
+use hypr_osd_core::mpris::{self, Direction, Player};
 use hypr_osd_core::{css, run, Config, Content, Opts, Osd};
 
 use view::MediaView;
@@ -152,7 +151,7 @@ fn main() -> glib::ExitCode {
                         } else {
                             Direction::Next
                         };
-                        mpris::skip(direction)?;
+                        mpris::skip(direction, &Player::Active)?;
                         // The card follows from the metadata change that skipping
                         // causes, so nothing is shown here: a player that refuses
                         // to skip would otherwise pop up with the same track.

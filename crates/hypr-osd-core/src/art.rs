@@ -1,4 +1,9 @@
-//! Album art: `mpris:artUrl` turned into something the card can draw.
+//! Album art: `mpris:artUrl` turned into a texture a card can draw.
+//!
+//! Two elements show a cover - the media card, which is about the track, and the
+//! island popup, which shows one beside the transport - and neither should
+//! invent this twice. What it is: the URL players hand out in `mpris:artUrl`,
+//! turned into a `gdk::Texture`.
 //!
 //! Players disagree about what belongs in that field. VLC and most local players
 //! hand out a *percent-encoded* `file://` URL (VLC's extracted cover lives under
@@ -9,7 +14,7 @@
 //! rule (wpctl, playerctl, curl).
 //!
 //! Anything else - a `blob:` URL, a `data:` URI - has no file behind it that
-//! `gdk::Texture` could read, so the card keeps the glyph it shows for "no
+//! `gdk::Texture` could read, so the caller keeps the glyph it shows for "no
 //! artwork". Some browser players are known to expose artwork that way.
 //!
 //! Nothing here may block: `on_ready` always runs later, on the main loop.
@@ -22,14 +27,14 @@ use std::time::Duration;
 use gtk::gdk;
 use gtk::glib;
 
-/// How long a remote cover may take before the card gives up on it.
+/// How long a remote cover may take before the caller gives up on it.
 const DOWNLOAD_TIMEOUT: &str = "6";
 
 /// Names the download files of one daemon apart.
 static DOWNLOADS: AtomicU32 = AtomicU32::new(0);
 
 /// Load the artwork behind `url` and hand the texture to `on_ready` once.
-/// `None` means "no artwork", and the card falls back to its glyph.
+/// `None` means "no artwork", and the caller falls back to its glyph.
 pub fn load(url: &str, on_ready: impl FnOnce(Option<gdk::Texture>) + 'static) {
     if let Some(path) = file_path(url) {
         // A local decode is fast, but it still happens on the main loop's next
@@ -45,7 +50,7 @@ pub fn load(url: &str, on_ready: impl FnOnce(Option<gdk::Texture>) + 'static) {
         return;
     }
     if !url.is_empty() {
-        eprintln!("hypr-osd-media: cannot read artwork from `{url}`");
+        eprintln!("hypr-osd: cannot read artwork from `{url}`");
     }
     glib::timeout_add_local_once(Duration::ZERO, move || on_ready(None));
 }
@@ -70,7 +75,7 @@ fn fetch(url: &str, on_ready: impl FnOnce(Option<gdk::Texture>) + 'static) {
     let child = match spawned {
         Ok(child) => child,
         Err(error) => {
-            eprintln!("hypr-osd-media: cannot run curl ({error}) - cover art stays a glyph");
+            eprintln!("hypr-osd: cannot run curl ({error}) - cover art stays a glyph");
             glib::timeout_add_local_once(Duration::ZERO, move || on_ready(None));
             return;
         }
@@ -99,7 +104,7 @@ fn decode(path: &Path) -> Option<gdk::Texture> {
         Ok(texture) => Some(texture),
         Err(error) => {
             eprintln!(
-                "hypr-osd-media: cannot read cover art {}: {error}",
+                "hypr-osd: cannot read cover art {}: {error}",
                 path.display()
             );
             None

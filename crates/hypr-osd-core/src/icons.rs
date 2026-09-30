@@ -375,6 +375,10 @@ pub mod names {
         PAUSE => "pause",
         SKIP_BACK => "skip-back",
         SKIP_FORWARD => "skip-forward",
+        // The two the island's transport toggles: both are states rather than
+        // actions, so they are drawn in the accent while they are on.
+        SHUFFLE => "shuffle",
+        REPEAT => "repeat",
         CLAPPERBOARD => "clapperboard",
         AUDIO_LINES => "audio-lines",
         COMPASS => "compass",

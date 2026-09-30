@@ -39,10 +39,8 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Side};
-use hypr_osd_core::mpris::Playback;
 use hypr_osd_core::{
-    css, mpris, run, state, Config, Content, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y,
-    SHADOW_PAD,
+    css, run, state, Config, Content, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y, SHADOW_PAD,
 };
 
 use notify::Notifications;
@@ -75,6 +73,10 @@ const DEFAULT_TICK_MS: u64 = 1000;
 /// moving, because `playerctl --follow` deliberately only speaks when the
 /// metadata changes - position is not metadata.
 const DEFAULT_MEDIA_EVERY_MS: u64 = 700;
+/// How often the list of players is re-read. Slower than the track: listing them
+/// forks `playerctl` a second time, and the list only changes when a player comes
+/// or goes.
+const DEFAULT_PLAYERS_EVERY_MS: u64 = 3000;
 /// How many notifications the tile lists. The hub remembers a few more than it
 /// draws (see `notify`), so dismissing one promotes the next.
 const DEFAULT_NOTIFICATION_ROWS: i32 = 3;
@@ -92,6 +94,8 @@ struct Settings {
     poll: Duration,
     tick: Duration,
     media_every: u64,
+    /// How often the media tile re-reads the list of players it can follow.
+    players_every: u64,
     /// How many notifications the tile lists. Zero is a legitimate answer: the
     /// count and the buttons then stand on their own.
     notification_rows: usize,
@@ -119,6 +123,9 @@ impl Settings {
             tick: config.millis("tick_ms", DEFAULT_TICK_MS),
             media_every: config
                 .millis("media_every_ms", DEFAULT_MEDIA_EVERY_MS)
+                .as_millis() as u64,
+            players_every: config
+                .millis("players_every_ms", DEFAULT_PLAYERS_EVERY_MS)
                 .as_millis() as u64,
             // Five is where the tile stops being a glance and starts being a
             // list; the hub does not remember more than a few anyway.
@@ -154,8 +161,6 @@ struct Panel {
     /// one - so the clock's hot zone (the middle of the bar) has to be measured
     /// on *that* screen, and the surface drawn there.
     monitor: RefCell<Option<String>>,
-    /// The last thing MPRIS said, so the header chips and the media tile agree.
-    playback: RefCell<Option<Playback>>,
     notifications: RefCell<Notifications>,
     /// What the notifications *say*, read off the bus - the other half of the hub
     /// (see `notify`). The state above arrives without it; this fills the rows in.
@@ -211,7 +216,6 @@ fn main() -> glib::ExitCode {
                 machine: Machine::default(),
                 node: node.clone(),
                 monitor: RefCell::new(None),
-                playback: RefCell::new(None),
                 notifications: RefCell::new(Notifications::default()),
                 history: RefCell::new(notify::History::new()),
             }));
@@ -225,9 +229,10 @@ fn main() -> glib::ExitCode {
                     let panel = panel_state.borrow();
                     *panel.notifications.borrow_mut() = notifications;
                     panel.render_notifications();
-                    panel
-                        .node
-                        .render_chips(panel.playback.borrow().as_ref(), &notifications);
+                    // The chip is painted from the tile's own snapshot - the one
+                    // the media poll left behind - so the two cannot disagree.
+                    let playback = panel.node.playback();
+                    panel.node.render_chips(playback.as_ref(), &notifications);
                 }
             });
 
@@ -263,7 +268,9 @@ fn main() -> glib::ExitCode {
                         // the clock rather than with the list.
                         panel.borrow().node.render_ages();
                         if every(count, settings.media_every, settings.tick) {
-                            poll_media(&panel);
+                            // The list of players rides the same heartbeat, on a
+                            // slower interval of its own.
+                            poll_media(&panel, every(count, settings.players_every, settings.tick));
                         }
                     }
                     glib::ControlFlow::Continue
@@ -369,7 +376,7 @@ fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
             // Read what is playing *before* the surface appears, so the panel
             // opens with the track on it rather than with "Nothing playing" for
             // as long as the round trip takes.
-            poll_media(panel);
+            poll_media(panel, true);
             osd.show();
             state::write(&state::island_panel(), true);
         }
@@ -423,16 +430,14 @@ fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
     )
 }
 
-/// Read what is playing and put it on the card.
-fn poll_media(panel: &Rc<RefCell<Panel>>) {
-    let playback = mpris::playback();
+/// Read what is playing and put it on the tile - and the header chip, which is
+/// drawn from the tile's own snapshot so the two cannot disagree.
+fn poll_media(panel: &Rc<RefCell<Panel>>, read_players: bool) {
     let panel = panel.borrow();
+    panel.node.refresh_media(read_players);
+    let playback = panel.node.playback();
     let notifications = *panel.notifications.borrow();
-    *panel.playback.borrow_mut() = playback;
-    panel.node.render_media(panel.playback.borrow().as_ref());
-    panel
-        .node
-        .render_chips(panel.playback.borrow().as_ref(), &notifications);
+    panel.node.render_chips(playback.as_ref(), &notifications);
 }
 
 /// Whether this tick is the one for an interval (the bar's `every`, which this
@@ -445,7 +450,35 @@ fn every(count: u64, interval_ms: u64, tick: Duration) -> bool {
 
 /// What `status` prints: what the panel would show, whether or not it is up.
 fn status(panel: &Panel, settings: &Settings) -> String {
-    let playback = mpris::playback();
+    // Read now rather than reporting the last poll: this verb's job is to say
+    // what the panel *would* show, and the panel may have been down for hours.
+    // It is the same read the heartbeat makes while the panel is up - and reading
+    // the tile is also what leaves it up to date for the next time it opens.
+    panel.node.refresh_media(true);
+    let playback = panel.node.playback();
+    // What the Media row's buttons are set to, and which player they are aimed at.
+    let controls = match &playback {
+        Some(playback) => format!(
+            "shuffle {} · repeat {} · volume {}",
+            if playback.shuffle { "on" } else { "off" },
+            playback.repeat.verb().to_lowercase(),
+            match playback.volume {
+                Some(level) => format!("{}%", (level * 100.0).round() as i32),
+                None => "not reported".to_string(),
+            }
+        ),
+        None => "nothing to control".to_string(),
+    };
+    let players = panel.node.players_list();
+    let following = match panel.node.target().name() {
+        Some(name) => format!("following {name}"),
+        None => "following the active player".to_string(),
+    };
+    let players_line = if players.is_empty() {
+        "none running".to_string()
+    } else {
+        format!("{} · {following}", players.join(", "))
+    };
     let notifications = *panel.notifications.borrow();
     let now = glib::DateTime::now_local().ok();
     let format = |pattern: &str| {
@@ -506,6 +539,8 @@ fn status(panel: &Panel, settings: &Settings) -> String {
                 })
                 .unwrap_or_else(|| "nothing playing".to_string())
         ),
+        format!("controls   {controls}"),
+        format!("players    {players_line}"),
         format!(
             "notified   {} waiting, dnd {}, inhibited {}{}",
             notifications.count,

@@ -24,6 +24,8 @@
 //!   system popup.
 //! * [`mpris`] - what is playing, through `playerctl`: the shared half of the
 //!   media card, the bar's media pill and the island popup.
+//! * [`art`] - the album cover behind `mpris:artUrl`, shared by the media card
+//!   and the island popup.
 //! * [`windows`] - Hyprland's windows and workspaces, as far as a card needs
 //!   them, shared by the two elements that draw windows.
 //! * [`apps`] - the applications installed on this machine: the `.desktop`
@@ -43,6 +45,7 @@
 //! prefix `hypr-osd`, verbs on the command line.
 
 pub mod apps;
+pub mod art;
 pub mod config;
 pub mod css;
 pub mod follow;

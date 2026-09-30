@@ -26,7 +26,7 @@ are up (see [How it works](#how-it-works)).
 | Element | Binary | What it does |
 | --- | --- | --- |
 | The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
-| Island popup | `hypr-osd-island` | What is playing (with transport and progress), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
+| Island popup | `hypr-osd-island` | What is playing (cover, title, artist, progress with click-to-seek, shuffle/previous/play/next/repeat, the player's own volume and a chip per player), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
 | System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
 | Media card | `hypr-osd-media` | Cover art, title and artist, with previous/next buttons. Appears when a new medium starts playing — no keybinding involved. |
@@ -367,10 +367,31 @@ hypr-osd-island show    # put it up and keep it there (no pointer tracking)
 hypr-osd-island status  # what the panel would show, without showing it
 ```
 
-Hovering the clock in the bar unfolds a panel below it: the time and date, what
-is playing (with transport buttons and a progress bar, when the player reports a
-track length), the notification hub, and a calendar you can page through by
-month, with today in the accent colour.
+Hovering the clock in the bar unfolds a panel below it: the time and date, the
+player below, the notification hub, and a calendar you can page through by month,
+with today in the accent colour.
+
+**The player** is everything MPRIS offers except the queue. The cover comes from
+`mpris:artUrl` (a `file://` URL decoded, an `http(s)://` one fetched with `curl`,
+anything else left to the glyph it falls back to — the same loader the media card
+uses, `core::art`), with the title, the artist and the album beside it. Under it a
+progress bar and the times, which are one click target: **a click seeks** to where
+it landed. Then the five transport buttons — shuffle, previous, play/pause, next,
+repeat — where shuffle and repeat wear the accent while they are on, and the
+repeat tooltip says which kind it is (this track, or the whole queue). Then the
+player's **own** volume, drawn only when the player reports one (a browser usually
+does not), which is deliberately not the sink's: a player at 40% of a sink at 80%
+is an ordinary state, and the sink's step belongs to the volume element.
+
+When more than one player is running, a row of chips appears under the volume
+with one per player — `vlc`, `firefox` — and the one on screen wears the accent.
+A click on another chip switches the whole tile to it, transport and all. Nothing
+is offered while there is only one player, because a choice of one is not a
+choice. The list comes from `playerctl --list-all`, with the duplicate names one
+player can register collapsed: VLC claims `vlc` *and* `vlc.instance10492` for a
+single process (both names resolve to the same PID), and two chips for it would be
+a lie. The tile follows `playerctl`'s own choice until a chip is clicked, which is
+the same choice the media keys make.
 
 The notification hub is read in two halves, because `swaync` publishes them
 separately. The *state* — how many are waiting, do-not-disturb, whether the
@@ -986,12 +1007,14 @@ session lock signal slots in without touching them.
   Players announce one track with several events (metadata, then the status
   flipping, sometimes the artwork later); that rule is what tells them apart and
   keeps a pause/resume from re-opening the card.
-- **Cover art** is read from `mpris:artUrl`: a `file://` URL is percent-decoded
-  and loaded directly (VLC, and most local players, extract covers there), an
+- **Cover art** is read from `mpris:artUrl` by `core::art`, which the media card
+  and the island's player tile share: a `file://` URL is percent-decoded and
+  loaded directly (VLC, and most local players, extract covers there), an
   `http(s)://` URL is fetched with `curl` in the background. Anything else — a
   `blob:` URL, a `data:` URI, which some browser players use — has no file behind
-  it, so the card keeps the bar's music glyph instead. While a new cover is being
-  fetched the glyph stays up: showing the previous track's cover would be a lie.
+  it, so the caller keeps its own stand-in (the music glyph). While a new cover is
+  being fetched the stand-in stays up: showing the previous track's cover would be
+  a lie.
 - **Auto-hide.** `duration_ms` after the last change the card hides — unless the
   volume slider is being dragged, or (for the cards with buttons) the pointer is
   resting on it, so they stay usable. The keyboard cards instead close after

@@ -10,10 +10,8 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use hypr_osd_core::icons::{self, names};
-use hypr_osd_core::mpris::{self, Direction, Track};
-use hypr_osd_core::{Osd, CARD_PAD_X};
-
-use crate::art;
+use hypr_osd_core::mpris::{self, Direction, Player, Track};
+use hypr_osd_core::{art, Osd, CARD_PAD_X};
 
 /// The cover is a square tile: 56px, radius 12 like every other tile in the
 /// theme, next to two comfortable lines of text.
@@ -228,7 +226,9 @@ fn cap_width(label: &gtk::Label, pixels: i32) {
 }
 
 fn skip(direction: Direction) {
-    if let Err(error) = mpris::skip(direction) {
+    // The card watches whatever is playing and never chooses a player: it has no
+    // buttons for that, so its skips go to the same one the media keys reach.
+    if let Err(error) = mpris::skip(direction, &Player::Active) {
         eprintln!("hypr-osd-media: {error}");
     }
 }

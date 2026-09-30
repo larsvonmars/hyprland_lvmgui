@@ -20,15 +20,17 @@ hands the shell a `Content::PerOutput` factory and the shell calls it once per
 output (`Osd::sync_outputs`); the bar keys its views by connector and paints them
 all from one set of readings. One of them carries the session's tray.
 
-See also `crates/hypr-osd-island` (the panel under the clock, whose notification
-hub is read in two halves: the *state* from `swaync-client -swb`, and the
-notifications themselves - application, summary, icon - off the bus with
-`busctl --user --json=short monitor org.freedesktop.Notifications`, because
-swaync publishes no list of them), `-stats` (the system popup), `-switcher` and
-`-overview` (the two window cards), `-launcher` (the search card on SUPER + SPACE,
-which took over from the separate `linux-launchpad` Tauri app) and `-apps` (that
-app's *main window* - the grid of everything installed - rebuilt as a card the
-bar's left-end button opens).
+See also `crates/hypr-osd-island` (the panel under the clock: a player tile that
+carries the cover, the transport, shuffle/repeat, the player's own volume and a
+chip per running player - and reads MPRIS itself, because a click on its progress
+bar or a chip changes what it shows; its notification hub is read in two halves:
+the *state* from `swaync-client -swb`, and the notifications themselves -
+application, summary, icon - off the bus with `busctl --user --json=short monitor
+org.freedesktop.Notifications`, because swaync publishes no list of them),
+`-stats` (the system popup), `-switcher` and `-overview` (the two window cards),
+`-launcher` (the search card on SUPER + SPACE, which took over from the separate
+`linux-launchpad` Tauri app) and `-apps` (that app's *main window* - the grid of
+everything installed - rebuilt as a card the bar's left-end button opens).
 
 ## Tech stack
 
@@ -51,7 +53,11 @@ bar's left-end button opens).
   a command that answers once, `launch` for one that must not be waited for),
   `follow.rs` (run a long-lived command and deliver its lines to the main loop),
   `output.rs` (run a command that answers once **with bytes**), `hypripc.rs`
-  (Hyprland's request socket and event stream), `mpris.rs`, `system.rs`,
+  (Hyprland's request socket and event stream), `mpris.rs` (through `playerctl`:
+  the followed feed, the whole playback snapshot, the transport, shuffle/repeat,
+  the player's own volume, seeking, and `Player` for aiming a command at one
+  player), `art.rs` (`mpris:artUrl` → texture: `file://` decoded, `http(s)://`
+  through `curl`), `system.rs`,
   `hover.rs` (a popup's hot zone and dwell), `monitors.rs` (the focused output,
   and every output), `apps.rs` (installed applications: the `.desktop` parser,
   the category map, the scoring ladder and `gio launch` - shared by the launcher
@@ -170,7 +176,11 @@ pkill -f 'hypr-osd-app[s]'              # a bracket: the pattern matches the
   to tell "the bus feed is empty" from "the tile is misdrawn". The rows come from
   `busctl --user --json=short monitor org.freedesktop.Notifications`; the same
   command by hand is how a parsing question is answered, and `notify-send -a App
-  -i icon "summary" "body"` is how a row is produced on demand.
+  -i icon "summary" "body"` is how a row is produced on demand. It also prints
+  `media`, `controls` (shuffle, repeat, the player's volume) and `players` (the
+  list, merged, and which one is being followed) - a *fresh* read, so it answers
+  with the panel down; `vlc` plus `playerctl` is enough to exercise the cover, the
+  progress bar and the two toggles (`ffmpeg` can build a track with a cover).
 - A bar that has stopped answering the D-Bus verbs is a main loop parked in a
   blocking wait: `ps -L -p <pid> -o tid,stat,wchan,comm` (a `do_wait` on the first
   thread is `Command::status`/`.wait()`). Use `hardware::launch` instead.

@@ -7,10 +7,13 @@
 //!  │ 16:04                    [playing] [hidden]  │
 //!  │ Friday, 25 September   ─────────────────────────  │
 //!  │ ┌─ now playing ─────┐ ┌─ calendar ─────────────┐ │
-//!  │ │ title             │ │ ‹ September 2026 ›     │ │
-//!  │ │ artist            │ │ Mo Tu We Th Fr Sa Su   │ │
-//!  │ │ ▁▁▁▁▁▁ 1:15 4:02  │ │ …                      │ │
-//!  │ │ [‹] [▶] [›]       │ │                        │ │
+//!  │ │ ┌────┐ First Track│ │ ‹ September 2026 ›     │ │
+//!  │ │ │art │ Beyoncé    │ │ Mo Tu We Th Fr Sa Su   │ │
+//!  │ │ └────┘ Test Album │ │ …                      │ │
+//!  │ │ ▁▁▁▁▁▁▁ 0:10 5:00  │ │                        │ │
+//!  │ │ [⇄] [‹] [▶] [›] [↻]│ │                        │ │
+//!  │ │ 🔊 ▁▁▁▁▁▁▁▁ 100%   │ │                        │ │
+//!  │ │ [vlc] [firefox]    │ │                        │ │
 //!  │ └───────────────────┘ └────────────────────────┘ │
 //!  │ ┌─ notifications ──────────────────┐            │
 //!  │ │ 3 unread notifications           │            │
@@ -25,31 +28,35 @@
 //!  └──────────────────────────────────────────────────┘
 //! ```
 //!
-//! The view paints what it is handed and runs the commands its buttons mean. It
-//! does not read anything itself: `main` polls MPRIS while the panel is up, the
-//! notification feed arrives on its own - both the state from `swaync` and the
-//! rows off the bus (see `notify`) - and the clock ticks, so there is one place
-//! that decides *when* to read, and one place that decides how to draw.
+//! The view paints what it is handed and runs the commands its buttons mean.
+//! Reading is `main`'s business - the notification feed arrives on its own (both
+//! halves of it, see `notify`), the clock ticks, and `main`'s heartbeat calls
+//! [`IslandView::refresh_media`] - with one deliberate exception: the media tile
+//! reads the player itself, because two of its controls change what it shows from
+//! the inside. A click on the progress bar seeks, and a click on a player chip
+//! follows another player; only the tile knows either happened, so the tile is
+//! what reads again (and `main` reads *the tile* when it paints the header chip).
 //!
 //! One detail follows from the hover design: the panel's width is what its hot
 //! zone is measured against, so a widget that wants more room than it was given
-//! is a bug and not a layout surprise. Every label a notification can fill in is
-//! therefore capped with [`text::cap_width`].
+//! is a bug and not a layout surprise. Every label a track or a notification can
+//! fill in is therefore capped with [`text::cap_width`].
 //!
 //! The card itself - the fill, the border, the shadow, the 16px radius - is the
 //! shell's (`box.card` in `base.css`), because this panel is a card like every
 //! OSD in the collection; what is here is only what goes inside one.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gtk::glib;
 use gtk::prelude::*;
 
-use hypr_osd_core::icons::{self, names};
-use hypr_osd_core::mpris::Playback;
-use hypr_osd_core::text;
+use hypr_osd_core::icons::names;
+use hypr_osd_core::mpris::{self, Direction, Playback, Player, Repeat};
+use hypr_osd_core::timer::Timer;
+use hypr_osd_core::{art, icons, text};
 
 use crate::calendar::Month;
 use crate::notify::{self, History, Item, Notifications};
@@ -61,6 +68,20 @@ use crate::Settings;
 /// aims at.
 const SMALL_ICON: i32 = 12;
 const BUTTON_ICON: i32 = 14;
+
+/// The cover: a square tile at the same 12px radius as every other nested
+/// surface, with the stand-in drawn on it when a player reports no artwork (or
+/// artwork that cannot be fetched).
+const ART: i32 = 48;
+const ART_ICON: i32 = 22;
+/// The gap between the cover and the two lines of text beside it.
+const ART_GAP: i32 = 10;
+/// What one player chip may ask for, in pixels.
+const PLAYER_CHIP: i32 = 72;
+/// How long a volume drag has to settle before it reaches the player. A drag
+/// asks for a new level every pixel, and every one of them would be a
+/// `playerctl` process.
+const VOLUME_SETTLE: Duration = Duration::from_millis(180);
 
 /// The numbers a notification row is measured against. The first two are the
 /// horizontal padding of `box.tile` and `box.notif-row` in `island.css`, and the
@@ -83,16 +104,47 @@ pub struct IslandView {
     clock: gtk::Label,
     date: gtk::Label,
     chips: gtk::Box,
-    track: gtk::Label,
-    artist: gtk::Label,
+    /// The media tile: the cover and the two lines beside it, the progress bar,
+    /// the five transport buttons, the player's own volume and the chips that
+    /// choose which player this is.
+    art: gtk::Stack,
+    cover: gtk::Image,
+    title: gtk::Label,
+    subtitle: gtk::Label,
     progress: gtk::ProgressBar,
     elapsed: gtk::Label,
     total: gtk::Label,
+    /// The progress bar and the times around it: one click target, because three
+    /// pixels of bar is not something to aim at.
+    seek: gtk::Box,
     play: gtk::Button,
-    /// The row holding the progress bar and the times: hidden together, because a
-    /// time without a bar says nothing.
-    progress_row: gtk::Box,
+    shuffle: gtk::Button,
+    repeat: gtk::Button,
     transport: gtk::Box,
+    /// The player's *own* volume - a row of its own, and hidden when the player
+    /// reports none: not every player has one, and this is not the sink's.
+    volume_row: gtk::Box,
+    volume: gtk::Scale,
+    volume_value: gtk::Label,
+    /// The chips that choose the player. Empty, and hidden, unless something
+    /// else is running.
+    players_row: gtk::Box,
+    /// What the tile is showing, and which player its buttons are aimed at -
+    /// held as shared handles because they are what a *click* inside the tile
+    /// changes, and the handlers are built before this view exists.
+    playback: Rc<RefCell<Option<Playback>>>,
+    target: Rc<RefCell<Player>>,
+    /// The players that can be controlled, re-read on the caller's slower clock
+    /// (`read_players` in [`IslandView::refresh_media`]).
+    players: RefCell<Vec<String>>,
+    /// `mpris:artUrl` currently on the cover, so a slow download cannot paint
+    /// itself over the track that replaced it.
+    art_url: RefCell<String>,
+    /// Whether a volume drag is in flight. While it is, the slider belongs to the
+    /// pointer: the poll may not pull it back under the finger, and the level the
+    /// drag settles on is what reaches the player a moment later (see
+    /// [`VOLUME_SETTLE`]).
+    settling: Rc<Cell<bool>>,
     notif_count: gtk::Label,
     /// Where the notification rows are built.
     notif_rows: gtk::Box,
@@ -113,6 +165,16 @@ pub struct IslandView {
 
 impl IslandView {
     pub fn new(settings: &Rc<Settings>) -> Rc<IslandView> {
+        // The two handles a click inside the media tile reaches: which player the
+        // tile follows, and the snapshot it is drawn from. They exist before the
+        // widgets because the widgets' handlers capture them - and they are held
+        // as shared handles rather than as fields for the same reason (the fields
+        // only exist once the whole view does).
+        let target: Rc<RefCell<Player>> = Rc::new(RefCell::new(Player::Active));
+        let playback: Rc<RefCell<Option<Playback>>> = Rc::new(RefCell::new(None));
+        let settle: Rc<Timer> = Rc::new(Timer::new());
+        let settling: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
         // ---- header: the clock, the date, and the state chips --------------
         let clock = gtk::Label::new(None);
         clock.add_css_class("island-clock");
@@ -134,16 +196,52 @@ impl IslandView {
         header.append(&chips);
 
         // ---- media tile ----------------------------------------------------
-        let track = gtk::Label::new(Some("Nothing playing"));
-        track.add_css_class("track");
-        track.set_xalign(0.0);
-        track.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        track.set_max_width_chars(28);
-        let artist = gtk::Label::new(None);
-        artist.add_css_class("artist");
-        artist.set_xalign(0.0);
-        artist.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        artist.set_max_width_chars(30);
+        // The cover. An image with a pixel size, not a picture: a picture never
+        // shrinks below the artwork's own size, so one 500x500 cover would size
+        // the whole panel. The stack is what swaps it for the stand-in when a
+        // player reports no artwork, or artwork that cannot be read.
+        let cover = gtk::Image::new();
+        cover.add_css_class("cover");
+        cover.set_pixel_size(ART - 8);
+        // Together with the CSS border-radius this is what keeps the cover inside
+        // its rounded tile.
+        cover.set_overflow(gtk::Overflow::Hidden);
+        let art_fallback = icons::lucide(names::MUSIC, ART_ICON);
+        art_fallback.add_css_class("art-fallback");
+        let art = gtk::Stack::new();
+        art.add_css_class("art");
+        art.set_size_request(ART, ART);
+        art.set_valign(gtk::Align::Center);
+        art.add_named(&cover, Some("cover"));
+        art.add_named(&art_fallback, Some("fallback"));
+        art.set_visible_child_name("fallback");
+
+        let title = gtk::Label::new(Some("Nothing playing"));
+        title.add_css_class("track");
+        title.set_xalign(0.0);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let subtitle = gtk::Label::new(None);
+        subtitle.add_css_class("artist");
+        subtitle.set_xalign(0.0);
+        subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        words.add_css_class("words");
+        words.set_valign(gtk::Align::Center);
+        words.set_hexpand(true);
+        words.append(&title);
+        words.append(&subtitle);
+        // Capped here rather than in the render: an ellipsised label still asks
+        // for its whole text when it is measured, and one long track name would
+        // widen the column - and with it the card, whose width is what the
+        // panel's hover zone is measured against.
+        let words_width = settings.left_width - 2 * TILE_PAD_X - ART - ART_GAP;
+        text::cap_width(&title, words_width);
+        text::cap_width(&subtitle, words_width);
+
+        let art_row = gtk::Box::new(gtk::Orientation::Horizontal, ART_GAP);
+        art_row.add_css_class("art-row");
+        art_row.append(&art);
+        art_row.append(&words);
 
         let progress = gtk::ProgressBar::new();
         progress.set_show_text(false);
@@ -157,31 +255,142 @@ impl IslandView {
         let times = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         times.append(&elapsed);
         times.append(&total);
-        let progress_row = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        progress_row.append(&progress);
-        progress_row.append(&times);
+        // The bar and the times are one target, not two: three pixels of bar is
+        // not something to aim at, so a click anywhere in the block seeks to where
+        // it landed.
+        let seek = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        seek.add_css_class("seek");
+        seek.set_tooltip_text(Some("Click to seek"));
+        seek.append(&progress);
+        seek.append(&times);
+        {
+            let target = target.clone();
+            let playback = playback.clone();
+            // The width the fraction is measured against is the widget's own, read
+            // when the click lands - the tile can have been re-laid out since.
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |gesture, _, x, _| {
+                let (Some(widget), Some(current)) = (gesture.widget(), playback.borrow().clone())
+                else {
+                    return;
+                };
+                let width = f64::from(widget.width());
+                if width <= 0.0 || current.length == 0 {
+                    return;
+                }
+                let seconds = current.second_at((x / width).clamp(0.0, 1.0));
+                player_command(mpris::seek(&target.borrow(), seconds));
+                // Paint where the track now is rather than where it was: waiting
+                // for the next poll would show the old position for as long as the
+                // poll takes. The poll reads the truth back anyway, so a seek the
+                // player refuses corrects itself on the next tick.
+                if let Some(current) = playback.borrow_mut().as_mut() {
+                    current.position = seconds * 1_000_000;
+                }
+            });
+            seek.add_controller(gesture);
+        }
 
-        let previous = transport_button(names::SKIP_BACK, "Previous track", || {
-            let _ = hypr_osd_core::mpris::skip(hypr_osd_core::mpris::Direction::Previous);
+        // The transport: what is on both sides of the play button is the state of
+        // the player rather than another action, and both read their state from
+        // what is on screen - which the poll then reads back from the player.
+        let shuffle = transport_button(names::SHUFFLE, "Shuffle is off", {
+            let target = target.clone();
+            let playback = playback.clone();
+            move || {
+                let on = playback.borrow().as_ref().is_some_and(|it| it.shuffle);
+                player_command(mpris::set_shuffle(&target.borrow(), !on));
+            }
         });
-        let play = transport_button(names::PLAY, "Play or pause", || {
-            let _ = hypr_osd_core::mpris::play_pause();
+        let previous = transport_button(names::SKIP_BACK, "Previous track", {
+            let target = target.clone();
+            move || player_command(mpris::skip(Direction::Previous, &target.borrow()))
         });
-        let next = transport_button(names::SKIP_FORWARD, "Next track", || {
-            let _ = hypr_osd_core::mpris::skip(hypr_osd_core::mpris::Direction::Next);
+        let play = transport_button(names::PLAY, "Play or pause", {
+            let target = target.clone();
+            move || player_command(mpris::play_pause(&target.borrow()))
+        });
+        let next = transport_button(names::SKIP_FORWARD, "Next track", {
+            let target = target.clone();
+            move || player_command(mpris::skip(Direction::Next, &target.borrow()))
+        });
+        let repeat = transport_button(names::REPEAT, "Repeat is off", {
+            let target = target.clone();
+            let playback = playback.clone();
+            move || {
+                let next = playback
+                    .borrow()
+                    .as_ref()
+                    .map(|it| it.repeat.next())
+                    .unwrap_or_default();
+                player_command(mpris::set_repeat(&target.borrow(), next));
+            }
         });
         let transport = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         transport.add_css_class("transport");
         transport.set_halign(gtk::Align::Center);
-        for button in [&previous, &play, &next] {
+        for button in [&shuffle, &previous, &play, &next, &repeat] {
             transport.append(button);
         }
 
+        // The player's own volume. `change-value` is the *user's* intent - a drag,
+        // a scroll, an arrow key - and is not emitted for a programmatic
+        // `set_value`, which is what lets the poll paint a level without
+        // commanding the player.
+        let volume_icon = icons::lucide(names::VOLUME_HIGH, BUTTON_ICON);
+        volume_icon.add_css_class("volume-icon");
+        volume_icon.set_valign(gtk::Align::Center);
+        let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.05);
+        volume.add_css_class("volume");
+        volume.set_hexpand(true);
+        volume.set_valign(gtk::Align::Center);
+        volume.set_draw_value(false);
+        let volume_value = gtk::Label::new(None);
+        volume_value.add_css_class("value");
+        volume_value.set_valign(gtk::Align::Center);
+        volume_value.set_xalign(1.0);
+        volume_value.set_width_chars(4);
+        let volume_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        volume_row.add_css_class("volume-row");
+        volume_row.append(&volume_icon);
+        volume_row.append(&volume);
+        volume_row.append(&volume_value);
+        {
+            let target = target.clone();
+            let settle = settle.clone();
+            let settling = settling.clone();
+            let level = Rc::new(Cell::new(0.0_f64));
+            volume.connect_change_value(move |_, _, value| {
+                level.set(value);
+                settling.set(true);
+                let target = target.clone();
+                let settling = settling.clone();
+                let level = level.clone();
+                settle.arm(VOLUME_SETTLE, move || {
+                    player_command(mpris::set_volume(&target.borrow(), level.get()));
+                    settling.set(false);
+                });
+                glib::Propagation::Proceed
+            });
+        }
+        {
+            // The number follows the fill while a drag is in flight, which the
+            // poll cannot do: it is not allowed to touch the slider then.
+            let value = volume_value.clone();
+            volume.connect_value_changed(move |scale| {
+                value.set_text(&format!("{}%", (scale.value() * 100.0).round() as i32));
+            });
+        }
+
+        let players_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        players_row.add_css_class("players");
+
         let media = tile("now playing", names::MUSIC);
-        media.append(&track);
-        media.append(&artist);
-        media.append(&progress_row);
+        media.append(&art_row);
+        media.append(&seek);
         media.append(&transport);
+        media.append(&volume_row);
+        media.append(&players_row);
 
         // ---- notification tile ---------------------------------------------
         let notif_count = gtk::Label::new(Some("All caught up"));
@@ -286,14 +495,27 @@ impl IslandView {
             clock,
             date,
             chips,
-            track,
-            artist,
+            art,
+            cover,
+            title,
+            subtitle,
             progress,
             elapsed,
             total,
+            seek,
             play,
-            progress_row,
+            shuffle,
+            repeat,
             transport,
+            volume_row,
+            volume,
+            volume_value,
+            players_row,
+            playback,
+            target,
+            players: RefCell::new(Vec::new()),
+            art_url: RefCell::new(String::new()),
+            settling,
             notif_count,
             notif_rows,
             ages: RefCell::new(Vec::new()),
@@ -335,26 +557,77 @@ impl IslandView {
         self.date.set_text(&text("%A, %d %B %Y"));
     }
 
-    /// What is playing, or nothing at all.
-    pub fn render_media(&self, playback: Option<&Playback>) {
+    // ---- the media tile ----------------------------------------------------
+
+    /// Read the player and paint the tile.
+    ///
+    /// This is the one place `main` does not decide *when* to read, and for a
+    /// reason: two of the tile's controls change what it shows from the inside - a
+    /// click on the progress bar and a click on a player chip - so the tile reads
+    /// its own state. `main`'s heartbeat calls this for everything else: every
+    /// `media_every_ms`, and once before the panel appears.
+    ///
+    /// `read_players` also re-reads the list of players, which `main` asks for on
+    /// its slower clock: listing them forks `playerctl` a second time, and the list
+    /// only changes when a player comes or goes.
+    pub fn refresh_media(self: &Rc<Self>, read_players: bool) {
+        if read_players {
+            *self.players.borrow_mut() = mpris::players();
+        }
+        let playback = mpris::playback(&self.target.borrow());
+        self.render_media(playback.as_ref());
+        // After the tile, not before: the chips mark the player that is *on
+        // screen*, and that is what the tile has just stored.
+        self.render_players();
+    }
+
+    /// What is on the tile: the snapshot [`IslandView::refresh_media`] last read.
+    /// The header chips and the `status` verb are painted from this, so neither
+    /// can disagree with the tile about what is playing.
+    pub fn playback(&self) -> Option<Playback> {
+        self.playback.borrow().clone()
+    }
+
+    /// The player the tile is following, and the players it could follow instead -
+    /// what the `status` verb prints.
+    pub fn target(&self) -> Player {
+        self.target.borrow().clone()
+    }
+
+    pub fn players_list(&self) -> Vec<String> {
+        self.players.borrow().clone()
+    }
+
+    /// What is playing, and everything that follows from it: the cover, the two
+    /// lines of text beside it, the progress bar, the five transport buttons, the
+    /// player's own volume, and the chips that say which player this is.
+    pub fn render_media(self: &Rc<Self>, playback: Option<&Playback>) {
+        *self.playback.borrow_mut() = playback.cloned();
+
         let Some(playback) = playback else {
-            self.track.set_text("Nothing playing");
-            self.artist.set_visible(false);
-            self.progress_row.set_visible(false);
+            self.title.set_text("Nothing playing");
+            self.subtitle.set_visible(false);
+            self.seek.set_visible(false);
             self.transport.set_sensitive(false);
+            self.volume_row.set_visible(false);
             set_button_icon(&self.play, names::PLAY);
+            // Nothing loaded: the cover goes back to the stand-in, exactly as it
+            // does for artwork that cannot be read.
+            self.render_cover("");
             return;
         };
 
-        self.track.set_text(&playback.track.title);
+        self.title.set_text(&playback.track.title);
         let subtitle = playback.track.subtitle();
-        self.artist.set_text(&subtitle);
-        self.artist.set_visible(!subtitle.is_empty());
+        self.subtitle.set_text(&subtitle);
+        self.subtitle.set_visible(!subtitle.is_empty());
+        self.render_cover(&playback.track.art);
 
         // A stream with no length has no progress to draw; a bar stuck at zero
-        // would claim it had just started.
+        // would claim it had just started - and there would be nothing to seek in
+        // either.
         let known_length = playback.length > 0;
-        self.progress_row.set_visible(known_length);
+        self.seek.set_visible(known_length);
         if known_length {
             self.progress.set_fraction(playback.fraction());
             self.elapsed.set_text(&playback.elapsed());
@@ -370,6 +643,161 @@ impl IslandView {
                 names::PLAY
             },
         );
+
+        // The two toggles wear the accent while they are on, the way the DND
+        // switch does - a state worth seeing without reading a tooltip. Which
+        // *kind* of repeat it is has no drawing of its own, so it goes in the
+        // words, which is also the only place a tooltip can say it.
+        set_class(&self.shuffle, "on", playback.shuffle);
+        set_class(&self.repeat, "on", playback.repeat != Repeat::Off);
+        self.shuffle.set_tooltip_text(Some(if playback.shuffle {
+            "Shuffle is on"
+        } else {
+            "Shuffle is off"
+        }));
+        self.repeat.set_tooltip_text(Some(match playback.repeat {
+            Repeat::Off => "Repeat is off",
+            Repeat::Track => "Repeating this track",
+            Repeat::All => "Repeating the queue",
+        }));
+
+        match playback.volume {
+            // While a drag is in flight the slider belongs to the pointer: the
+            // poll may not pull it back under the finger, and the level the drag
+            // settles on is what reaches the player a moment later.
+            Some(_) if self.settling.get() => self.volume_row.set_visible(true),
+            // A player that reports no volume of its own - a browser usually does
+            // not - gets no row at all, rather than one that cannot do anything.
+            Some(level) => {
+                self.volume.set_value(level);
+                self.volume_value
+                    .set_text(&format!("{}%", (level * 100.0).round() as i32));
+                self.volume_row.set_visible(true);
+            }
+            None => self.volume_row.set_visible(false),
+        }
+    }
+
+    /// The cover: the previous one stays until the new one is readable, and the
+    /// stand-in shows while the player reports no artwork - or artwork this cannot
+    /// read (a `blob:` URL, a picture that fails to decode).
+    fn render_cover(self: &Rc<Self>, url: &str) {
+        if *self.art_url.borrow() == url {
+            return;
+        }
+        *self.art_url.borrow_mut() = url.to_owned();
+        // A new track starts on the stand-in rather than on the last track's
+        // cover, which would misrepresent what is playing.
+        self.art.set_visible_child_name("fallback");
+        if url.is_empty() {
+            return;
+        }
+
+        let me = Rc::downgrade(self);
+        let expected = url.to_owned();
+        art::load(url, move |texture| {
+            let Some(me) = me.upgrade() else {
+                return;
+            };
+            // The cover only lands if it is still the track on the tile.
+            if *me.art_url.borrow() != expected {
+                return;
+            }
+            match texture {
+                Some(texture) => {
+                    me.cover.set_paintable(Some(&texture));
+                    me.art.set_visible_child_name("cover");
+                }
+                None => me.art.set_visible_child_name("fallback"),
+            }
+        });
+    }
+
+    /// The chips that choose which player the tile follows, and the healing that
+    /// goes with them: a player this tile was switched to can go away (a browser
+    /// tab closing), and then it is back to whichever playerctl picks.
+    ///
+    /// The row is hidden unless there is a choice to make - a list of one is not a
+    /// choice, it is a label pretending to be a button.
+    fn render_players(self: &Rc<Self>) {
+        let players = self.players.borrow().clone();
+
+        // A player that has gone cannot stay chosen. An *empty* list is not a
+        // judgement about the chosen one - it is what a failed listing looks like -
+        // so nothing is reset then.
+        let gone = match self.target.borrow().name() {
+            Some(name) => !players.is_empty() && !players.iter().any(|player| player == name),
+            None => false,
+        };
+        if gone {
+            *self.target.borrow_mut() = Player::Active;
+        }
+        // Which chip the tile is showing: a chosen player by name, or - while it is
+        // following playerctl's own choice - the one the track on screen came from.
+        // `{{playerName}}` is the plain name, which is exactly what a chip is
+        // labelled with, so the two match without a lookup.
+        let chosen = match self.target.borrow().name() {
+            Some(name) => Some(name.to_owned()),
+            None => {
+                let playback = self.playback.borrow();
+                let player = playback
+                    .as_ref()
+                    .map(|it| it.track.player.clone())
+                    .unwrap_or_default();
+                (!player.is_empty()).then_some(player)
+            }
+        };
+
+        while let Some(child) = self.players_row.first_child() {
+            self.players_row.remove(&child);
+        }
+        self.players_row.set_visible(players.len() > 1);
+        for name in players {
+            let label = gtk::Label::new(Some(&name));
+            label.add_css_class("player-name");
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            text::cap_width(&label, PLAYER_CHIP);
+            let chip = gtk::Button::new();
+            chip.add_css_class("player-chip");
+            chip.set_child(Some(&label));
+            chip.set_tooltip_text(Some(&format!("Follow {name}")));
+            chip.set_focus_on_click(false);
+            chip.set_can_focus(false);
+            set_class(&chip, "selected", chosen.as_deref() == Some(name.as_str()));
+
+            let weak = Rc::downgrade(self);
+            let target = self.target.clone();
+            chip.connect_clicked(move |_| {
+                *target.borrow_mut() = Player::named(name.clone());
+                // Read straight away rather than waiting for the heartbeat: the
+                // whole point of the chip is that the *other* player is on the
+                // tile now, and a poll's worth of the old track would be a lie.
+                // Only the accent moves by hand, and only the tile is painted -
+                // rebuilding the row this button belongs to, from inside its own
+                // click handler, is a risk with nothing to gain: the next
+                // heartbeat paints it from the truth anyway.
+                if let Some(view) = weak.upgrade() {
+                    view.select_player(&name);
+                    let playback = mpris::playback(&target.borrow());
+                    view.render_media(playback.as_ref());
+                }
+            });
+            self.players_row.append(&chip);
+        }
+    }
+
+    /// Move the accent to the chip that was clicked, without rebuilding the row.
+    fn select_player(&self, chosen: &str) {
+        let mut child = self.players_row.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            let Some(button) = widget.downcast_ref::<gtk::Button>() else {
+                continue;
+            };
+            let label = button.child().and_downcast::<gtk::Label>();
+            let mine = label.is_some_and(|label| label.text() == chosen);
+            set_class(button, "selected", mine);
+        }
     }
 
     /// The notification tile: the count, the rows, and the buttons that only make
@@ -745,6 +1173,17 @@ fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
         widget.add_css_class(class);
     } else {
         widget.remove_css_class(class);
+    }
+}
+
+/// Run one of the player's commands. Fire and forget, like the notification
+/// buttons: what the player did comes back through the next poll, so the tile
+/// never guesses - and a player that refuses a command (a browser asked to
+/// shuffle, a stream with no length to seek in) is worth a line on stderr, not a
+/// dialog inside a popup.
+fn player_command(result: Result<(), String>) {
+    if let Err(error) = result {
+        eprintln!("hypr-osd-island: {error}");
     }
 }
 

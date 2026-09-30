@@ -92,6 +92,24 @@ label.chip.paused {
 }
 
 /* ---- now playing ---------------------------------------------------------- */
+/* The cover's tile, and the stand-in drawn on it when the player reports no
+ * artwork - or artwork this cannot read. The radius is the one every nested
+ * surface in the theme wears. */
+stack.art {
+    background-color: @surface;
+    border-radius: 12px;
+}
+
+/* The cover itself: the widget clips it to the tile's shape (`set_overflow`),
+ * which is the half of a rounded cover that CSS cannot do alone. */
+image.cover {
+    border-radius: 12px;
+}
+
+image.art-fallback {
+    color: @fg_faint;
+}
+
 label.track {
     font-size: 14px;
     font-weight: 600;
@@ -108,15 +126,25 @@ label.time {
     color: @fg_faint;
 }
 
+/* The progress bar and the two times are one click target, so the block is what
+ * gives the pointer something to land on: three pixels of bar is not. */
+box.seek {
+    padding: 2px 0;
+}
+
+box.seek:hover progressbar > trough {
+    background-color: @surface_h;
+}
+
 box.transport {
     margin-top: 2px;
 }
 
 button.transport-button {
-    min-width: 30px;
+    min-width: 28px;
     border-radius: 999px;
     background-color: @surface;
-    color: @fg;
+    color: @fg_dim;
     padding: 2px 0;
 }
 
@@ -125,9 +153,100 @@ button.transport-button:hover {
     color: @accent;
 }
 
+/* Shuffle and repeat are *states* rather than actions, so while they are on they
+ * say so in the accent - the way the DND switch says it in the warning colour.
+ * Which kind of repeat it is has no drawing of its own and lives in the tooltip,
+ * because there is no room for a word here. */
+button.transport-button.on {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
 button.transport-button:disabled {
     color: @fg_faint;
     background-color: transparent;
+}
+
+/* ---- the player's own volume ---------------------------------------------- */
+/* Not the sink's: a player at 40% of a sink at 80% is an ordinary state, and the
+ * sink's step belongs to the volume element. The same recipe as that card's
+ * slider (an @surface_h trough under an accent → accent2 fill), one size down:
+ * this is a secondary control whose row is part of the tile's height. */
+image.volume-icon {
+    color: @fg_dim;
+}
+
+scale.volume {
+    min-height: 16px;
+}
+
+scale.volume > trough {
+    /* The GTK theme asks for 150px of minimum width here; the tile has about 170
+     * for the whole row. */
+    min-width: 0;
+    min-height: 3px;
+    border-radius: 999px;
+    background-color: @surface_h;
+}
+
+scale.volume > trough > highlight {
+    border-radius: 999px;
+    background-image: linear-gradient(90deg, @accent, @accent2);
+}
+
+scale.volume > trough > slider {
+    min-width: 10px;
+    min-height: 10px;
+    /* a 10px thumb on a 3px trough: (10 - 3) / 2, rounded down */
+    margin: -4px;
+    border-radius: 999px;
+    background-color: @accent;
+    border: none;
+    box-shadow: none;
+}
+
+scale.volume > trough > slider:active {
+    background-color: @accent2;
+}
+
+label.value {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+/* ---- which player this is ------------------------------------------------ */
+/* The chips that choose the player, in the header chips' capsule and one size
+ * smaller. The row only exists when there is a choice to make. */
+box.players {
+    margin-top: 2px;
+}
+
+button.player-chip {
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    box-shadow: none;
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+
+button.player-chip:hover {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+}
+
+button.player-chip label {
+    font-size: 10px;
+    color: @fg_dim;
+}
+
+button.player-chip.selected {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+}
+
+button.player-chip.selected label {
+    color: @accent;
 }
 
 /* ---- notifications -------------------------------------------------------- */
