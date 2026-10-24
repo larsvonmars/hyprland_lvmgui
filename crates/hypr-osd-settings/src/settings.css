@@ -1,0 +1,579 @@
+/* ── the settings window ─────────────────────────────────────────────────────
+ *
+ * Every element of this collection, one page each: a sidebar of elements on the
+ * left, a scrolling pane of settings on the right. Only what is specific to this
+ * window lives here - the palette comes from ~/.config/hypr-osd/theme.css, the
+ * card it is drawn on (the fill, the border, the radius, the shadow) is the
+ * shell's `box.card`, and the grip, the chips and the small caps come from
+ * `base.css`.
+ *
+ * The shape is the applications panel's, on purpose: this is another panel with
+ * a list down one side and its content beside it, and the two should read as the
+ * same kind of object. What is different is that the rows here are *controls*,
+ * so the hierarchy is turned around - the title of a setting is the readable
+ * line and the help under it is the quiet one, where the panel's tiles make the
+ * picture the loud thing.
+ */
+
+/* ---- the window ----------------------------------------------------------- */
+box.settings {
+    /* The card's own padding comes from the shell; this is the extra breathing
+     * room a window of rows needs. `Settings::content_width` works the pane's
+     * width out from the numbers in the config, not from this - so it only has
+     * to stay small. */
+    padding: 2px 2px 2px 2px;
+}
+
+box.settings-header {
+    padding: 0 2px;
+}
+
+label.popup-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: @fg;
+    letter-spacing: 1.5px;
+}
+
+/* ---- the tabs ------------------------------------------------------------ */
+/* Two buttons beside the window's title: this collection, and the desktop it
+ * sits on. Flat, like the sidebar's rows - the accent is the only ink that says
+ * which one is showing. */
+box.tabs {
+    margin-left: 6px;
+}
+
+button.tab {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 3px 10px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg_dim;
+}
+
+button.tab:hover {
+    background-color: @surface_h;
+    color: @fg;
+}
+
+button.tab.selected {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+label.tab-name {
+    font-size: 12px;
+}
+
+/* ---- the sidebar: one row per element ------------------------------------ */
+box.sidebar {
+    background-color: @surface;
+    border-radius: 12px;
+    padding: 6px;
+}
+
+/* A button arrives from the theme wearing a background, a border, its own
+ * padding and a shadow. A section is a quiet row until it is the one shown. */
+button.section {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 6px 8px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg_dim;
+}
+
+button.section:hover {
+    background-color: @surface_h;
+    color: @fg;
+}
+
+button.section.selected {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+label.section-name {
+    font-size: 12px;
+}
+
+image.section-icon {
+    color: @fg_faint;
+}
+
+button.section.selected image.section-icon {
+    color: @accent;
+}
+
+/* ---- the pane: the settings of one element ------------------------------- */
+scrolledwindow.pane-scroll,
+scrolledwindow.pane-scroll viewport {
+    background: none;
+    border: none;
+}
+
+/* The same thin capsule the applications panel's grid wears. Only the colours
+ * are overridden: the theme's slider is drawn with an 8px transparent border and
+ * a matching negative margin, so restating that geometry is what keeps GTK from
+ * reporting a negative minimum width. */
+scrolledwindow.pane-scroll scrollbar slider {
+    background-color: @surface_h;
+    background-clip: padding-box;
+    border: 8px solid transparent;
+    border-radius: 99px;
+    min-width: 8px;
+    min-height: 8px;
+    margin: -8px;
+}
+
+scrolledwindow.pane-scroll scrollbar slider:hover {
+    background-color: @accent_tint;
+}
+
+box.pane {
+    padding: 2px 4px 2px 2px;
+}
+
+label.pane-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: @fg;
+}
+
+label.pane-blurb {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+/* ---- a group of rows: the Display page's outputs -------------------------- */
+/* A heading is not a setting - it carries no control - so it wears no card of its
+ * own: it is the quiet bar over the run of rows that belong to one output, and
+ * only its name is loud. The rows under it are inset, so the grouping is
+ * something you see rather than something you infer from the order. */
+box.monitor-head {
+    margin: 9px 2px 0 2px;
+    padding: 0 3px;
+}
+
+label.monitor-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: @fg;
+    letter-spacing: 0.3px;
+}
+
+label.monitor-detail {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+image.monitor-icon {
+    color: @accent;
+}
+
+box.setting-row.grouped {
+    margin-left: 10px;
+}
+
+/* ---- the arrangement editor: the outputs as a picture -------------------- */
+/* The Display page opens with the layout itself, drawn to scale. The screens are
+ * boxes to drag rather than rows to type into, because a position is a pair of
+ * numbers (`1903x1440`) and no pair of numbers ever explained a layout.
+ *
+ * A `GtkFixed` holds the boxes, and it is what carries the canvas's own surface:
+ * the boxes are placed at the coordinates the scale works out, not by a box
+ * layout, so their proportions are the monitors' own. */
+fixed.arrange {
+    background-color: @surface;
+    border: 1px solid @hairline;
+    border-radius: 12px;
+}
+
+/* One screen. Its size is set from the layout's pixels, so the padding here is
+ * only what the words need - the rectangle itself is the information. */
+.arrange-item {
+    background-color: @card_top;
+    border: 1px solid @border_soft;
+    border-radius: 8px;
+    padding: 2px 4px;
+    color: @fg_dim;
+}
+
+.arrange-item:hover {
+    border-color: @border_h;
+}
+
+/* The screen the session is on: the same accent a focused row's chip wears. */
+.arrange-item.focused {
+    background-color: @accent_tint;
+    border-color: @accent;
+}
+
+/* An output that is switched off still belongs in the picture - it is a thing to
+ * switch on again - but it is not part of the desktop as it stands. */
+.arrange-item.disabled {
+    opacity: 0.4;
+}
+
+label.arrange-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: @fg;
+}
+
+.arrange-item.focused label.arrange-name {
+    color: @accent;
+}
+
+/* The size the output takes *in the layout* - the number that explains why a 2x
+ * panel is not twice as wide as a 1x one here. */
+label.arrange-size {
+    font-size: 9px;
+    color: @fg_faint;
+}
+
+label.arrange-hint {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+/* The landing spot a drag is aiming at: the cell the box will settle into if
+ * the drag ends now. A dashed outline over a whisper of accent, because it is a
+ * promise, not a screen. */
+.arrange-ghost {
+    background-color: @accent_tint;
+    border: 1px dashed @accent;
+    border-radius: 8px;
+}
+
+/* The line a snap answered to: the shared edge, the adjacency, the centre, or
+ * an origin axis the ghost is sitting on. One pixel wide, the full canvas
+ * across, quiet enough that it reads as a line rather than as a bar. */
+.arrange-guide-v {
+    background-color: @border_h;
+    min-width: 1px;
+}
+
+.arrange-guide-h {
+    background-color: @border_h;
+    min-height: 1px;
+}
+
+/* The box being dragged: lifted off the picture, with the accent border of a
+ * chosen box and a shadow under it - it crosses over its siblings, and the
+ * shadow is what says so. */
+.arrange-item.dragging {
+    border-color: @accent;
+    box-shadow: 0 3px 12px @shadow;
+}
+
+/* The chosen box - the one the popover edits - keeps its outline after the
+ * click. Distinct from the focused screen, which is a tinted fill: a choice is
+ * an accent border and an inner line. */
+.arrange-item.selected {
+    border-color: @accent;
+    box-shadow: inset 0 0 0 1px @accent;
+}
+
+.arrange-item.selected label.arrange-name {
+    color: @accent;
+}
+
+/* The per-output editor, hung off the box that was clicked: one compact row per
+ * field and the primary button, on the same surface the window's rows sit on. */
+popover.arrange-pop > contents {
+    background-color: @card_top;
+    background-image: none;
+    border: 1px solid @hairline;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+popover.arrange-pop label {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+popover.arrange-pop button.arrange-pop-primary {
+    background-color: @surface_h;
+    background-image: none;
+    border: 1px solid @hairline;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 4px 8px;
+    min-width: 0;
+    min-height: 0;
+    margin-top: 2px;
+    color: @fg;
+}
+
+popover.arrange-pop button.arrange-pop-primary:hover {
+    border-color: @border;
+    color: @accent;
+}
+
+/* The output that already is the primary display: the button says so, and is
+ * not a button anymore. */
+popover.arrange-pop button.arrange-pop-primary:disabled {
+    color: @accent;
+    border-color: @border_soft;
+}
+
+/* ---- one setting: its name, its help, its control ------------------------ */
+box.setting-row {
+    background-color: @surface;
+    border: 1px solid @hairline;
+    border-radius: 10px;
+    padding: 7px 10px;
+    min-height: 34px;
+}
+
+box.setting-row:hover {
+    border-color: @border_soft;
+}
+
+label.setting-label {
+    font-size: 13px;
+    color: @fg;
+}
+
+/* The key and its value, under the label: the line that says *where* the
+ * setting lives and whether it is set at all. Quiet, because it is a footnote to
+ * the setting, not the setting. */
+label.setting-help {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+box.setting-control {
+    min-width: 0;
+}
+
+/* ---- a reading: the data a page is about -------------------------------- */
+/* A reading has no control at all - no reset, no switch, nothing to press - so
+ * the row sits flat rather than looking like a setting that failed to draw. Its
+ * value is the point, which is why it is brighter than a setting's footnote line
+ * while the name above it steps back. */
+box.setting-row.reading-row,
+box.setting-row.reading-row:hover {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+box.reading-row label.setting-label {
+    color: @fg_dim;
+}
+
+box.reading-row label.setting-help {
+    font-size: 12px;
+    color: @fg;
+}
+
+/* ---- a shortcut: keys, and what they do -------------------------------- */
+/* A shortcut is a fact, not a control: flat like a reading, so a page of thirty
+ * keys does not read as thirty things to press. The keys are the loud part,
+ * because here they *are* the row's name. */
+box.setting-row.shortcut-row,
+box.setting-row.shortcut-row:hover {
+    background-color: transparent;
+    border-color: transparent;
+    padding: 4px 6px;
+    min-height: 30px;
+}
+
+/* A keycap rather than a word: the keys are drawn like a cap on a keyboard, in
+ * the window's own palette (a shortcut list is reference, not something to
+ * press, so it is not the accent). The width is fixed in the view, which is what
+ * lines the actions up down the page. */
+label.keycap {
+    font-size: 11px;
+    font-weight: 600;
+    color: @fg;
+    background-color: @surface_h;
+    border: 1px solid @hairline;
+    border-radius: 6px;
+    padding: 2px 7px;
+}
+
+box.shortcut-row label.setting-help {
+    font-size: 10px;
+    color: @fg_dim;
+}
+
+/* A round button whose whole content is one icon: the reset and the close. The
+ * tooltip carries the words, because there is nowhere else for them to go. */
+button.iconbtn {
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 4px 6px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg_faint;
+}
+
+button.iconbtn:hover {
+    background-color: @surface_h;
+    color: @fg;
+}
+
+/* The reset mark is a footnote until you are on it: a listing of what the file
+ * sets should not be a wall of buttons. */
+button.iconbtn.reset:hover {
+    color: @warn;
+}
+
+/* ---- the controls -------------------------------------------------------- */
+/* A switch is the one stock control this window uses, and the theme draws its
+ * "on" state with the colour scheme the user picked for GTK
+ * (`~/.config/gtk-4.0/noctalia.css`). Restating the geometry and the colours here
+ * is what the collection does everywhere; note that GTK CSS has no `!important`,
+ * so a *rule* the theme states at the same or higher priority wins - and this one
+ * is a stock widget, so what it does with the toolkit's own accent is the
+ * toolkit's business, not a palette violation. */
+switch {
+    background-color: @surface_h;
+    min-width: 0;
+    min-height: 0;
+}
+
+switch:checked {
+    background-color: @accent_tint;
+    border-color: @border;
+}
+
+switch > slider {
+    background-color: @fg_dim;
+    border: none;
+    min-width: 14px;
+    min-height: 14px;
+    margin: -2px;
+}
+
+switch:checked > slider {
+    background-color: @accent;
+}
+
+/* A spinner is a number you can also type: the theme gives it a heavy frame, so
+ * what is left here is the quiet box this window's rows want. */
+spinbutton {
+    background-color: @surface_h;
+    border: 1px solid @hairline;
+    border-radius: 8px;
+    box-shadow: none;
+    min-height: 0;
+    color: @fg;
+}
+
+spinbutton:focus-within {
+    border-color: @border;
+}
+
+spinbutton text {
+    background: none;
+    border: none;
+    box-shadow: none;
+    min-height: 0;
+    padding: 2px 4px;
+    color: @fg;
+}
+
+spinbutton button {
+    background: none;
+    border: none;
+    box-shadow: none;
+    padding: 0 2px;
+    min-width: 0;
+    min-height: 0;
+    color: @fg_faint;
+}
+
+spinbutton button:hover {
+    color: @accent;
+}
+
+/* The text field: the same capsule the launcher and the panel's filter wear, at
+ * a row's height. The wildcard is what removes the focus ring the theme draws on
+ * the entry's own `text` node. */
+entry.setting-text,
+entry.setting-text * {
+    background-color: @surface_h;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 0;
+    padding: 0;
+    color: @fg;
+}
+
+entry.setting-text {
+    border: 1px solid @hairline;
+    border-radius: 8px;
+    padding: 3px 6px;
+}
+
+entry.setting-text:focus-within {
+    border-color: @border;
+}
+
+entry.setting-text text {
+    font-size: 12px;
+    caret-color: @accent;
+}
+
+entry.setting-text selection {
+    background-color: @accent_tint;
+    color: @fg;
+}
+
+/* The dropdown: a keyboard layout, a variant, an acceleration profile. A
+ * `GtkDropDown` is a button with an arrow on it, and the theme's own button
+ * wears a filled frame - so this is the same quiet capsule as the text field,
+ * with the arrow dimmed to the same ink as a spinner's buttons. */
+dropdown.setting-choice > button,
+dropdown.setting-choice > button:hover,
+dropdown.setting-choice > button:active {
+    background-color: @surface_h;
+    background-image: none;
+    box-shadow: none;
+    outline: none;
+    border: 1px solid @hairline;
+    border-radius: 8px;
+    min-height: 0;
+    padding: 3px 6px;
+    color: @fg;
+}
+
+dropdown.setting-choice > button:hover {
+    border-color: @border;
+}
+
+/* The arrow. `widget.image` reaches the `GtkImage` the button ends with. */
+dropdown.setting-choice > button image {
+    color: @fg_faint;
+    min-width: 0;
+    min-height: 0;
+}
+
+label.choice-name {
+    font-size: 12px;
+    color: @fg;
+}
+
+/* ---- the footer ---------------------------------------------------------- */
+label.hint {
+    font-size: 10px;
+    color: @fg_faint;
+}

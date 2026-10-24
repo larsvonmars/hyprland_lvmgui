@@ -25,16 +25,18 @@ are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
-| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
+| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen — and **every one of those parts can be switched off** (the settings window's Bar page, or the `show_*` keys in `bar.conf`), so the bar can be anything from all of it to a clock and a status pill. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup, and the same on the grid button at the left end unfolds the applications panel. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
 | Island popup | `hypr-osd-island` | What is playing (cover, title, artist, progress with click-to-seek, shuffle/previous/play/next/repeat, the player's own volume and a chip per player), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
-| System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. |
+| System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. Its header's **gear** opens the settings window. |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
 | Media card | `hypr-osd-media` | Cover art, title and artist, with previous/next buttons. Appears when a new medium starts playing — no keybinding involved. |
 | Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down. `SUPER + SHIFT + L`, or the hardware power key. |
 | Window switcher | `hypr-osd-switcher` | Every window you have open, most recently used first, with its application icon and title. `ALT + TAB`, and `ALT + SHIFT + TAB` to walk backwards. |
 | Workspace overview | `hypr-osd-overview` | The whole desktop as a picture of itself: every workspace as a chip, every window as a real thumbnail in its own shape, scaled to fit one screen. `SUPER + SHIFT + TAB`. |
 | Launcher | `hypr-osd-launcher` | A search card in the middle of the screen: it matches the applications installed on the machine (names, generic names, keywords, categories) and the files in your own directories, and opens the selected one. `SUPER + SPACE`. Replaces the Tauri/Next.js [`linux-launchpad`](../linux-launchpad) — see [Launcher](#launcher). |
-| Applications panel | `hypr-osd-apps` | Every application installed on the machine, as a grid of tiles with a drawer list down the side (and a **Pinned** one), searched through the same field the launcher has. The old launchpad's main window, rebuilt as a card and opened by the **grid button at the bar's left end** — see [Applications panel](#applications-panel). |
+| Applications panel | `hypr-osd-apps` | Every application installed on the machine, as a grid of tiles with a drawer list down the side (and a **Pinned** one), searched through the same field the launcher has. The old launchpad's main window, rebuilt as a card and opened by hovering the **grid button at the bar's left end** (the pointer leaving it closes it again) — see [Applications panel](#applications-panel). |
+| Settings | `hypr-osd-settings` | Every setting this desktop has, in one window, under three tabs: **Hypr OSD** (a page per element of this collection), **Hyprland** (a page per area of the compositor itself — display, general, decoration, input, animations, misc) and **System** (the energy policy, with the machine's live power data). A control per key, the `.conf` file rewritten as you change it, and the Hyprland ones handed to the compositor at once. Opened by the **gear at the right end of the system popup's header** — see [Settings](#settings). |
+| Energy saving | `hypr-osd-energy` | A headless daemon that drops the compositor's expensive effects — animations, blur, shadows, opacity, dimming, rounded corners — while the machine is in a saving power profile, and puts the machine's own values back when it is not. The policy is the settings window's **System** tab; the machine's live profile, CPU and battery are the data that page shows. |
 
 Siblings of this repo, which share the design language:
 [`linux-launchpad`](../linux-launchpad) — whose spotlight overlay this collection
@@ -46,7 +48,8 @@ crates/
                        layer surface, the single-instance command line, the config
                        reader, Hyprland's two sockets with their event stream,
                        MPRIS, the window and workspace list with its application
-                       icons, and the two ways to run a command without blocking
+                       icons, the machine's own keyboard layouts and variants, and
+                       the two ways to run a command without blocking
   hypr-osd-bar/        the bar, and the StatusNotifier tray host it carries
   hypr-osd-island/     the popup that unfolds from the clock
   hypr-osd-volume/     element #1: the volume card
@@ -56,9 +59,14 @@ crates/
   hypr-osd-overview/   element #5: the workspace overview
   hypr-osd-launcher/   element #6: the search card on SUPER + SPACE
   hypr-osd-apps/      element #7: the applications panel (the bar's grid button)
+  hypr-osd-settings/  element #8: every setting of this collection and of
+                      Hyprland, in one window (the gear in the system popup)
+  hypr-osd-energy/    element #9: the headless daemon that saves energy while the
+                      machine is in a saving power profile
 scripts/
   install.sh           build + install + wire up Hyprland (and drop waybar)
-  hyprland/osd.lua     the Hyprland side (autostart, keys, layer rule)
+  hyprland/osd.lua     the Hyprland side (autostart, keys, layer rule, and the
+                       generated desktop settings)
 configs/
   theme.css            the palette: every colour of this desktop
   hyprpaper.conf       the desktop wallpaper (the lock screen's, too)
@@ -121,18 +129,22 @@ What it does:
 
 | | |
 | --- | --- |
-| `~/.local/bin/hypr-osd-*` | the ten binaries (the bar, the island, and the eight cards) |
+| `~/.local/bin/hypr-osd-*` | the eleven binaries (the bar, the island, and the nine cards) |
 | `~/.config/hypr-osd/theme.css` | the palette — only if the file is missing, so your edits survive |
 | `~/.config/hypr-osd/bar.conf` | the bar's settings (only created if missing) |
 | `~/.config/hypr-osd/island.conf` | the island popup's settings (only created if missing) |
 | `~/.config/hypr-osd/*.conf` | one config template per card (only created if missing) |
-| `~/.config/hypr/osd.lua` | the bar, the autostart, every keybinding and the layer rule, generated from `scripts/hyprland/osd.lua` |
+| `~/.config/hypr-osd/settings.conf` | the settings window's own geometry and behaviour — see [Settings](#settings) |
+| `~/.config/hypr-osd/desktop.conf` | the Hyprland tab's settings: the compositor's own options, as option paths, plus one `monitor:<output>:<field>` entry per display you have configured and the collection's own `primary` display (only created if missing) |
+| `~/.config/hypr/hypr-osd-desktop.lua` | **generated** by the settings window from that file, and loaded by `osd.lua` — the one file in your `~/.config/hypr` this collection writes, and only when you change a Hyprland setting |
+| `~/.config/hypr/osd.lua` | the bar, the autostart, every keybinding, the layer rule and the generated Hyprland settings, generated from `scripts/hyprland/osd.lua` |
 | `~/.config/hypr/hyprland.lua` | one appended line: `require("osd")` (backup: `hyprland.lua.bak`), then `hyprctl reload` |
 | `~/.config/hypr/hyprland.lua` | waybar's autostart commented out, and waybar stopped (backup: `hyprland.lua.bak-waybar`) — see [Waybar](#waybar) |
 | `~/.config/hypr/hyprland.lua` | `require("launchpad")` commented out, and the old launcher daemon stopped, because `SUPER + SPACE` now belongs to `hypr-osd-launcher` (backup: `hyprland.lua.bak-launchpad`) — see [Launcher](#launcher) |
 | `~/.config/hypr/hyprpaper.conf` | the desktop wallpaper — only when hyprpaper is installed, and only if the file is missing |
 | `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed, and only if the file is missing |
 | `~/.config/hypr/hypridle.conf` | idle timers — only when `hypridle` is installed, and only if the file is missing |
+| a running element | stopped and started again, once the new binary and the config repairs are in place: every element reads its binary, its config and the palette exactly once, at start-up, so a re-install that left the process alone would keep the old code until the next login. Only the elements that were running are restarted |
 
 One thing to know: the volume element owns the volume **step**, so the three
 `XF86Audio*` binds in `osd.lua` have to be the only ones on those keys. If
@@ -251,21 +263,23 @@ second, rebuilt the same way and for the same reasons (one GTK4 binary, no
 webview, no Node build), with one difference that is the whole point of it:
 
 **It is opened by a button on the bar, not by a key.** The far-left pill of the
-bar is a grid of squares; clicking it asks this element to `toggle`, and the pill
-lights up in the accent while the panel is up, so the button is also the way back
-out. A launcher you have to remember a key for is one you use when you already
+bar is a grid of squares; the pointer resting on it asks this element to `open`
+(the pill lights up in the accent while the panel is up), and the panel takes
+itself away again once the pointer has left both the button and the panel — the
+same gesture as the island under the clock and the system popup under the status
+pill. A launcher you have to remember a key for is one you use when you already
 know what you want to run; a grid of everything installed is what you use when you
 do not, and the pointer is already on the bar. `osd.lua` has a commented
 `SUPER + A` bind if you want a key for it as well.
 
 | | |
 | --- | --- |
-| Open it | the grid button at the bar's **left** end, or `hypr-osd-apps toggle` |
+| Open it | hover the grid button at the bar's **left** end, or `hypr-osd-apps show` |
 | Walk the tiles | the arrow keys (left/right/up/down, `Page Up`/`Page Down`, `Home`/`End`), or the pointer |
 | Change drawer | `Tab`/`Shift+Tab`, a click on a drawer row, or `hypr-osd-apps drawer <name\|number>` |
 | Open | `Enter`, or a left click on a tile |
 | Pin | a **right click** on a tile (`~/.config/hypr-osd/apps-pinned`, one id per line) |
-| Close | `Escape`, the button again, or `hypr-osd-apps hide` |
+| Close | move the pointer off the panel, press `Escape`, or `hypr-osd-apps hide` |
 
 The drawers are the freedesktop categories, mapped the way the old window mapped
 them (`Development`, `Graphics`, `Internet & Networking`, …) with anything that
@@ -279,7 +293,7 @@ Two things are worth knowing, and they are the same two as the launcher's:
 
 * **It takes the keyboard while it is up** — a layer surface that wants to be typed
   into has no other way, and the search field is the point. So it ends the way the
-  other keyboard cards do: `Escape`, the button again, or `idle_close_ms` (a
+  other keyboard cards do: the pointer leaving it, `Escape`, or `idle_close_ms` (a
   minute by default) if you walked away.
 * **The card keeps its size.** Picking a drawer with two applications in it cannot
   make the panel jump: the grid lives in a fixed-height scroller (`grid_height`,
@@ -288,9 +302,283 @@ Two things are worth knowing, and they are the same two as the launcher's:
 
 Unlike the launcher, nothing here waits for a key press: the button is the
 trigger, and it is the *bar* that starts the element — `apps_command` in
-`bar.conf`. That is also why the panel is autostarted with the others: it reads
-the installed applications once, while nobody is waiting, so the first click paints
-at once.
+`bar.conf`. The bar only ever asks the panel to *open*; the panel itself watches
+the pointer (it is the only program that can see both the button and the card)
+and closes once the pointer has left them, which is why a click on the button can
+never leave it stuck. It is also why the panel is autostarted with the others: it
+reads the installed applications once, while nobody is waiting, so the first
+hover paints at once.
+
+## Settings
+
+Every element reads its own `.conf` once, at start-up, and every key is optional —
+which is a fine thing to document and a tedious thing to use. This element is the
+other way in: one card, a page per element, a control per key, and the file
+rewritten as the values change.
+
+**It is opened by the gear at the right end of the system popup's header** (hover
+the bar's status pill and the popup is there), and the gear wears the accent while
+the window is up. It has no keybinding of its own; `osd.lua` carries a commented
+`SUPER + SHIFT + S` if you want one.
+
+It has **three tabs**, because this desktop is three things at once: the elements,
+and the machine they run on.
+
+* **Hypr OSD** — this collection. Eleven pages, one per element, exactly the keys
+  and defaults its own binary reads, and a twelfth that is not an element:
+  **Shortcuts**, every key the collection implements. See [The Shortcuts
+  page](#the-shortcuts-page).
+* **Hyprland** — the compositor itself: the **displays** (`display`, one row per
+  connected output — resolution and refresh rate, position, scale, rotation,
+  mirror, on or off), the geometry (`general`), the corners and the blur
+  (`decoration`), the keyboard and the pointers (`input`), the transitions
+  (`animations`) and the switches nobody knows where to look for (`misc`). These
+  are Hyprland's own options, so a change here is applied to the running session
+  the moment you make it; see [The Hyprland tab](#the-hyprland-tab).
+* **System** — the machine under all of it: the **energy policy**, which opens with
+  live readings (the power profile and its driver, the CPU governor and frequency,
+  the battery, and which managed effects are on right now) and then the switches
+  that say which effects to drop while the machine is saving, plus two buttons to
+  act now; see [The System tab](#the-system-tab-energy-saving).
+
+| | |
+| --- | --- |
+| Open it | the gear in the system popup's header, or `hypr-osd-settings toggle` |
+| Switch tabs | a click on `Hypr OSD` / `Hyprland`, or `hypr-osd-settings tab <name\|number>` |
+| Pick a page | a click on the list down the left, or `hypr-osd-settings section <name\|number>` |
+| Change a value | the control on the row: a switch, a spinner, a text field (Enter or leaving it commits), or a dropdown for a value that is one of a list |
+| Reset one key | the ↺ beside a key that is set — the line is *removed*, so the built-in default applies again |
+| Apply it | the **Restart** chip on an element's page (that element stops and starts again), the **Apply** chip on a Hyprland one, or nothing at all: a Hyprland value is applied as you change it |
+| Close | `Escape`, the ✕, or `hypr-osd-settings hide` |
+
+Three things about it are worth knowing:
+
+* **The file stays the source of truth.** A change rewrites exactly one line
+  (`hypr-osd-core`'s `config::edit_value`), in place, so the comments and the order
+  of a file you have edited by hand survive; a key set back to its default is
+  *deleted* rather than written out, because in this format an absent key means
+  "whatever the element's default is". A key the file sets that the catalogue does
+  not know about is still shown, as plain text, so nothing is invisible here.
+* **On the Hypr OSD tab a change takes effect when that element is restarted** —
+  the config is read once, at start-up, so there is nothing to push it into a
+  running daemon. That is what the Restart chip is for: it stops the element and
+  starts it again, waiting for the old one to let go of its D-Bus name (an element
+  that starts too early would just forward its empty command line to the process
+  that is going away and leave nothing running). The Hyprland tab is the opposite —
+  the compositor takes a change at once.
+* **It takes the keyboard while it is up**, because the text fields have to be
+  typed into and a layer-shell surface has no other way. It ends with `Escape`, the
+  ✕, or `idle_close_ms` (two minutes by default) if you walked away — and the card
+  is one size whichever page is on it.
+
+The pages, the labels and the defaults come from `hypr-osd-core`'s `settings`
+module — one table per element, with the control each key wants — so the window and
+the elements cannot disagree about what a key is called or what it is worth unset.
+A test holds every default against its own control type. The window itself is
+scriptable, which is also how it is tested:
+
+```sh
+hypr-osd-settings sections              # the three tabs, and the pages of each
+hypr-osd-settings tab hyprland          # ...and show one of them
+hypr-osd-settings keys bar              # every catalogue key of one element, set or default
+hypr-osd-settings keys general          # a Hyprland page, plus what the compositor has each option at *now*
+hypr-osd-settings keys display          # every connected output, field by field
+hypr-osd-settings keys shortcuts        # every key this collection implements
+hypr-osd-settings choices input         # every name the dropdowns of one page offer
+hypr-osd-settings set bar tray_icon_size 22
+hypr-osd-settings unset bar tray_icon_size
+hypr-osd-settings set decoration decoration:rounding 12   # applied to the running session
+hypr-osd-settings apply                 # write the generated Lua again and hand it over
+hypr-osd-settings restart bar
+hypr-osd-settings command apply           # run the shown page's button (System: apply/restore)
+hypr-osd-settings status                # the tabs, the pages, the files, the last apply, open or closed
+```
+
+### The Shortcuts page
+
+The last page of the Hypr OSD tab is a list rather than a form: every key this
+collection implements, drawn as a keycap with what it does under it. Nothing on it
+can be changed, so it has no chip - the footer says where the bound half lives
+instead.
+
+Its two groups come from different places, which is the point of the page. The
+**bound** keys - the volume steps and mute, the session card, the tray, ALT + TAB,
+the overview, the launcher and the lock - are binds in `osd.lua`, so Hyprland
+sends them from anywhere, card or no card. `scripts/hyprland/osd.lua` is their
+source of truth: `cargo test` reads that template at compile time and requires the
+table and the file to name each other's binds, so a key added to the template and
+forgotten on the page (or the other way round) is a test failure. The **cards'
+own** keys - Escape, the arrows, Tab, Enter, 1-9 - are read by the element itself
+while its card owns the keyboard; Hyprland never sees them, which is also why the
+compositor cannot be asked what they are (a Lua-configured bind answers `__lua`
+and a function number, not the command it runs).
+
+`hypr-osd-settings keys shortcuts` prints the same list without the window.
+
+### The Hyprland tab
+
+The elements read a `.conf` file, Hyprland reads the Lua in `~/.config/hypr`, and
+the two do not sound alike: an element's `tick_ms = 1000` and the compositor's
+`decoration:rounding = 10` are different kinds of thing. So the second tab keeps a
+file of its own, `~/.config/hypr-osd/desktop.conf`, in the same `key = value` shape
+— the keys being **option paths**, the names `hyprctl getoption` answers to — and
+the window translates it:
+
+* **A change is live.** The window regenerates `~/.config/hypr/hypr-osd-desktop.lua`
+  from the file — a generated document: one `hl.config({...})` call, holding
+  *only* the options you have set, each table nested the way the path says, then
+  one `hl.monitor({...})` call per output the Display page has been given a value
+  for — and
+  hands it to the compositor with `hyprctl eval 'dofile("…")'`. That is how this
+  Hyprland takes a runtime option change; `hyprctl keyword` is refused by its Lua
+  parser. `dofile` and not `require`, because a `require` would hand back the first
+  version it ever read. The **Apply** chip re-runs it, and each row shows the
+  value the compositor *reports* for the option (`hyprctl -j getoption`), so the
+  window cannot show a number the session is not using — including the case where
+  your own `hyprland.lua` sets something else.
+* **It survives a login**, because `osd.lua` loads that same generated file at the
+  end of its own run: `dofile` inside a `pcall`, so a missing file (nothing set
+  yet) or one this Hyprland refuses (an option it does not have) is a line in the
+  compositor's log rather than a config that does not load. Since `require("osd")`
+  is the last thing in `hyprland.lua`, what you set here wins over a line set by
+  hand earlier in your config — and your config is never rewritten.
+* **A value reset with the ↺ is a line removed** from `desktop.conf`, and therefore
+  an option this collection stops having an opinion about: from the next login your
+  own value is the one in force again. Until then Hyprland keeps what it has,
+  because there is no way to *unset* an option at runtime — setting it back to the
+  value your config uses is the honest way to undo it.
+* **Only options this Hyprland actually has are listed**, and only those are ever
+  written into the document: a `hl.config` call naming an option that does not
+  exist is refused *whole* ("unknown config key"), which would take the rest of the
+  settings down with it. A key you add to `desktop.conf` by hand that the tab does
+  not list stays in the file (and is shown in the window, as text) but is not part
+  of what the compositor is handed.
+* **A value that has to be a *name* is picked from a list, never typed.** That is
+  the keyboard rows, and it is the one place where a wrong value has no error
+  message at all: `kb_layout = de` with `kb_variant = ch` (the two swapped, or a
+  variant that belongs to another layout) is accepted by `hl.config`, and then xkb
+  is the thing that quietly does not work. So the layout, the variant, the model
+  and the options are dropdowns, and the lists come from this machine's own
+  xkeyboard-config (`hypr-osd-core`'s `keymap`): the layout and the variants with
+  the descriptions the data has for them, so `ch` reads as `German (Switzerland)`
+  and not as a two-letter code. The *variant* list is the variants of the layout in
+  force, asked of the compositor — a variant belongs to a layout, and the list
+  changes with it. A value the list does not know (a comma list like `de,us`, or a
+  name this machine has never heard of) is still shown, as an entry of its own,
+  labelled `not a variant of de` / `unknown name` — which is how such a setting
+  becomes visible instead of merely broken. `hypr-osd-settings choices <page>`
+  prints those lists without opening the window.
+* **The Display page is a group per output, not a list of keys.** Which outputs
+  exist is the compositor's to say, so the page is built when it is drawn:
+  `hyprctl -j monitors` gives each monitor's current mode, position, scale,
+  rotation, mirror and whether it is on, and that is what an unset row shows — the
+  value actually in force, not a made-up default. Each output gets a heading — its
+  connector, what it is showing right now (`2560 × 1440 · 59.95 Hz`) and, on the
+  screen you are on, a `focused` mark — with its six fields under it. `mode`,
+  `scale` and `mirror` are dropdowns whose labels are friendlier than the values
+  they write (`2560 × 1440 · 59.95 Hz`, `1.5 · 150 %`, a mirror candidate with the
+  picture it would copy); position and rotation are a field and a spinner. A key is
+  the field qualified by the output — `monitor:eDP-1:mode` — and `hypr-osd-settings
+  set desktop monitor:eDP-1:scale 2` writes it exactly as the window would. One
+  thing to know: an `hl.monitor` rule *replaces* everything known about that
+  output, so a field you have not set is filled from what the monitor is doing at
+  the moment (Hyprland's default, for an output that is not plugged in) — otherwise
+  setting the mode would silently reset the scale. An output with no key at all is
+  left completely alone, so a machine that never opens this page keeps whatever its
+  own `hyprland.lua` says.
+* **The page opens with the layout itself, and screens are dragged into place.**
+  Each output is a box whose proportions are its *logical* size — resolution
+  divided by scale, so a 2x panel is not drawn twice as wide as a 1x one, exactly
+  as Windows and macOS draw theirs — and the whole layout is fitted into the pane,
+  so a screen at a negative position is still on the picture (a stack, taller than
+  it is wide, gets a taller canvas: two screens above one another would otherwise
+  shrink to a stripe). Dragging a box writes that output's
+  `monitor:<output>:position` and hands it to the compositor like any other row.
+* **The gesture decides where a screen goes, not the distance.** The picture is
+  fitted to the layout as it *is*, so there is often no room on it to drag a screen
+  under another — the laptop beside a desk monitor can move a few pixels down and
+  no further. So a *deliberate* vertical drag puts the screen above or below the
+  nearest output, centred against it when the widths differ, and a deliberate
+  horizontal drag puts it beside; the box previews that slot while the pointer is
+  still travelling, so the picture shows the result before the release does. A
+  drag shorter than about 24 canvas pixels is still a nudge, and the fields below
+  the picture are there for exact numbers. A screen dragged *past* the canvas's
+  edge parks beyond everything, for a new row of its own.
+  `hypr-osd-settings drop <output> <dx> <dy>` answers what a drag of that many
+  canvas pixels would write, without moving anything — how a drop that surprises
+  you is explained.
+* **Screens never overlap.** A drop that would land on top of another output is
+  pushed clear along the gesture's axis, and the whole arrangement is checked again
+  after the snap, so a snap can never undo the push. Edges, middles and the
+  layout's origin are snap targets within a few pixels (Hyprland would otherwise
+  leave a sliver of desktop between two screens that the pointer cannot cross). A
+  click that moves nothing writes nothing, so looking at the picture never pins a
+  value nobody chose.
+* **The page opens with the collection's own choice: the primary display.** One
+  row, above the per-output groups, picks the output the notification cards — the
+  volume, media and session cards — appear on, or leaves it on `Follow focus`,
+  which is the behaviour every card had before. It is the one key on the page that
+  is *not* a monitor field and is never handed to the compositor (Hyprland has no
+  notion of a primary output): it is a `primary` key in `desktop.conf`, read back
+  by the elements themselves, and it takes effect on the next card rather than
+  needing a restart. `hypr-osd-settings keys display` prints it, and `hypr-osd-settings
+  set desktop primary eDP-1` writes it.
+
+### The System tab: energy saving
+
+The **System** tab's one page is the energy policy. It is not a Hyprland page and
+not an element page, though its values live in an element's file
+(`~/.config/hypr-osd/energy.conf`) and are applied to the compositor: it is the
+collection's *own* policy about the compositor, which is why it gets a tab.
+
+* **It opens with data, not controls.** Four readings from the kernel and the
+  compositor: the **power profile** and the platform driver behind it
+  (`powerprofilesctl`), the **CPU** governor and the frequency it is running at
+  (`/sys/…/cpufreq`), the **battery's** charge, state and time left at the current
+draw, and **which of the managed effects are on** right now. They are drawn as
+  rows with no control — a reading is not a setting — and `hypr-osd-energy status`
+  prints the same numbers without a window.
+* **The policy is one switch per effect.** Animations, the two dragging
+  animations, blur, shadows, dimming, transparency (one switch for both opacities)
+  and rounded corners, plus the **trigger profile** (which power profile counts as
+  saving — `power-saver` by default) and how often the profile is re-read. A change
+  takes effect when the daemon is restarted, like any element page: the **Restart**
+  chip is what does it.
+* **Two buttons act now** — **Save now** and **Restore** — and they run
+  `hypr-osd-energy apply` / `restore`, so the daemon does not have to wait for its
+  next profile poll. *Save now* is deliberately sticky: it keeps the effects off
+  until *Restore* is pressed (or the daemon restarts), so it is also the way to
+  save energy while the machine is in a profile you would rather not change.
+  (Clicks cannot be scripted on a layer surface, so the window carries a
+  `command <id>` verb that runs a page's button exactly as a click would.)
+
+The daemon itself (`hypr-osd-energy`, element #9) is **headless** — its business
+is the compositor's options, not a card, so it never shows one — and it is
+autostarted, because a machine that boots straight into `power-saver` should not
+have to wait for the first poll to drop its blur. Two rules make it safe:
+
+* **It remembers before it overrides.** The first time the saving profile takes
+  hold, every effect key is read off the *running* compositor and written to
+  `$XDG_RUNTIME_DIR/hypr-osd-energy.state`. Leaving the saving state puts those
+  values back, so a machine whose own `hyprland.lua` says something this collection
+  does not know about gets it back exactly. A daemon restarted mid-save finds the
+  remembered values and restores them rather than mistaking its own overrides for
+  the machine's own.
+* **It only writes when it disagrees.** Each poll compares the values it wants with
+  the ones the compositor has (a handful of `hyprctl getoption` reads); when they
+  match, nothing runs. Nothing is written at all before a saving profile has taken
+  hold once, so a machine that has never saved keeps its own values completely
+  untouched. That is also what makes it self-healing — a settings change that
+  restored an effect under a saving profile is corrected on the next poll — and the
+  reason the daemon leaves the effects completely alone when `powerprofilesctl`
+  does not answer at all.
+
+It hands the compositor its own small generated document
+(`~/.config/hypr-osd/energy.lua`, one `hl.config({...})` call, the same shape the
+settings window writes) and applies it with `hyprctl eval 'dofile("…")'`. The
+file is complete every time — there is no way to *unset* an option at runtime — so
+the last program to apply a document is the whole truth, and the settings window's
+Hyprland document and this one compose rather than fight.
 
 ## Use
 
@@ -328,16 +616,20 @@ takes an optional argument in place of the last one: the number the icon has in
 `minimised` (counting from 1), or the window's `0x…` address.
 
 The bar's left half is the workspaces (click to focus one, wheel to walk to the
-next or previous) and the focused window's title. Right half: the media pill
-(click to play/pause, right-click for the next track, middle-click for the
-previous one, wheel to seek), the network pill (left click opens `nmtui` in a
-terminal, right click toggles the radio), the **system info pill** — CPU load,
-memory in use, package temperature and the number of pending updates, with the
-same amber/red thresholds the old bar used (CPU 60/85 %, memory 70/90 %,
-temperature 75/90 °C) — then the volume pill (click mutes, wheel steps the volume
-*through the volume element*, right-click opens `pavucontrol`, middle-click mutes
-the microphone), the battery, the tray, and the power button (which opens the
-session card). Every pill has a tooltip with the whole story behind it.
+next or previous) and the focused window's title. The workspace you are on wears
+its number in the accent capsule; the rest are dots - solid where a window lives,
+hollow where the workspace is empty, accent-tinted while it is up on another
+monitor - so the row reads at a glance without counting from a fixed edge.
+Right half: the media pill (click to play/pause, right-click for the next track,
+middle-click for the previous one, wheel to seek), the network pill (left click
+opens `nmtui` in a terminal, right click toggles the radio), the **system info
+pill** — CPU load, memory in use, package temperature and the number of pending
+updates, with the same amber/red thresholds the old bar used (CPU 60/85 %,
+memory 70/90 %, temperature 75/90 °C) — then the volume pill (click mutes, wheel
+steps the volume *through the volume element*, right-click opens `pavucontrol`,
+middle-click mutes the microphone), the battery, the tray, and the power button
+(which opens the session card). Every pill has a tooltip with the whole story
+behind it.
 
 The tray at the right end carries two kinds of icon. The **application
 indicators** (Steam, the Nextcloud client, nm-applet …) come from the
@@ -607,8 +899,9 @@ entirely.
 **`hypr-osd-apps` — the applications panel** (see [Applications panel](#applications-panel))
 
 ```sh
-hypr-osd-apps toggle           # open it, or close it again (what the bar's button runs)
-hypr-osd-apps show [query]     # open it, with an empty field or the query given
+hypr-osd-apps open             # what the bar's button runs: the pointer arrived
+hypr-osd-apps toggle           # open it (pinned), or close it again
+hypr-osd-apps show [query]     # open it (pinned), with an empty field or the query given
 hypr-osd-apps hide             # take it away (`close` is the same thing)
 hypr-osd-apps refresh          # re-scan the installed applications
 hypr-osd-apps drawer <name|n>  # open it on one drawer, by name or by number
@@ -621,7 +914,10 @@ hypr-osd-apps status           # applications, drawers, pins, open or closed, th
 The trigger is the grid button at the bar's left end; the panel's own notes are in
 the [section above](#applications-panel). `drawer 3` and `drawer Pinned` are the
 scriptable equivalents of clicking a drawer row, and `apps` is what answers "which
-drawer did that application land in?" without a card.
+drawer did that application land in?" without a card. `open` is the one the bar
+sends (it only *asks*, so the panel can close itself when the pointer leaves);
+`show` and `toggle` pin the panel, which is right for a script and wrong for the
+bar.
 
 ## Configure
 
@@ -638,6 +934,7 @@ element config: it is the palette, and it is [its own section](#look-and-feel).
 | `margin_x` | `12` | the inset at each side |
 | `exclusive` | `true` | reserve the strip with the compositor, so windows start below it |
 | `output` | *(empty)* | the connector to put the bar on, and *only* that one; empty = a bar on every monitor |
+| `show_apps`, `show_workspaces`, `show_title`, `show_clock`, `show_media`, `show_stats`, `show_status`, `show_tray`, `show_minimised`, `show_power` | all `true` | **what is on the bar**, one switch each in the settings window's Bar page: a part switched off is not built, not read and not drawn. The two handles go with their pills — hiding the clock takes the island popup's trigger with it, hiding the status pill takes the system popup's (and with `show_tray = false` the bar does not claim the tray's D-Bus names at all) |
 | `workspaces` | `5` | how many numbered workspaces the row keeps room for |
 | `title_width` | `320` | how much room the window title may take before it is ellipsised |
 | `clock_format` | `%H:%M` | the clock's `strftime` format |
@@ -654,7 +951,7 @@ element config: it is the palette, and it is [its own section](#look-and-feel).
 | `session_command` | `hypr-osd-session` | what the power button runs |
 | `island_command` | `hypr-osd-island` | what the clock's hover runs |
 | `stats_command` | `hypr-osd-stats` | what the status pill's hover and click run |
-| `apps_command` | `hypr-osd-apps` | what the grid button at the bar's **left** end runs (it asks the panel to `toggle`) |
+| `apps_command` | `hypr-osd-apps` | what the grid button at the bar's **left** end runs (the pointer arriving on it asks the panel to `open`) |
 | `notifications_command` | `swaync-client` | what the clock's clicks run |
 | `terminal_command` | `kitty` | the terminal the network pill opens `nmtui` in |
 
@@ -780,7 +1077,16 @@ stand-in the switcher uses.
 | `tile_gap` | `6` | space between tiles, and between rows of them |
 | `gap` | `6` | the distance between the bar's bottom edge and the panel's top edge |
 | `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `8`, `12` | where the bar is — these have to match `bar.conf` |
+| `hot_width` | `60` | the fallback hover strip at the bar's left end, for an `open` typed by hand without the button's rectangle |
+| `open_delay_ms`, `close_delay_ms` | `120`, `300` | how long the pointer rests on the button before the panel opens, and how long it may be away before it closes |
+| `poll_ms` | `50` | how often the pointer is sampled, while the panel matters |
 | `idle_close_ms` | `60000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
+The four hover keys are the same mechanism (and the same defaults) as the island's
+and the system popup's: the bar's button only *asks*, and the element's own pointer
+poll decides when the dwell is over and when the pointer has left. `hot_width` is
+only for `hypr-osd-apps open` typed into a terminal — the bar sends the button's
+measured rectangle instead.
 
 `width`, `sidebar_width` and `tile_width` are what decide how many tiles fit in a
 row (5 by default), and the element's arrow keys and the grid both count them the
@@ -792,6 +1098,47 @@ The scan itself is not duplicated: the launcher and the panel both read the
 applications through `hypr-osd-core`'s `apps` module (the same `.desktop` parser,
 the same category map and the same ranking), so an application is classified and
 scored identically in both cards.
+
+**`stats.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `left_width`, `right_width` | `260`, `240` | the panel's two columns: the load on the left, the controls on the right. Both are *floors* — a widget the theme will not let be narrower (a slider's trough, a progress bar) wins over them |
+| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `8`, `12` | where the bar is — these have to match `bar.conf` |
+| `gap` | `6` | the distance between the bar's bottom edge and the panel |
+| `hot_width` | `240` | the fallback hover strip at the bar's right end, for an `open` typed by hand without the pill's rectangle |
+| `open_delay_ms`, `close_delay_ms` | `120`, `300` | how long the pointer rests before it opens, and how long it may be away before it closes |
+| `poll_ms` | `50` | how often the pointer is sampled, while the panel matters |
+| `tick_ms`, `slow_every_ms` | `1000`, `5000` | the heartbeat, and how often the readings that cost a command are re-read |
+| `devices_every_ms` | `10000` | how often the bluetooth device list is re-read *while the panel is open* (it costs one `bluetoothctl` per device) |
+| `max_devices`, `scan_seconds` | `5`, `12` | how many device rows the list shows, and how long Scan looks |
+| `updates_command` | `checkupdates` | what prints the pending-update list; empty turns the updates tile off |
+| `network_interface` | `wlan0` | the interface the NETWORK row reports |
+| `terminal_command` | `kitty` | where btop, nmtui, bluetoothctl and pacman are opened |
+| `settings_command` | `hypr-osd-settings` | what the header's **gear** runs ([Settings](#settings)) |
+
+**`settings.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `width` | `760` | the window's width in pixels |
+| `pane_height` | `380` | the height of the scrolling pane — and so the height the card settles at, whichever page is on it |
+| `sidebar_width` | `190` | the list of elements down the side |
+| `idle_close_ms` | `120000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+| `bin_dir` | `~/.local/bin` | where the element binaries live, for the Restart chip |
+
+The settings window's own page is in its catalogue too, so its numbers are
+tweakable from inside it — with the same caveat as every element: change one and
+the window has to be restarted for it to show.
+
+**`desktop.conf`** — the Hyprland tab, and a different kind of file: its keys are
+Hyprland **option paths** (`general:gaps_out = 20`, `input:kb_layout = ch`), i.e.
+the names `hyprctl getoption` knows — and, for the Display page, a field qualified
+by the output (`monitor:eDP-1:scale = 2`). The window edits it like any element's
+file, but what it does with it is another thing entirely: it regenerates
+`~/.config/hypr/hypr-osd-desktop.lua` from it and hands that to the compositor, so
+a change there is *live* instead of waiting for a restart — see
+[Settings](#settings).
 
 ## Lock screen
 
@@ -986,12 +1333,17 @@ session lock signal slots in without touching them.
   18px ring that lets the card's shadow breathe; `osd.lua`'s `ignore_alpha` layer
   rule makes those transparent pixels pass clicks to whatever is behind them, so
   only the card itself is hit-testable.
-- **A card follows the focused monitor.** Each command asks `hyprctl -j
-  activeworkspace` which output is focused, and the surface is (re)built for that
-  monitor, so the card appears where you are looking. One monitor means this is a
-  no-op. The bar is the deliberate exception: it is on *every* output (see
-  above), and a popup that unfolds from it is told which of the bars it came
-  from.
+- **A card follows the focused monitor — unless you have named a primary one.**
+  Each time a card is shown it asks `hyprctl -j activeworkspace` which output is
+  focused, and the surface is (re)built for that monitor, so the card appears
+  where you are looking. One monitor means this is a no-op. There are two
+  deliberate exceptions: the bar is on *every* output (see above) and a popup that
+  unfolds from it is told which of the bars it came from, and the **notification
+  cards** (volume, media, session) go on the *primary display* named in the
+  settings window's Display page — that is what designating one is for. A card you
+  *drive* with the keyboard (the switcher, the overview, the launcher, the
+  settings window) keeps following the focused output, because one that opened on
+  a screen you are not using would be unusable.
 - **`wpctl` is the single source of truth.** The volume element reads the sink, applies
   the change and reads it back, so the card can never show a number the sink does
   not have — and it can never disagree with the bar's volume pill, which asks the
@@ -1081,7 +1433,14 @@ session lock signal slots in without touching them.
    method, a class in `bar.css`, and a line in the bar's tick.
 7. Add the binary to `ELEMENTS` in `scripts/install.sh` and its keybinding/
    autostart to `scripts/hyprland/osd.lua`.
-8. `cargo fmt && cargo clippy --all-targets && cargo test`.
+8. Give it a page in the settings window: a `Section` in `hypr-osd-core`'s
+   `settings::OSD` (a test holds that every element has one, so adding an element
+   without a page fails the suite). A compositor option belongs in
+   `settings::DESKTOP` instead — one line per Hyprland option path, with the kind
+   `hyprctl -j getoption` reports for it — and a *display* field (one the Display
+   page repeats for every connected output) goes in `settings::MONITOR_SETTINGS`,
+   with a `Kind::Monitor` list for a value the monitor itself names.
+9. `cargo fmt && cargo clippy --all-targets && cargo test`.
 
 ## Development
 
@@ -1132,7 +1491,7 @@ Debugging:
 | The volume moves two steps per press | `hyprland.lua` still binds the volume keys to `wpctl`; re-run with `--take-over-keys`. |
 | `wpctl … failed` on stderr | PipeWire/WirePlumber trouble; `wpctl status` should list a default sink. |
 | Card in the wrong place | `bottom_margin` / `width` in the element's config. |
-| Card on the wrong monitor | It follows the focused output through `hyprctl`; if `hyprctl` is unavailable it stays on the monitor it was built for. |
+| Card on the wrong monitor | It follows the focused output through `hyprctl`; if `hyprctl` is unavailable it stays on the monitor it was built for. A volume/media/session card that keeps appearing on one screen is most likely the Display page's `primary` key — `hypr-osd-settings keys display` shows it, and `unset` puts it back on `Follow focus`. |
 | No media card appears | Is the daemon running (`pgrep -x hypr-osd-media`)? Does the player speak MPRIS (`playerctl -l`)? A track that is merely loaded, never played, does not trigger a card unless `only_when_playing = false`. |
 | Media card shows no cover | The player reported none, or reported it as a `blob:`/`data:` URL — only `file://` and `http(s)://` artwork can be read. `playerctl metadata | grep -i arturl` shows what it sends. |
 | “Lock” is greyed out | No screen locker is installed — `hypr-osd-session status` names the candidates (`hyprlock`, `swaylock`, `gtklock`). The row re-checks every time the card is shown, so installing one is enough. |
@@ -1147,9 +1506,10 @@ Debugging:
 | The launcher's results are not what I expected | `hypr-osd-launcher search <text>` prints the ranking it decided on, with the desktop file each application came from. Keywords and categories count as matches, which is why an application can appear for a word that is not in its name. |
 | The launcher lists applications but no files | Do the directories exist? `hypr-osd-launcher status` prints the file roots it found (`Documents`, `Downloads`, … — a root that is not a directory is skipped). `files = false` in `launcher.conf` turns the file half off on purpose. |
 | The launcher won't go away | It takes the keyboard while it is up: Escape, or `SUPER + SPACE` again. `hypr-osd-launcher hide` works from anywhere, and after `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
-| The bar has no grid button at its left end | The running bar is older than the panel: re-run `./scripts/install.sh` and restart it (`pkill -f hypr-osd-bar; hypr-osd-bar &`). The installer also appends `apps_command` to an existing `bar.conf`, which is the key the button needs. |
-| The grid button does nothing | `apps_command` in `bar.conf` does not resolve: is the element running (`pgrep -f hypr-osd-apps`), and does that command work in a terminal? The built-in default is the bare program name, which needs `~/.local/bin` on the bar's `PATH` — that is why the installer writes an absolute path. |
+| The bar has no grid button at its left end | The running bar is older than the panel: re-run `./scripts/install.sh` — it appends `apps_command` to an existing `bar.conf` (the key the button needs) and restarts the bar it finds running. |
+| The grid button does nothing | `apps_command` in `bar.conf` does not resolve: is the element running (`pgrep -f hypr-osd-apps`), and does that command work in a terminal? The built-in default is the bare program name, which needs `~/.local/bin` on the bar's `PATH` — that is why the installer writes an absolute path. `hypr-osd-apps status` prints the two hover zones: if the `pill` rectangle is not where the button is, the panel will never see the pointer arrive. |
+| The applications panel opens and closes on its own | The element thinks the pointer has left it. `hypr-osd-apps status` prints the two zones it reasons with: the `panel` rectangle has to be where the panel actually is, so `bar_height`, `bar_margin_top`, `bar_margin_x` and `gap` in `apps.conf` have to match `bar.conf`, and the `pill` rectangle has to be where the button is (the bar sends it; a `(fallback strip)` means the `open` came without one). |
 | The button stays lit with no panel behind it | A stale “panel is open” flag, the same one the island's clock can leave behind: `hypr-osd-apps hide` clears it, and the element clears it at start-up. |
-| The applications panel won't go away | It takes the keyboard while it is up: `Escape`, the button again, or `hypr-osd-apps hide` from anywhere. After `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
+| The applications panel won't go away | Move the pointer off it — that is how it normally ends — or press `Escape`, or `hypr-osd-apps hide` from anywhere. After `idle_close_ms` (a minute by default) it closes itself, which is what gets rid of it after a session lock. `hypr-osd-apps status` says `open, pinned` when a `show`/`toggle` (not the bar) put it up, and then only a verb closes it. |
 | Applications are in the wrong drawers | The drawer comes from the entry's `Categories=` (and, for entries that claim nothing, from its name and keywords). `hypr-osd-apps apps` prints every application with the drawer it landed in; changing it means changing the `.desktop` file. |
 | A pinned tile is not in the **Pinned** drawer | Pins are desktop file ids in `~/.config/hypr-osd/apps-pinned` (`hypr-osd-apps status` prints the list) — an id that no installed entry has any more is ignored. |

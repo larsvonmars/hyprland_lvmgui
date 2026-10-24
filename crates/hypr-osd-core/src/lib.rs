@@ -7,8 +7,9 @@
 //!
 //! * [`css`] - the palette (read from `~/.config/hypr-osd/theme.css`) plus the
 //!   card, bar and typography recipes, in GTK4 CSS.
-//! * [`monitors`] - which output the OSD should appear on (the focused one), and
-//!   how big it is in the pixels GTK draws in.
+//! * [`monitors`] - which output the OSD should appear on (the focused one), how
+//!   big it is in the pixels GTK draws in, and the connected outputs the settings
+//!   window's Display page edits.
 //! * [`follow`] - run a command that prints one line per event and hand those
 //!   lines to the main loop, for elements that react to something happening
 //!   (a new track, a device appearing) instead of to a key press.
@@ -31,6 +32,12 @@
 //! * [`apps`] - the applications installed on this machine: the `.desktop`
 //!   parsing, the drawer each one belongs in, the score a query gives it, and how
 //!   to start it. Shared by the launcher and the applications panel.
+//! * [`keymap`] - the keyboard layouts, variants, models and options *this
+//!   machine* has, read out of `xkeyboard-config`'s rules file, so the settings
+//!   window can offer them instead of asking for a name nobody remembers.
+//! * [`energy`] - the power profile the machine is in and the compositor effects
+//!   worth dropping while it is set to save, shared by the settings window's
+//!   System tab and the `hypr-osd-energy` daemon that enforces it.
 //! * [`icons`] - a window's class turned into the application's icon.
 //! * [`hyprctl`] - asking Hyprland itself (the focused output, the window list,
 //!   a dispatch) the same way audio goes through `wpctl`.
@@ -48,16 +55,20 @@ pub mod apps;
 pub mod art;
 pub mod config;
 pub mod css;
+pub mod desktop;
+pub mod energy;
 pub mod follow;
 pub mod hardware;
 pub mod hover;
 pub mod hyprctl;
 pub mod hypripc;
 pub mod icons;
+pub mod keymap;
 pub mod monitors;
 pub mod mpris;
 mod osd;
 pub mod output;
+pub mod settings;
 pub mod state;
 pub mod system;
 pub mod text;

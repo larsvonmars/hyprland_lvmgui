@@ -40,6 +40,13 @@ pub fn apps_panel() -> PathBuf {
     runtime_dir().join("hypr-osd-apps-panel")
 }
 
+/// The flag the settings window keeps: `1` while it is on screen. The gear in
+/// the system popup's header reads it to stay lit, the same way the bar's two
+/// buttons read the two flags above.
+pub fn settings_panel() -> PathBuf {
+    runtime_dir().join("hypr-osd-settings-panel")
+}
+
 /// The directory session state belongs in, falling back to `/tmp` the way every
 /// other Hyprland client does when `$XDG_RUNTIME_DIR` is unset.
 fn runtime_dir() -> PathBuf {

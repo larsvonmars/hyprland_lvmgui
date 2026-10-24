@@ -25,6 +25,8 @@ local switcher_osd = "@SWITCHER_OSD_BIN@"
 local overview_osd = "@OVERVIEW_OSD_BIN@"
 local launcher_osd = "@LAUNCHER_OSD_BIN@"
 local apps_osd = "@APPS_OSD_BIN@"
+local settings_osd = "@SETTINGS_OSD_BIN@"
+local energy_osd = "@ENERGY_OSD_BIN@"
 
 -- Start the daemons at login. The bar is visible from that moment (it is the
 -- bar); the cards show nothing until they are asked to. They all sit in the
@@ -63,6 +65,12 @@ if AUTOSTART then
         hl.exec_cmd(launcher_osd)
         hl.exec_cmd(apps_osd)
 
+        -- The energy daemon watches the machine's power profile and drops the
+        -- compositor's expensive effects while it is set to save (see the
+        -- settings window's System tab, and ~/.config/hypr-osd/energy.conf). It
+        -- is headless - it never shows a card - so it has to be running from the
+        -- start, or a machine that boots into power-saver keeps its blur.
+        hl.exec_cmd(energy_osd)
         -- hypridle locks on idle and before sleep (see the lock screen section
         -- below). It is optional and independent of the OSDs, so it is started
         -- only when it is installed - a missing binary is not an error here, and
@@ -158,6 +166,40 @@ hl.bind("SUPER + H", hl.dsp.exec_cmd(bar .. " minimise"), {
 hl.bind("SUPER + SHIFT + H", hl.dsp.exec_cmd(bar .. " restore"), {
     description = "Tray: bring the last window back",
 })
+
+
+------------------------------
+---- THE DESKTOP SETTINGS ----
+------------------------------
+
+-- The settings window's Hyprland tab keeps its values in
+-- ~/.config/hypr-osd/desktop.conf and writes them out as Lua in the file named
+-- below - one `hl.config({...})` call holding *only* the options somebody has
+-- set, then one `hl.monitor({...})` call per output the Display page has been
+-- given a value for. Nothing of yours is overridden by an untouched page. The
+-- window hands that file to the compositor itself whenever a value changes, which
+-- is what makes those settings live; this line is what makes them part of the
+-- session's config, i.e. what makes them survive a login.
+--
+-- (The `hl.monitor` calls come after the `hl.config` one and after everything in
+-- your own hyprland.lua, because this file is required last - which is what makes
+-- a display configured here win over the catch-all `hl.monitor({ output = "" })`
+-- rule near the top of the example config.)
+--
+-- `pcall`, because the file is generated: a missing one (nothing has been set
+-- yet) or one this Hyprland refuses (an option it does not have) must not take
+-- the rest of the config down with it. A refusal is still worth saying out loud,
+-- so it goes to the compositor's log rather than nowhere - the file is loaded
+-- before anybody can see a notification, and `hl.notify` does not exist.
+local desktop_osd = "@DESKTOP_OSD_LUA@"
+local desktop_file = io.open(desktop_osd, "r")
+if desktop_file then
+    desktop_file:close()
+    local loaded, why = pcall(dofile, desktop_osd)
+    if not loaded then
+        print("hypr-osd: " .. tostring(why))
+    end
+end
 
 
 ---------------------
@@ -357,7 +399,13 @@ hl.bind("SUPER + SHIFT + TAB", hl.dsp.exec_cmd(overview_osd .. " toggle"))
 hl.bind("SUPER + SPACE", hl.dsp.exec_cmd(launcher_osd .. " toggle"), {
     description = "Launcher: search applications and files",
 })
-
+-- The settings window has no key of its own: the gear in the system popup's
+-- header opens it (the popup is its trigger, the way the bar's grid button opens
+-- the applications panel). Uncomment this for a key as well.
+--
+--     hl.bind("SUPER + SHIFT + S", hl.dsp.exec_cmd(settings_osd .. " toggle"), {
+--         description = "hypr-osd: every element's settings",
+--     })
 
 ------------------------------------
 ---- THE APPLICATIONS PANEL -------

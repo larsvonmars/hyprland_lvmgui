@@ -30,7 +30,8 @@ org.freedesktop.Notifications`, because swaync publishes no list of them),
 `-stats` (the system popup), `-switcher` and `-overview` (the two window cards),
 `-launcher` (the search card on SUPER + SPACE, which took over from the separate
 `linux-launchpad` Tauri app) and `-apps` (that app's *main window* - the grid of
-everything installed - rebuilt as a card the bar's left-end button opens).
+everything installed - rebuilt as a card that unfolds from the bar's left-end
+button on hover, like the island and the system popup).
 
 ## Tech stack
 
@@ -62,12 +63,17 @@ everything installed - rebuilt as a card the bar's left-end button opens).
   and every output), `apps.rs` (installed applications: the `.desktop` parser,
   the category map, the scoring ladder and `gio launch` - shared by the launcher
   and the panel), `timer.rs` (one-shot timers that cannot fire after a cancel),
-  `config.rs` (`~/.config/hypr-osd/<element>.conf`).
+  `config.rs` (`~/.config/hypr-osd/<element>.conf`),
+  `energy.rs` (the power profile and the compositor effects worth dropping while
+  the machine is saving - the policy the settings window's System tab edits and
+  the `hypr-osd-energy` daemon enforces: `EFFECTS`, `Policy`, `Baseline`,
+  `desired`/`agrees`/`document`, and the live readings for the page).
 - `crates/hypr-osd-bar/` — the bar: `main.rs` (verbs, settings, and one
   `BarView` per monitor painted from one set of readings), `view.rs` (the pills),
   `hypr.rs` (the workspace row and title, from the event socket), `tray.rs` (the
   StatusNotifier host), `bar.css`. Its far-left pill is the applications button:
-  a click runs `apps_command` with `toggle` (`hardware::launch`, never a wait),
+  the pointer arriving on it (or a click) runs `apps_command` with `open`, the
+  connector and the measured pill rectangle (`hardware::launch`, never a wait),
   and the pill wears `panel-open` while the flag in `state::apps_panel` says the
   panel is up.
 - `crates/hypr-osd-volume/` — element #1: `main.rs` (verbs, settings),
@@ -93,6 +99,25 @@ everything installed - rebuilt as a card the bar's left-end button opens).
   (`~/.config/hypr-osd/apps-pinned`), `apps.css`. The fourth keyboard card, and
   the only element with no keybinding at all: the bar's left-end button is its
   trigger.
+- `crates/hypr-osd-settings/` — element #8, the settings window: `main.rs` (the
+  tabs, the pages, the verbs and the generated Hyprland document), `view.rs`
+  (one control per `Kind`, the Info readings, the page's `Actions` buttons) and
+  `arrange.rs` (the Display page's picture of the outputs: logical-size boxes in a
+  `GtkFixed`, dragged, edge-snapped, answering with the `XxY` a drop means).
+  The catalogue itself is `core::settings` (`TABS`, `Applies`, `Kind`), and
+  `core::desktop` turns the Hyprland tab's option paths into `hl.config`/`hl.monitor`
+  Lua. Opened by the gear at the right end of the system popup's header. The Hypr
+  OSD tab ends with a **Shortcuts** page (`Applies::Shortcuts`), a list built from
+  `core::settings::SHORTCUTS`; a test reads `scripts/hyprland/osd.lua` at compile
+  time and requires its binds and the page's bound rows to name each other, so a
+  key added to the template can never be missing from the window.
+- `crates/hypr-osd-energy/` — element #9, the energy-saving daemon: `main.rs`
+  (the poll loop, `tick`/`set_state`/`remember`, the verbs `status|apply|save|
+  restore|refresh|tick`). **Headless** - it hands `run()` a widget it never shows,
+  because its business is the compositor's options, not a card. Reads
+  `~/.config/hypr-osd/energy.conf`, watches `powerprofilesctl`, writes
+  `~/.config/hypr-osd/energy.lua` and applies it with `hyprctl eval`, and
+  remembers the pre-override values in `$XDG_RUNTIME_DIR/hypr-osd-energy.state`.
 - `scripts/install.sh` + `scripts/hyprland/osd.lua` — install and the compositor
   side (keys, autostart, layer rule; the installer also reports the logind
   `HandlePowerKey` setting, which gates the hardware power key, and comments out
@@ -197,12 +222,31 @@ pkill -f 'hypr-osd-app[s]'              # a bracket: the pattern matches the
   Enter and Escape are all testable without a pointer.
 - `hypr-osd-apps status` prints the application count, the drawers, the pins, the
   size the card came out at and the **measured** content/sidebar/pane widths -
-  the numbers that catch a widget widening the card. `apps` prints one line per
-  application with the drawer it landed in (the answer to "why is that one under
-  Utilities?"), `drawer <name>` opens a drawer without clicking, and `pin`/`unpin`
-  drive the pins file. A throwaway `.desktop` in `~/.local/share/applications` plus
-  `refresh` is how the launch path is tested: type to it with `send_shortcut`, press
-  `Return`, and check the marker file its `Exec=` touches.
+  the numbers that catch a widget widening the card - plus the two hover zones
+  (`pill … / panel …`) and the hover state (`open, watching the pointer` vs
+  `open, pinned`), which is how the button's hot zone is checked without a
+  pointer. `open [connector] [x y w h]` is what the bar sends (it only *asks*),
+  `show`/`toggle` pin the panel. `apps` prints one line per application with the
+  drawer it landed in (the answer to "why is that one under Utilities?"),
+  `drawer <name>` opens a drawer without clicking, and `pin`/`unpin` drive the
+  pins file. A throwaway `.desktop` in `~/.local/share/applications` plus
+  `refresh` is how the launch path is tested: type to it with `send_shortcut`,
+  press `Return`, and check the marker file its `Exec=` touches.
+- `hypr-osd-energy status` prints the power profile, the policy and every managed
+  effect key with the value the compositor has and the value the policy wants -
+  the fastest way to answer "why is my blur still on". `apply`/`save` and
+  `restore` force the two states without waiting for a profile change; `refresh`
+  re-reads `energy.conf`. It is safe to run against the live session, because a
+  poll that agrees with the compositor writes nothing. `powerprofilesctl get` is
+  the profile it watches, and `hyprctl -j getoption decoration:blur:enabled` is the
+  live value next to it.
+- `hypr-osd-settings command <id>` runs the shown page's own button exactly as a
+  click would (the System tab's `apply`/`restore`), because a layer surface cannot
+  be clicked from a script. `sections` now lists three tabs; `keys energy` prints
+  the policy rows. `drop <output> <dx> <dy>` answers what a drag on the Display
+  page's arrangement would write - the same `frame`/`placed` arithmetic the
+  gesture uses, in canvas pixels - which is how the drag is checked without a
+  pointer.
 - **A click cannot be scripted.** This Hyprland's Lua API moves the pointer
   (`hyprctl dispatch 'hl.dsp.cursor.move({ x = 100, y = 20 })'`) but has no
   press/click dispatcher, and `send_shortcut` with a mouse key (`mouse:272`) goes

@@ -1,10 +1,11 @@
 //! Where the pointer is, and what that means for a panel.
 //!
-//! Two of this desktop's surfaces unfold from the bar: the island popup from the
-//! clock, in the middle, and the system popup from the status pill at the right
-//! end. Both work the same way - the bar's pill *asks* for the panel when the
-//! pointer arrives, and the panel decides when to go away again, because leaving
-//! it means moving somewhere the bar cannot see: onto the panel itself.
+//! Three of this desktop's surfaces unfold from the bar: the island popup from
+//! the clock, in the middle; the system popup from the status pill at the right
+//! end; and the applications panel from the button at the left end. All work the
+//! same way - the bar's pill *asks* for the panel when the pointer arrives, and
+//! the panel decides when to go away again, because leaving it means moving
+//! somewhere the bar cannot see: onto the panel itself.
 //!
 //! Two things are worth knowing about the sampling:
 //!
@@ -146,6 +147,13 @@ pub struct BarGeometry {
 /// Which pill a panel unfolds from, and therefore where it hangs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
+    /// The left end of the bar - the applications button, and the panel under
+    /// it, its left edge flush with the bar's. The button is the bar's first
+    /// child, so its hot zone *starts* where the bar does; how wide it is is
+    /// still the button's own business, so the bar measures it and sends the
+    /// rectangle with `open` (see `hypr-osd-apps`). This side is where a
+    /// hand-typed `open` puts its fallback strip.
+    Left,
     /// The middle of the bar - the clock, and the island popup under it. The
     /// clock is the bar's centre child, so its hot zone can be *derived* from
     /// the monitor's centre without the bar saying anything.
@@ -164,14 +172,17 @@ const SLACK: f64 = 4.0;
 
 /// The hot zone of the pill a panel belongs to, as far as it can be derived.
 ///
-/// For [`Side::Centre`] this is exact (the clock is centred); for [`Side::Right`]
-/// it is a fallback for a panel that was asked to open without being told where
-/// its pill is - a wide strip at the bar's right end, which at least keeps the
-/// panel open while the pointer is anywhere near it.
+/// For [`Side::Centre`] this is exact (the clock is centred); for
+/// [`Side::Left`] and [`Side::Right`] it is a fallback for a panel that was
+/// asked to open without being told where its pill is - a strip at the bar's
+/// end, `hot_width` wide, which at least keeps the panel open while the pointer
+/// is anywhere near it. The bar normally measures the button and sends the
+/// rectangle instead (`hypr-osd-apps`, `hypr-osd-stats`).
 pub fn pill_rect(monitor: Rect, bar: BarGeometry, hot_width: f64, side: Side) -> Rect {
     let top = monitor.y + bar.margin_top;
     let right = monitor.x + monitor.width - bar.margin_x;
     let left = match side {
+        Side::Left => monitor.x + bar.margin_x,
         Side::Centre => monitor.centre_x() - hot_width / 2.0,
         Side::Right => right - hot_width,
     };
@@ -190,6 +201,9 @@ pub fn panel_rect(monitor: Rect, bar: BarGeometry, side: Side, size: (f64, f64))
     let right = monitor.x + monitor.width - bar.margin_x;
     Rect {
         x: match side {
+            // Left-aligned with the bar, so the panel and the button at the
+            // bar's left end read as one object.
+            Side::Left => monitor.x + bar.margin_x,
             Side::Centre => centre - size.0 / 2.0,
             // Right-aligned with the bar, so the popup and the bar's right-hand
             // end read as one object.
@@ -479,6 +493,29 @@ mod tests {
             monitor.y + bar.margin_top + bar.height + bar.gap + bar.shadow_pad
         );
         assert_eq!(panel.height, 300.0);
+    }
+
+    #[test]
+    fn a_left_hand_pill_and_panel_hug_the_bars_left_end() {
+        let (monitor, bar) = geometry();
+        let bar_left = monitor.x + bar.margin_x;
+        let pill = pill_rect(monitor, bar, 44.0, Side::Left);
+        let panel = panel_rect(monitor, bar, Side::Left, (760.0, 460.0));
+
+        // The fallback zone starts where the bar does and is a button wide;
+        // the bar sends the real rectangle with `open`, but a hand-typed one
+        // should still open something.
+        assert_eq!(pill.x, bar_left);
+        assert_eq!(pill.width, 44.0);
+        assert_eq!(pill.y, monitor.y + bar.margin_top - 4.0);
+
+        // The panel hangs under the bar with its left edge on the bar's margin,
+        // and the same gap as the other two panels.
+        assert_eq!(panel.x, bar_left);
+        assert_eq!(
+            panel.y,
+            monitor.y + bar.margin_top + bar.height + bar.gap + bar.shadow_pad
+        );
     }
 
     #[test]

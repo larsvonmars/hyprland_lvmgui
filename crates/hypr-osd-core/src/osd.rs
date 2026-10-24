@@ -511,6 +511,7 @@ impl Osd {
     /// Show the card and hide it again after `duration`, unless
     /// [`Osd::set_stay_open_when`] says otherwise by then.
     pub fn reveal(&self, duration: Duration) {
+        self.retarget();
         self.set_every_surface_visible(true);
         self.arm_hide(duration);
     }
@@ -532,6 +533,7 @@ impl Osd {
         if let Some(source) = self.hide.borrow_mut().take() {
             source.remove();
         }
+        self.retarget();
         self.set_every_surface_visible(true);
     }
 
@@ -593,10 +595,12 @@ impl Osd {
     fn ensure_surface(&self) {
         // A pinned surface never follows the focused output - see
         // `Opts::pin_output` and `Osd::pin_output`. Everything else does, because
-        // a card is about what the user is doing right now.
+        // a card is about what the user is doing right now - unless the settings
+        // window's Display page has named a primary display, which the
+        // notification cards then belong on (see `default_output`).
         let target = match &*self.pin.borrow() {
             Some(pinned) => Some(pinned.clone()),
-            None => monitors::focused_connector(),
+            None => self.default_output(),
         };
         let current = self
             .surface
@@ -631,6 +635,41 @@ impl Osd {
         // pile of updates going nowhere.
         if let Some(content) = content {
             self.attach_content(&content);
+        }
+    }
+
+    /// Which output a card belongs on when nothing has pinned it: the settings
+    /// window's **primary display** for a *notification* card, and the focused
+    /// output otherwise.
+    ///
+    /// A notification card - the volume, media and session cards, which take no
+    /// keyboard - is one of the things that appear by themselves, and designating
+    /// a primary display is precisely how a user says "they belong here". A card
+    /// the user *drives* with the keyboard - the switcher, the overview, the
+    /// launcher, the settings window - deliberately keeps following the focused
+    /// output: one that opened on another screen than the one being used would be
+    /// unusable, so the primary display is not even consulted for it.
+    fn default_output(&self) -> Option<String> {
+        if self.opts.keyboard == Keyboard::None {
+            if let Some(primary) = monitors::primary_connector() {
+                return Some(primary);
+            }
+        }
+        monitors::focused_connector()
+    }
+
+    /// Put the card on the output it belongs on, just before it is shown again.
+    ///
+    /// A notification card is built once, when its element starts, so without this
+    /// the primary display (or the focused output) would only be re-read at the
+    /// next start-up - and a primary display picked in the settings window would
+    /// need that element restarted to mean anything. The call is cheap:
+    /// [`Osd::ensure_surface`] rebuilds nothing when the answer has not changed.
+    fn retarget(&self) {
+        // A bar owns a surface per output and is reconciled by `sync_outputs`;
+        // there is no single surface here for `ensure_surface` to move.
+        if !matches!(self.opts.placement, Placement::Bar { .. }) {
+            self.ensure_surface();
         }
     }
 

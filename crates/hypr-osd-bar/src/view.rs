@@ -32,7 +32,7 @@ use hypr_osd_core::windows::Window;
 
 use crate::hypr::{Snapshot, Workspace};
 use crate::minimise::{self, Minimised};
-use crate::Settings;
+use crate::{Settings, Shows};
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -42,10 +42,10 @@ use crate::Settings;
 ///
 /// The bar is the tightest place in the collection, so most of them sit inside
 /// 13px text: the workspace row is a step down from that (its dots live in a
-/// 20px pill beside 12px numbers), the applications button and the power button
+/// capsule beside 12px numbers), the applications button and the power button
 /// at the two ends a step up, because those two are aimed at rather than read.
 const ICON: i32 = 14;
-const WS_ICON: i32 = 10;
+const WS_ICON: i32 = 11;
 const APPS_ICON: i32 = 15;
 const POWER_ICON: i32 = 16;
 
@@ -151,6 +151,15 @@ impl Pill {
         button.set_can_focus(false);
         let face = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         face.add_css_class("face");
+        // A pill is often wider than its face: `min-width` gives the workspace
+        // pills one width whether they hold a dot, a ring or a number. A box
+        // packs its children from the start, so without this the leftover room
+        // would all land on the right and the mark would sit left of the
+        // capsule's centre. Centring the face itself is what the padding
+        // promises; for a pill whose face is already its natural width this
+        // changes nothing.
+        face.set_halign(gtk::Align::Center);
+        face.set_valign(gtk::Align::Center);
         button.set_child(Some(&face));
         Pill {
             button,
@@ -233,7 +242,12 @@ impl Pill {
                         separator.add_css_class("separator");
                         self.face.append(&separator);
                     }
-                    self.face.append(&icons::lucide(part.icon, self.icon_size));
+                    // An empty name means the part is its reading alone: the
+                    // active workspace pill is a number with no dot in front of
+                    // it, and `lucide("")` would ask the icon theme for nothing.
+                    if !part.icon.is_empty() {
+                        self.face.append(&icons::lucide(part.icon, self.icon_size));
+                    }
                     if !part.text.is_empty() {
                         let label = gtk::Label::new(None);
                         label.set_markup(&part.text);
@@ -294,6 +308,10 @@ pub struct BarView {
     /// the same size as the application indicators beside them: they are the same
     /// gesture.
     icon_size: i32,
+    /// Which parts of the bar the config asks for (see [`Shows`]). Kept rather
+    /// than read once, because four of the pills show and hide themselves as
+    /// their data arrives and the switch has to win over that.
+    shows: Shows,
 }
 
 /// The last reading of each part of the status pill.
@@ -336,17 +354,13 @@ impl BarView {
         text::cap_width(&title, settings.title_width);
 
         // The applications button is the first thing in the bar, at the far left -
-        // the corner every desktop keeps the thing that opens everything else. It
-        // *toggles* the panel rather than asking it to open: the panel keeps the
-        // keyboard while it is up, so the button has to be the way back out (see
-        // the handler in `view` and the element's own notes).
+        // the corner every desktop keeps the thing that opens everything else.
+        // It unfolds the panel like the clock unfolds the island: the pointer
+        // arriving (or a click) *asks* the element to open it, and the element
+        // takes it away again when the pointer has left both the button and the
+        // panel. The handler is wired after the row exists, because the request
+        // measures the button and needs the tree it ends up in.
         let apps = Pill::new("apps", APPS_ICON);
-        {
-            let command = settings.apps_command.clone();
-            apps.on_click(move || {
-                sources::launch(&command, &["toggle"]);
-            });
-        }
 
         let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         left.add_css_class("section");
@@ -407,15 +421,15 @@ impl BarView {
         let tray = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         tray.add_css_class("tray");
 
-        // The windows the bar has put away are drawn in the same row, at its left
-        // end - they are the tray's other half (see `minimise`), and this box is
-        // built here rather than by the tray host because *every* bar draws them:
-        // the application indicators are one session-wide D-Bus object that only
-        // one bar can carry, while these are simply what Hyprland says. Putting a
-        // window away on one screen therefore shows its icon on both.
+        // The windows the bar has put away are drawn in the same row as the tray's
+        // icons, at its left end - they are the tray's other half (see `minimise`).
+        // The box is a sibling of the tray rather than a child of it, so the two
+        // can be switched off independently by the settings window; every bar
+        // draws these, while the application indicators are one session-wide D-Bus
+        // object that only one bar can carry. Putting a window away on one screen
+        // therefore shows its icon on both.
         let minimised = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         minimised.add_css_class("minimised");
-        tray.append(&minimised);
 
         // --- the combined status pill --------------------------------------
         //
@@ -500,6 +514,7 @@ impl BarView {
         for pill in [&media, &stats, &status] {
             right.append(&pill.button);
         }
+        right.append(&minimised);
         right.append(&tray);
         // The power button sits at the far right, where a mis-aimed click is
         // least likely to land on it.
@@ -510,6 +525,45 @@ impl BarView {
         root.set_start_widget(Some(&left));
         root.set_center_widget(Some(&clock.button));
         root.set_end_widget(Some(&right));
+
+        // The applications button's two handles: the pointer arriving on it, and
+        // a left click. Both send the same request - `open` with the connector
+        // the bar is on and the button's own rectangle - for the same reason the
+        // status pill does: a `toggle` would put the panel into its *pinned*
+        // state, which is not watched at all, so the panel would stay up for good
+        // after a single click. The element closes itself when the pointer has
+        // left it, which is the way back out (as with the island and the system
+        // popup). Wired here rather than with the pill's other handlers, because
+        // the request has to *measure* the button - for which it needs the widget
+        // tree the button lives in.
+        {
+            let command = settings.apps_command.clone();
+            let pill = apps.button.clone();
+            let root = root.clone();
+            let connector = connector.to_owned();
+            let ask = Rc::new(move || {
+                // Two things the panel cannot work out for itself: which monitor
+                // the bar is on (the panel is drawn on that screen and measured
+                // against it), and where the button is. The rectangle is in the
+                // bar's *card*, because the panel knows the bar's margins and the
+                // monitor's position but not the button's own width.
+                let mut args: Vec<String> = vec!["open".to_string(), connector.clone()];
+                if let Some(card) = root.parent() {
+                    if let Some(bounds) = bounds_in(&pill, &card) {
+                        args.extend(bounds.iter().map(|value| format!("{value:.0}")));
+                    }
+                }
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                sources::launch(&command, &refs);
+            });
+            {
+                let ask = ask.clone();
+                let motion = gtk::EventControllerMotion::new();
+                motion.connect_enter(move |_, _, _| ask());
+                apps.button.add_controller(motion);
+            }
+            apps.on_click(move || ask());
+        }
 
         // The two handles that unfold the system popup: the pointer arriving on
         // the status pill, and a left click on it. Both send the *same* thing,
@@ -579,6 +633,7 @@ impl BarView {
             last_workspaces: RefCell::new(String::new()),
             last_minimised: RefCell::new(String::new()),
             icon_size: settings.icon_size,
+            shows: settings.shows,
         };
         // A first paint, so the bar that appears is already correct rather than
         // appearing empty and filling in over the next second.
@@ -595,6 +650,17 @@ impl BarView {
         // And the status pill waits for the first readings of all three of its
         // parts, which is the first `refresh`.
         this.status.set_visible(false);
+
+        // What the config switched off. The four pills above decide their own
+        // visibility as their data arrives, so those flags are applied *there*
+        // instead (see `render_media`, `render_stats`, `render_status` and
+        // `render_title`); these are the parts that are always up.
+        this.apps.set_visible(this.shows.apps);
+        this.workspaces.set_visible(this.shows.workspaces);
+        this.clock.set_visible(this.shows.clock);
+        this.minimised.set_visible(this.shows.minimised);
+        this.tray.set_visible(this.shows.tray);
+        this.power.set_visible(this.shows.power);
         this
     }
 
@@ -696,22 +762,29 @@ impl BarView {
         }
         for workspace in workspaces {
             let pill = Pill::new("ws", WS_ICON);
-            // The mark, and *only* the mark: the row is a row of dots and the
-            // number is in the tooltip, which is how the bar this replaces drew
-            // it. (The pill has room for a reading - see `Part` - but a
-            // workspace does not need one: its position already says which.)
+            // An idle workspace is a dot, and the *shape* carries its state:
+            // filled when it holds a window, hollow when it is empty. That
+            // leaves the colour free for the one thing shape cannot say - the
+            // accent, for a workspace that is up on another monitor.
             //
-            // The one you are on is a solid dot, the rest hollow - Lucide draws
-            // outlines, so the solid one is ours (see `icons/local/`), and it is
-            // what tells the workspace you are on from the ones you can go to on
-            // top of the colour the pill already carries.
+            // The workspace you are on carries no dot at all: it widens into
+            // its number, the row's only reading, so "where am I" needs no
+            // hover and no counting from a fixed edge. Lucide draws outlines,
+            // so the solid dot is ours (see `icons/local/`).
+            let number = workspace.id.to_string();
             pill.set_one(
                 if workspace.active {
+                    ""
+                } else if workspace.windows > 0 {
                     names::WORKSPACE_ACTIVE
                 } else {
                     names::WORKSPACE_IDLE
                 },
-                "",
+                if workspace.active {
+                    number.as_str()
+                } else {
+                    ""
+                },
                 &[
                     ("active", workspace.active),
                     ("visible", workspace.visible),
@@ -745,8 +818,10 @@ impl BarView {
         let title = snapshot.title.trim();
         self.title.set_text(title);
         // An empty title takes the label (and its gap) out of the row rather
-        // than leaving a hole where a window title would be.
-        self.title.set_visible(!title.is_empty());
+        // than leaving a hole where a window title would be - and a title the
+        // config switched off stays out however full the row is.
+        self.title
+            .set_visible(self.shows.title && !title.is_empty());
         let tooltip = match (title.is_empty(), snapshot.class.trim().is_empty()) {
             (true, _) => None,
             (false, true) => Some(title.to_string()),
@@ -887,7 +962,6 @@ impl BarView {
             self.status.set_visible(false);
             return;
         }
-
         // Colour precedence, worst news first: a muted sink or a dying battery is
         // red whichever else is also true, then the amber band, then a link that
         // is not there at all (which is amber - it is worth a look, not an
@@ -902,7 +976,7 @@ impl BarView {
         tooltip.push("Right click: wifi on/off · middle click: mute the microphone".to_string());
         tooltip.push("Scroll: the volume - and hovering shows the same panel".to_string());
         self.status.tooltip(Some(&tooltip.join("\n")));
-        self.status.set_visible(true);
+        self.status.set_visible(self.shows.status);
     }
 
     pub fn render_media(&self, track: Option<&Track>, playing: bool) {
@@ -928,7 +1002,7 @@ impl BarView {
             summary,
             if playing { "playing" } else { "paused" }
         )));
-        self.media.set_visible(true);
+        self.media.set_visible(self.shows.media);
     }
 
     /// The system info pill: CPU, memory, temperature, and how many updates are
@@ -974,7 +1048,7 @@ impl BarView {
         });
         tooltip.push("Left click: the list, in a terminal".to_string());
         self.stats.tooltip(Some(&tooltip.join("\n")));
-        self.stats.set_visible(true);
+        self.stats.set_visible(self.shows.stats);
     }
 }
 

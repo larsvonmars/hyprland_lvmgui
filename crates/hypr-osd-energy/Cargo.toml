@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-energy"
+description = "The energy-saving daemon for hypr-osd: drops the compositor's expensive effects while the machine is in a saving power profile."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-energy"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

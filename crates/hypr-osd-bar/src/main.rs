@@ -120,6 +120,83 @@ const DEFAULT_UPDATES_EVERY_MS: u64 = 1_800_000;
 /// session and look like a bug in the bar.
 const DEFAULT_RESYNC_EVERY_MS: u64 = 5000;
 
+/// Which parts of the bar are drawn.
+///
+/// Every one of them is a switch on the settings window's Bar page (`show_*` in
+/// `bar.conf`), and every one of them defaults to *on*: a bar that quietly lost
+/// half its pills after an upgrade would read as a broken bar rather than as a
+/// setting. A part that is switched off is not built, not read and not drawn -
+/// the media follower still runs (it is one process for the session, shared with
+/// nothing else), but the pill it would paint is simply never shown.
+#[derive(Clone, Copy)]
+pub struct Shows {
+    /// The applications button at the far left - the panel's trigger.
+    pub apps: bool,
+    /// The workspace row.
+    pub workspaces: bool,
+    /// The focused window's title.
+    pub title: bool,
+    /// The clock in the middle - and the handle that unfolds the island popup.
+    /// Hiding it takes that popup's trigger with it.
+    pub clock: bool,
+    /// The media pill (what is playing).
+    pub media: bool,
+    /// The system info pill: CPU, memory, temperature, pending updates.
+    pub stats: bool,
+    /// The combined status pill: the link, the sound and the battery - and the
+    /// handle that unfolds the system popup.
+    pub status: bool,
+    /// The tray: the application indicators. Off, the bar does not claim the
+    /// StatusNotifier watcher at all, rather than being a tray that is there and
+    /// empty - so the indicators that find no watcher go wherever they go when
+    /// this desktop has no tray.
+    pub tray: bool,
+    /// The windows put away, drawn at the left of the tray's row.
+    pub minimised: bool,
+    /// The session button at the far right.
+    pub power: bool,
+}
+
+impl Shows {
+    fn load(config: &Config) -> Self {
+        Shows {
+            apps: config.bool("show_apps", true),
+            workspaces: config.bool("show_workspaces", true),
+            title: config.bool("show_title", true),
+            clock: config.bool("show_clock", true),
+            media: config.bool("show_media", true),
+            stats: config.bool("show_stats", true),
+            status: config.bool("show_status", true),
+            tray: config.bool("show_tray", true),
+            minimised: config.bool("show_minimised", true),
+            power: config.bool("show_power", true),
+        }
+    }
+
+    /// The parts that are switched off, in the order the bar draws them - what
+    /// `status` prints, so "why is that pill missing" has an answer that is not
+    /// guesswork.
+    fn hidden(&self) -> Vec<&'static str> {
+        let parts = [
+            ("apps", self.apps),
+            ("workspaces", self.workspaces),
+            ("title", self.title),
+            ("media", self.media),
+            ("stats", self.stats),
+            ("status", self.status),
+            ("minimised", self.minimised),
+            ("tray", self.tray),
+            ("clock", self.clock),
+            ("power", self.power),
+        ];
+        parts
+            .iter()
+            .filter(|(_, on)| !on)
+            .map(|(name, _)| *name)
+            .collect()
+    }
+}
+
 /// What the config file resolved to.
 pub struct Settings {
     height: i32,
@@ -131,6 +208,8 @@ pub struct Settings {
     /// The connector to pin the bar to, or `None` for "the focused one at
     /// start-up".
     output: Option<String>,
+    /// Which parts of the bar are drawn (see [`Shows`]).
+    shows: Shows,
     workspaces: i32,
     title_width: i32,
     battery: String,
@@ -177,6 +256,7 @@ impl Settings {
             margin_x: config.i32("margin_x", DEFAULT_MARGIN_X).max(0),
             exclusive: config.bool("exclusive", true),
             output: Some(config.string("output", "")).filter(|output| !output.is_empty()),
+            shows: Shows::load(config),
             workspaces: config.i32("workspaces", DEFAULT_WORKSPACES).max(0),
             title_width: config.i32("title_width", DEFAULT_TITLE_WIDTH).max(40),
             battery: config.string("battery", DEFAULT_BATTERY),
@@ -516,7 +596,12 @@ impl Bars {
         // has a home, any bar that comes up takes it - unless the screen it
         // prefers is one this session has, in which case the bar that is coming up
         // now is not it and the tray keeps waiting.
-        if self.tray.borrow().is_none()
+        //
+        // With `show_tray = false` there is no host at all: the watcher's D-Bus
+        // names are a claim on the session bus, and claiming them for a row of
+        // icons nobody can see would be a lie (see [`Shows::tray`]).
+        if self.settings.shows.tray
+            && self.tray.borrow().is_none()
             && (connector == self.tray_home || monitors::find(&self.tray_home).is_none())
         {
             *self.tray.borrow_mut() = Some(tray::Tray::host(
@@ -859,6 +944,7 @@ impl Bars {
             .borrow()
             .clone()
             .unwrap_or_else(|| "nowhere".to_string());
+        let hidden = self.settings.shows.hidden();
 
         [
             format!(
@@ -871,7 +957,24 @@ impl Bars {
                     on_screen.join(", ")
                 }
             ),
-            format!("tray       on {tray}"),
+            // Which pills this bar is *supposed* to have, so a part that is
+            // missing because of a `show_*` switch is not chased as a bug.
+            format!(
+                "hidden     {}",
+                if hidden.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    hidden.join(", ")
+                }
+            ),
+            format!(
+                "tray       {}",
+                if self.settings.shows.tray {
+                    format!("on {tray}")
+                } else {
+                    "off (show_tray = false)".to_string()
+                }
+            ),
             format!(
                 "minimised  {}",
                 if paint.minimised.is_empty() {
@@ -966,6 +1069,9 @@ impl Bars {
     /// *moves* an orphaned tray: re-hosting one that is up would cost the icons,
     /// since an indicator registers with a watcher once, when it starts.
     fn keep_tray(&self) {
+        if !self.settings.shows.tray {
+            return;
+        }
         let Some(hosted) = self.tray_output.borrow().clone() else {
             return;
         };
@@ -1097,5 +1203,29 @@ mod tests {
         // panic: every interval is then counted in milliseconds instead.
         assert!(every(1000, 1000, Duration::ZERO));
         assert!(!every(3, 1000, Duration::ZERO));
+    }
+
+    #[test]
+    fn every_part_of_the_bar_is_shown_unless_the_config_hides_it() {
+        let path = std::env::temp_dir().join("hypr-osd-bar-shows-test.conf");
+        std::fs::write(&path, "show_media = false\nshow_tray = false\n").unwrap();
+        let shows = Shows::load(&Config::load_from(path.clone()));
+        let _ = std::fs::remove_file(&path);
+
+        // The two the file switched off are off, in the order the bar draws
+        // them...
+        assert!(!shows.media);
+        assert!(!shows.tray);
+        assert_eq!(shows.hidden(), vec!["media", "tray"]);
+        // ...and everything else is still on, because a bar that lost a pill
+        // nobody asked it to lose would read as a bug.
+        assert!(shows.apps && shows.workspaces && shows.title && shows.clock);
+        assert!(shows.stats && shows.status && shows.minimised && shows.power);
+
+        let path = std::env::temp_dir().join("hypr-osd-bar-shows-default-test.conf");
+        std::fs::write(&path, "height = 40\n").unwrap();
+        let shows = Shows::load(&Config::load_from(path.clone()));
+        let _ = std::fs::remove_file(&path);
+        assert!(shows.hidden().is_empty(), "a fresh config hides nothing");
     }
 }

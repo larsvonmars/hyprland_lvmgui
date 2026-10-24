@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-settings"
+description = "The settings window for hypr-osd: every element's config in one card, opened by the gear in the system popup's header."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-settings"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

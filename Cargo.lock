@@ -461,6 +461,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypr-osd-energy"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+]
+
+[[package]]
 name = "hypr-osd-island"
 version = "0.1.0"
 dependencies = [
@@ -495,6 +503,14 @@ dependencies = [
 
 [[package]]
 name = "hypr-osd-session"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+]
+
+[[package]]
+name = "hypr-osd-settings"
 version = "0.1.0"
 dependencies = [
  "gtk4",

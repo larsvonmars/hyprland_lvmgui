@@ -315,8 +315,9 @@ pub mod names {
 
     names! {
         // The workspaces. Lucide draws outlines; the solid dot is ours (see
-        // `icons/local/`), and it is the one thing that tells the workspace you
-        // are on from the ones you can go to.
+        // `icons/local/`). The filled dot is an occupied workspace and the ring
+        // an empty one - the workspace you are on is a number instead, so these
+        // two are about what is *in* a workspace, not where you are.
         WORKSPACE_ACTIVE => "circle-filled",
         WORKSPACE_IDLE => "circle",
 
@@ -332,6 +333,9 @@ pub mod names {
         TEMPERATURE => "thermometer",
         UPDATES => "download",
         CONTROLS => "sliders-horizontal",
+        // The gear that opens the settings window, worn by the button in the
+        // system popup's header (see `hypr-osd-settings`).
+        SETTINGS => "settings",
         BLUETOOTH => "bluetooth",
         TERMINAL => "terminal",
         BRIGHTNESS => "sun",

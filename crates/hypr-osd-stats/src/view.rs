@@ -8,30 +8,45 @@
 //!  │  SYSTEM                [15 updates] [wifi off] [bluetooth on]      │
 //!  │ ─────────────────────────────────────────────────────────────────── │
 //!  │ ┌─ resources ────────────────────┐ ┌─ controls ───────────────────┐ │
-//!  │ │  ⌗ CPU       ▤ MEM     ▒ TEMP  │ │ ☁ NETWORK        home-wifi   │ │
-//!  │ │    11%         63%       52°C  │ │   [nmtui] [Wi-Fi off]        │ │
-//!  │ │    ▬▬▬▬        ▬▬▬▬      ▬▬▬▬  │ │ ♪ SOUND             42%      │ │
-//!  │ │                        [btop]  │ │   [Mixer] [Mute]             │ │
-//!  │ └────────────────────────────────┘ │ ⚡ POWER                     │ │
-//!  │ ┌─ bluetooth ────────────────────┐ │   [saver|balanced|perf]      │ │
-//!  │ │ On · 1 connected    [Visible]⏻│ │ ▷ PRESENTATION      [off]    │ │
-//!  │ │ ▍◆ WH-1000XM4  ▂▄▆  82%   [↯] │ │ ☀ ▬▬▬▬▬▬▬▬▬▬▬ 100%           │ │
-//!  │ │ ▍⌨ K380        ▂▄         [↗] │ │ ⌨ LAYOUT              DE     │ │
-//!  │ │ [Scan] [bluetoothctl]          │ └──────────────────────────────┘ │
-//!  │ └────────────────────────────────┘ ┌─ updates ────────────────────┐ │
-//!  │                                    │ 15 packages waiting          │ │
-//!  │                                    │ base, linux, firefox [Install]│ │
-//!  │                                    └──────────────────────────────┘ │
+//!  │ │  ⌗ CPU       ▤ MEM     ▒ TEMP  │ │ ⌁ NETWORK   home-wifi   ◉ ◉  │ │
+//!  │ │    11%         63%       52°C  │ │ ♪ SOUND          42%    ◉ ◉  │ │
+//!  │ │    ▬▬▬▬        ▬▬▬▬      ▬▬▬▬  │ │ ──────────────────────────── │ │
+//!  │ │                        [btop]  │ │ ⚡ POWER     [saver|bal|perf] │ │
+//!  │ └────────────────────────────────┘ │ ▷ PRESENTATION         [off] │ │
+//!  │ ┌─ bluetooth ────────────────────┐ │ ☀ BRIGHTNESS  ▬▬▬▬▬▬▬▬  100% │ │
+//!  │ │           [⌕ Scan] [❯ btctl]   │ │ ⌨ LAYOUT                  DE │ │
+//!  │ │ On · 1 connected          ◉ ◉  │ └──────────────────────────────┘ │
+//!  │ │ ▍◆ WH-1000XM4  ▂▄▆  82%   [⧗]  │ ┌─ updates ────────────────────┐ │
+//!  │ │ ▍⌨ K380        ▂▄  [⧉]  [✕]   │ │ 15 packages waiting          │ │
+//!  │ │ ▍○ MX Master   ▂▄        [+]   │ │ base, linux, firefox [Install]│ │
+//!  │ └────────────────────────────────┘ └──────────────────────────────┘ │
 //!  └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! Two columns: the machine's *load* on the left (three gauges, then the
 //! bluetooth radios with the devices they know), the machine's *controls* on the
-//! right (one row per thing, the name on the left, the value or the control on
-//! the right), with the pending updates under them. The control rows are the
-//! table: every row has the same shape, so the eye can run down the values.
+//! right, with the pending updates under them.
 //!
-//! Everything here is *direct*: the bluetooth controller has a power button and
+//! The controls are a table, and the table *is* the design: a mark and a name on
+//! the left, then whatever that setting is (a reading, a switch, a slider)
+//! pinned to the row's right edge. One setting per row, the same shape all the
+//! way down, so the eye runs a column instead of re-reading the arrangement of
+//! every line. What a row has to *press* sits in a box at its end, and the rows
+//! that carry the same pair of buttons put their readings in the same column;
+//! the two controls that need room instead - the three-way switch and the
+//! slider - take the rest of their row. A hairline divides the pair you *use*
+//! from the four you *set*.
+//!
+//! The bluetooth tile is built the same way, one floor down: its *heading*
+//! carries the tile's two tools ([Scan] and [bluetoothctl], where the resources
+//! and updates tiles keep btop and Install), the controller's own row is a
+//! reading plus two switches, and the device rows are a list with a fixed slot at
+//! the end for their buttons - which is what lines the link meters and the
+//! battery pills up from row to row. Because the readings sit against that slot
+//! and the buttons at the tile's right edge, a device's tail is a column like any
+//! other.
+//!
+//! Everything here is *direct*: the bluetooth controller has a power switch and
 //! a visibility switch, each device row carries the one action that makes sense
 //! for that device (connect, disconnect, or pair what a scan found) plus a
 //! forget button on what is paired, the power profile is a segmented switch
@@ -58,6 +73,7 @@ use gtk::prelude::*;
 
 use hypr_osd_core::hardware::{self, Network, Volume};
 use hypr_osd_core::icons::{self, names};
+use hypr_osd_core::state;
 use hypr_osd_core::system::{Reading, TEMP_CRIT, TEMP_WARN};
 
 use crate::sources::{self, Bluetooth, Device, DeviceAction, Inhibitor};
@@ -91,6 +107,18 @@ const BATTERY_ICON: i32 = 10;
 /// `bluetoothctl` talking to a device (a connect is a second or three), short
 /// enough that a spinner is never stuck turning for good.
 const ACTION_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The width a device row keeps for its buttons at the end, whatever it has to
+/// put there.
+///
+/// Two buttons is the most a row can carry - the action that follows from its
+/// state, and the forget on what is paired but not connected - and holding that
+/// width on *every* row is what lines the readings up: they are packed against
+/// this box, so without it a row with one button put its battery a button-width
+/// further right than a row with two. It has to be the width two buttons
+/// really take (measured, not guessed: the theme's button margins are part of
+/// it), because a smaller number is only a floor and the box grows past it.
+const DEVICE_ACTIONS: i32 = 64;
 
 /// What a pairing attempt may hold its row's button for.
 ///
@@ -154,6 +182,9 @@ pub struct StatsView {
     pub root: gtk::Box,
     /// The state chips in the header, rebuilt whenever something changes them.
     chips: gtk::Box,
+    /// The gear at the header's right end: the settings window's trigger. Kept so
+    /// it can wear the accent while that window is up.
+    settings_button: gtk::Button,
     /// The three gauges: one meter and one reading each.
     bars: [gtk::ProgressBar; 3],
     values: [gtk::Label; 3],
@@ -231,6 +262,19 @@ impl StatsView {
         header.append(&stretch());
         header.append(&chips);
 
+        // The gear: the settings window's trigger, at the header's right end.
+        // It runs `settings_command toggle` and nothing else - the settings
+        // element is a program of its own, and its first invocation *is* its
+        // daemon, so this is a `launch` and never a wait (see
+        // `sources::spawn`). While the window is up the gear stays lit, which
+        // is what `state`'s flag is for.
+        let settings_button = icon_button(names::SETTINGS, "hypr-osd settings");
+        {
+            let command = settings.settings_command.clone();
+            settings_button.connect_clicked(move |_| sources::spawn(&command, &["toggle"]));
+        }
+        header.append(&settings_button);
+
         // ---- resources: three gauges in a row -------------------------------
         let (resources, resources_head) = tile("resources", names::CPU);
         let metrics = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -260,24 +304,54 @@ impl StatsView {
         // A tile of its own, because it is the one control with *content*: the
         // state of the radio, the visibility of the controller, and then a row
         // per device with the one action that makes sense for that device.
-        let (bluetooth_tile, _) = tile("bluetooth", names::BLUETOOTH);
+        let (bluetooth_tile, bluetooth_head) = tile("bluetooth", names::BLUETOOTH);
+        // The tile is the left column's tail, so it takes the column's leftover
+        // height: a column that ends in a hole reads as an accident.
+        bluetooth_tile.set_vexpand(true);
+
+        // The tile's two tools, at the right end of its *heading*, where the
+        // other tiles keep theirs (btop, Install) - and no longer floating under
+        // the device list, where nothing else in this collection puts an action.
+        let scan = glyph_chip(names::SEARCH, "Scan", || {});
+        scan.set_tooltip_text(Some("Look for devices nearby for a few seconds"));
+        // The idle content is kept so the spinner that replaces it while a scan
+        // runs can be swapped back out when the controller stops looking.
+        let scan_idle = scan
+            .child()
+            .and_downcast::<gtk::Box>()
+            .expect("a chip's child is its glyph-and-word row");
+        let bluetooth_open = glyph_chip(names::TERMINAL, "bluetoothctl", {
+            let terminal = settings.terminal_command.clone();
+            move || sources::spawn(&terminal, &["-e", "bluetoothctl"])
+        });
+        bluetooth_open.set_tooltip_text(Some("Everything else bluetooth, in a terminal"));
+        bluetooth_head.append(&stretch());
+        bluetooth_head.append(&scan);
+        bluetooth_head.append(&bluetooth_open);
+
+        // The controller's own row: the reading on the left, its two switches in
+        // the same box every row of the controls tile ends with - so a switch
+        // here is the same shape, at the same edge, as the one beside NETWORK.
         let bluetooth_state = gtk::Label::new(Some("Off"));
         bluetooth_state.add_css_class("value");
         bluetooth_state.set_xalign(0.0);
-        // The two halves of "is the controller approachable": whether it is on,
-        // and whether it answers pairing requests while it is.
-        let bluetooth_visible = glyph_chip(names::EYE_OFF, "Hidden", || {});
-        bluetooth_visible.set_tooltip_text(Some(
-            "Answer pairing requests - make the controller visible to new devices",
-        ));
+        // Both halves of "is the controller approachable": whether it is on, and
+        // whether it answers pairing requests while it is. Each one shows the
+        // state it is *in*, like every other switch in this panel.
+        let bluetooth_visible = icon_button(
+            names::EYE_OFF,
+            "Hidden - answer pairing requests so new devices can find this one",
+        );
         let bluetooth_power = icon_button(names::POWER, "Turn bluetooth on");
-        let bluetooth_head_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        bluetooth_head_row.add_css_class("bt-state");
-        bluetooth_head_row.append(&bluetooth_state);
-        bluetooth_head_row.append(&stretch());
-        bluetooth_head_row.append(&bluetooth_visible);
-        bluetooth_head_row.append(&bluetooth_power);
-        bluetooth_tile.append(&bluetooth_head_row);
+        let bluetooth_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        bluetooth_row.add_css_class("bt-state");
+        bluetooth_row.append(&bluetooth_state);
+        bluetooth_row.append(&stretch());
+        let bluetooth_actions = actions();
+        bluetooth_actions.append(&bluetooth_visible);
+        bluetooth_actions.append(&bluetooth_power);
+        bluetooth_row.append(&bluetooth_actions);
+        bluetooth_tile.append(&bluetooth_row);
 
         let device_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         device_list.add_css_class("dev-list");
@@ -301,21 +375,6 @@ impl StatsView {
         bluetooth_tile.append(&device_hint);
         bluetooth_tile.append(&device_more);
         bluetooth_tile.append(&device_note);
-
-        let scan = glyph_chip(names::SEARCH, "Scan", || {});
-        scan.set_tooltip_text(Some("Look for devices nearby for a few seconds"));
-        // The idle content is kept so the spinner that replaces it while a scan
-        // runs can be swapped back out when the controller stops looking.
-        let scan_idle = scan
-            .child()
-            .and_downcast::<gtk::Box>()
-            .expect("a chip's child is its glyph-and-word row");
-        let bluetooth_open = glyph_chip(names::TERMINAL, "bluetoothctl", {
-            let terminal = settings.terminal_command.clone();
-            move || sources::spawn(&terminal, &["-e", "bluetoothctl"])
-        });
-        bluetooth_open.set_tooltip_text(Some("Everything else bluetooth, in a terminal"));
-        bluetooth_tile.append(&action_row(&[&scan, &bluetooth_open]));
 
         // ---- updates: what is waiting, and the one way to act on it ---------
         let (updates, updates_head) = tile("updates", names::UPDATES);
@@ -343,41 +402,60 @@ impl StatsView {
         left.append(&resources);
         left.append(&bluetooth_tile);
 
-        // ---- controls -------------------------------------------------------
+        // ---- controls: one row per setting -------------------------------
+        // The tile is a table, and the table is the design: a mark and a name on
+        // the left, whatever the setting *is* on the right. One setting per
+        // row, the same shape all the way down.
         let (controls, _) = tile("controls", names::CONTROLS);
 
-        // NETWORK: which access point, and the two things you might want to do
-        // about it. The pill's own wifi toggle lives here too - this is where
-        // managing the link belongs now that the pill is one handle.
+        // NETWORK: the access point as the reading, and the two things you can
+        // do about it as the row's own controls - the tool that manages the
+        // link, and the radio itself. The pill's wifi toggle lives here now
+        // that the pill is one handle.
         let network_state = gtk::Label::new(Some("Not connected"));
         network_state.add_css_class("value");
         network_state.set_ellipsize(gtk::pango::EllipsizeMode::End);
         network_state.set_max_width_chars(16);
-        controls.append(&control_row(names::WIFI, "NETWORK", &network_state));
-        let network_open = glyph_chip(names::TERMINAL, "nmtui", {
+        let (network_row, network_actions) = control_row(names::WIFI, "NETWORK", &network_state);
+        let network_open = icon_button(names::TERMINAL, "nmtui - manage the wireless link");
+        {
             let terminal = settings.terminal_command.clone();
-            move || sources::spawn(&terminal, &["-e", "nmtui"])
-        });
-        let radio_toggle = glyph_chip(names::WIFI, "Wi-Fi off", || {});
-        controls.append(&action_row(&[&network_open, &radio_toggle]));
+            network_open.connect_clicked(move |_| sources::spawn(&terminal, &["-e", "nmtui"]));
+        }
+        // A switch shows the state it is *in* - the whole wifi mark while the
+        // radio is on, the struck-through one while it is not - and the tooltip
+        // says which way a click would take it.
+        let radio_toggle = icon_button(names::WIFI_OFF, "Turn the wifi radio on");
+        network_actions.append(&network_open);
+        network_actions.append(&radio_toggle);
+        controls.append(&network_row);
 
-        // SOUND: the sink's level, and the two things the volume pill used to
-        // do with a right and a middle click.
+        // SOUND: the sink's level as the reading, the mixer and the mute as the
+        // controls. The volume *step* belongs to the volume element; what is
+        // here is what the pill's right and middle clicks used to be.
         let sound_state = gtk::Label::new(Some("—"));
         sound_state.add_css_class("value");
-        controls.append(&control_row(names::VOLUME_HIGH, "SOUND", &sound_state));
-        let mixer = glyph_chip(names::CONTROLS, "Mixer", || {
-            sources::spawn("pavucontrol", &[])
-        });
-        mixer.set_tooltip_text(Some("Per-application levels, in pavucontrol"));
-        let mute_toggle = glyph_chip(names::VOLUME_OFF, "Mute", || {});
-        controls.append(&action_row(&[&mixer, &mute_toggle]));
+        let (sound_row, sound_actions) = control_row(names::VOLUME_HIGH, "SOUND", &sound_state);
+        let mixer = icon_button(names::CONTROLS, "pavucontrol - per-application levels");
+        mixer.connect_clicked(move |_| sources::spawn("pavucontrol", &[]));
+        let mute_toggle = icon_button(names::VOLUME_HIGH, "Mute");
+        sound_actions.append(&mixer);
+        sound_actions.append(&mute_toggle);
+        controls.append(&sound_row);
+
+        // The link and the sound are the pair you *use*; the four under them
+        // are the settings you *set*. A hairline is all the separation that
+        // needs - the rows themselves are already the same shape.
+        controls.append(&hairline());
 
         // POWER: one button per profile, the lit one being the profile in force.
-        // Direct, with no guessing what the next click would cycle to.
+        // The switch takes the rest of the row, so the three profiles are three
+        // equal targets - direct, with no guessing what the next click would
+        // cycle to.
         let mut profile = Vec::new();
         let profile_row = gtk::Box::new(gtk::Orientation::Horizontal, 3);
         profile_row.add_css_class("segmented");
+        profile_row.set_hexpand(true);
         for (name, label) in [
             ("power-saver", "saver"),
             ("balanced", "balanced"),
@@ -389,43 +467,38 @@ impl StatsView {
             button.set_focus_on_click(false);
             button.set_can_focus(false);
             button.set_tooltip_text(Some(name));
+            button.set_hexpand(true);
             profile_row.append(&button);
             profile.push(button);
         }
-        controls.append(&control_row(names::POWER_MODE, "POWER", &profile_row));
+        controls.append(&wide_row(names::POWER_MODE, "POWER", &profile_row));
 
-        // PRESENTATION: hold an idle/sleep block for as long as it is on.
+        // PRESENTATION: hold an idle/sleep block for as long as it is on. The
+        // chip carries its own word ("off", "on") because it is a switch with
+        // nothing else to say - which puts it in the reading column with the
+        // access point and the volume, where a state belongs.
         let presentation = glyph_chip(names::PRESENTATION, "off", || {});
         presentation.set_tooltip_text(Some(
             "Hold a systemd inhibitor (idle and sleep) - what the old \
              idle_inhibitor module did, with a switch that goes away when this \
              element does",
         ));
-        controls.append(&control_row(
-            names::PRESENTATION,
-            "PRESENTATION",
-            &presentation,
-        ));
+        let (presentation_row, _) = control_row(names::PRESENTATION, "PRESENTATION", &presentation);
+        controls.append(&presentation_row);
 
-        // BRIGHTNESS: icon, slider, percent. This row carries no name: the
-        // slider is the widest thing in the column, and the icon says the
-        // rest.
+        // BRIGHTNESS: the slider takes the rest of the row and the percentage
+        // sits at its end, where the reading of a slider belongs.
         let brightness_value = gtk::Label::new(Some("—"));
         brightness_value.add_css_class("value");
         brightness_value.set_xalign(1.0);
         brightness_value.set_size_request(38, -1);
-        let sun = icons::lucide(names::BRIGHTNESS, SECTION_ICON);
-        sun.add_css_class("section-icon");
         let brightness_scale =
             gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0);
         brightness_scale.set_draw_value(false);
         brightness_scale.set_size_request(80, -1);
         brightness_scale.set_hexpand(true);
         brightness_scale.set_valign(gtk::Align::Center);
-        let brightness_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        brightness_row.add_css_class("bright-row");
-        brightness_row.append(&sun);
-        brightness_row.append(&brightness_scale);
+        let brightness_row = wide_row(names::BRIGHTNESS, "BRIGHTNESS", &brightness_scale);
         brightness_row.append(&brightness_value);
         controls.append(&brightness_row);
 
@@ -434,7 +507,8 @@ impl StatsView {
         layout_value.add_css_class("value");
         layout_value.set_size_request(30, -1);
         layout_value.set_xalign(1.0);
-        controls.append(&control_row(names::KEYBOARD, "LAYOUT", &layout_value));
+        let (layout_row, _) = control_row(names::KEYBOARD, "LAYOUT", &layout_value);
+        controls.append(&layout_row);
 
         let right = gtk::Box::new(gtk::Orientation::Vertical, 8);
         right.add_css_class("column");
@@ -469,6 +543,7 @@ impl StatsView {
         let view = Rc::new_cyclic(|me| StatsView {
             root,
             chips,
+            settings_button,
             bars: bars.try_into().expect("three gauges"),
             values: values.try_into().expect("three gauges"),
             updates_state,
@@ -710,8 +785,11 @@ impl StatsView {
         // "Hidden") and lights in the warning colour while it is holding itself
         // open to pairing - the same "switch holding something back" the
         // presentation row uses, not the plain "on" accent.
-        word_of(&self.bluetooth_visible).set_text(bluetooth.visibility());
-        set_chip_icon(
+        // The visibility switch says what the controller is doing ("eye" while
+        // it answers pairing requests, "eye-off" while it does not) and lights in
+        // the accent while it is holding itself open - the same statement the
+        // wifi switch in the controls tile makes about its radio.
+        set_icon(
             &self.bluetooth_visible,
             if bluetooth.discoverable {
                 names::EYE
@@ -721,9 +799,9 @@ impl StatsView {
         );
         self.bluetooth_visible
             .set_tooltip_text(Some(if bluetooth.discoverable {
-                "Stop answering pairing requests"
+                "Visible - stop answering pairing requests"
             } else {
-                "Answer pairing requests - make the controller visible to new devices"
+                "Hidden - answer pairing requests so new devices can find this one"
             }));
         set_class(&self.bluetooth_visible, "on", bluetooth.discoverable);
         self.bluetooth_visible.set_sensitive(bluetooth.powered);
@@ -828,9 +906,22 @@ impl StatsView {
 
         let icon = icons::lucide(device.icon.icon(), DEVICE_ICON);
         icon.add_css_class("dev-icon");
+        // The badge is a square a good deal wider than the drawing inside it,
+        // and a `GtkBox` hands a child its natural width at the box's *start* -
+        // so the mark would sit against the badge's left edge with all the
+        // padding on its right. Asking for the slack is what centres it:
+        // `GtkImage` draws its icon in the middle of whatever room it is given
+        // (which is also why it is already centred vertically), and a drawing
+        // has no font-size to be centred with.
+        icon.set_hexpand(true);
         let badge = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         badge.add_css_class("dev-badge");
         badge.set_valign(gtk::Align::Center);
+        // ...but the badge must refuse the slack for itself, or it takes the
+        // icon's request as its own (a `GtkBox` inherits expandability from its
+        // children) and grows into a wide rectangle around a 24px square's
+        // worth of padding.
+        badge.set_hexpand(false);
         badge.append(&icon);
         // A device that is actually *there* is the one thing worth colouring in
         // this list: everything else is a name in a cache.
@@ -898,6 +989,19 @@ impl StatsView {
 
         let action = device.action();
         let waiting = self.pending_for(&device.address);
+        // The row's buttons go in a box of their own, and that box is held at the
+        // width two buttons need - the action the device's state asks for, and
+        // the forget that a paired, unconnected one offers beside it. It is what
+        // keeps the readings to its left in a column: the meter and the battery
+        // are packed against this box, so a row that carries one button and a row
+        // that carries two put them in the same place.
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        buttons.add_css_class("actions");
+        buttons.set_hexpand(false);
+        buttons.set_size_request(DEVICE_ACTIONS, -1);
+        buttons.set_valign(gtk::Align::Center);
+        buttons.append(&stretch());
+
         let button = gtk::Button::new();
         button.add_css_class("iconbtn");
         button.set_focus_on_click(false);
@@ -920,7 +1024,7 @@ impl StatsView {
             let address = device.address.clone();
             button.connect_clicked(move |_| view.run_device_action(&address, action));
         }
-        row.append(&button);
+        buttons.append(&button);
 
         // The paired ones a scan no longer sees are exactly the ones worth
         // forgetting - so the forget button lives on a paired, unconnected row,
@@ -932,8 +1036,9 @@ impl StatsView {
             let view = self.me();
             let address = device.address.clone();
             remove.connect_clicked(move |_| view.run_device_action(&address, DeviceAction::Remove));
-            row.append(&remove);
+            buttons.append(&remove);
         }
+        row.append(&buttons);
 
         row.set_tooltip_text(Some(&match device.rssi {
             Some(rssi) => format!("{} · {} dBm", device.address, rssi),
@@ -1057,7 +1162,19 @@ impl StatsView {
             last.radio = radio;
             last.present = present;
         }
-        word_of(&self.radio_toggle).set_text(if radio { "Wi-Fi off" } else { "Wi-Fi on" });
+        // The switch wears the state it is *in* - the whole wifi mark while the
+        // radio is on, the struck-through one while it is not - and the tooltip
+        // says which way a click would take it.
+        set_icon(
+            &self.radio_toggle,
+            if radio { names::WIFI } else { names::WIFI_OFF },
+        );
+        set_class(&self.radio_toggle, "on", radio);
+        self.radio_toggle.set_tooltip_text(Some(if radio {
+            "The wifi radio is on - turn it off"
+        } else {
+            "The wifi radio is off - turn it on"
+        }));
         if !present {
             self.network_state.set_text("no wireless card");
             self.radio_toggle.set_sensitive(false);
@@ -1084,9 +1201,28 @@ impl StatsView {
         self.last.borrow_mut().volume = volume;
         match volume {
             Some(volume) => {
-                self.sound_state.set_text(&format!("{}%", volume.percent));
+                // The reading says the level *and* whether it is being heard:
+                // being muted is the one thing the number cannot say by itself.
+                self.sound_state.set_text(&if volume.muted {
+                    format!("{}% muted", volume.percent)
+                } else {
+                    format!("{}%", volume.percent)
+                });
                 set_class(&self.sound_state, "warn", volume.muted);
-                word_of(&self.mute_toggle).set_text(if volume.muted { "Unmute" } else { "Mute" });
+                set_icon(
+                    &self.mute_toggle,
+                    if volume.muted {
+                        names::VOLUME_OFF
+                    } else {
+                        names::VOLUME_HIGH
+                    },
+                );
+                set_class(&self.mute_toggle, "on", !volume.muted);
+                self.mute_toggle.set_tooltip_text(Some(if volume.muted {
+                    "Muted - make the sink audible again"
+                } else {
+                    "Sound is on - mute the sink"
+                }));
                 self.mute_toggle.set_sensitive(true);
             }
             // No sink to talk to: the row says so instead of offering a button
@@ -1178,6 +1314,13 @@ impl StatsView {
             self.chips.append(&chip);
         }
         self.chips.set_visible(true);
+        // The gear wears the accent while the settings window is up: the panel is
+        // the handle that opened it, so it should say that it did.
+        set_class(
+            &self.settings_button,
+            "on",
+            state::read(&state::settings_panel()),
+        );
     }
 
     /// Whether the presentation switch is holding a block - what `status`
@@ -1204,19 +1347,39 @@ impl StatsView {
 /// button, the `Install` button) belongs at the right end of that heading - and
 /// handing it back is cheaper than hunting for it in the widget tree.
 fn tile(title: &str, icon: &str) -> (gtk::Box, gtk::Box) {
-    let heading = icons::lucide(icon, SECTION_ICON);
-    heading.add_css_class("section-icon");
-    let name = gtk::Label::new(Some(title));
-    name.add_css_class("section");
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     line.add_css_class("section-row");
-    line.append(&heading);
-    line.append(&name);
+    line.append(&section_icon(icon));
+    line.append(&section_label(title));
 
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 6);
     tile.add_css_class("tile");
     tile.append(&line);
     (tile, line)
+}
+
+/// A tile's or a row's mark, at the size a heading's word needs. The size is
+/// here and not in the stylesheet because a drawing has no font-size; CSS only
+/// carries the colour it takes from the word beside it.
+fn section_icon(icon: &str) -> gtk::Image {
+    let mark = icons::lucide(icon, SECTION_ICON);
+    mark.add_css_class("section-icon");
+    mark
+}
+
+/// The word beside a mark: the same small caps on a tile's heading and on every
+/// row of the tile, because they are the same kind of thing - a heading, once.
+fn section_label(name: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(name));
+    label.add_css_class("section");
+    label
+}
+
+/// The hairline between two clusters of rows inside one tile.
+fn hairline() -> gtk::Separator {
+    let line = gtk::Separator::new(gtk::Orientation::Horizontal);
+    line.add_css_class("rule");
+    line
 }
 
 /// One resource gauge: icon and name, the reading, and the meter under it.
@@ -1252,34 +1415,44 @@ fn gauge(icon: &str, name: &str) -> (gtk::Box, gtk::ProgressBar, gtk::Label) {
     (metric, meter, value)
 }
 
-/// A name on the left and the live value - or the control itself - on the right
-/// of the same row: the scheme every control row follows, so the tile reads as
-/// one aligned table rather than as a ragged pile of widgets. The stretch
-/// between them is what pins the value to the right edge.
-fn control_row(icon: &str, name: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let icon = icons::lucide(icon, SECTION_ICON);
-    icon.add_css_class("section-icon");
-    let label = gtk::Label::new(Some(name));
-    label.add_css_class("section");
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.add_css_class("control-row");
-    row.append(&icon);
-    row.append(&label);
+/// One row of the controls table: the mark and the name, the reading against
+/// the right edge, and - handed back in the second box - whatever the row has
+/// to press.
+///
+/// The two halves come back separately because the reading is what makes a row
+/// a row of this table while a control is what a row *may* have. A row with
+/// nothing to press drops the box it is handed, so its reading lands against
+/// the row's own right edge; the rows that do carry controls keep their reading
+/// one control's width in, and - because the pair of buttons is the same width
+/// in both of them - those readings line up with each other too. That is the
+/// whole table: readings in a column, controls in a column, one hairline
+/// between the two families.
+fn control_row(icon: &str, name: &str, value: &impl IsA<gtk::Widget>) -> (gtk::Box, gtk::Box) {
+    let row = row_head(icon, name);
     row.append(&stretch());
     row.append(value);
+
+    let actions = actions();
+    row.append(&actions);
+    (row, actions)
+}
+
+/// A row whose control is given the *rest* of the row rather than the slot at
+/// its end: the three-way switch and the slider both need the room more than
+/// they need to line up in the column the buttons share.
+fn wide_row(icon: &str, name: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = row_head(icon, name);
+    row.append(control);
     row
 }
 
-/// The buttons of one control, under that control's row and lined up to its
-/// right edge - so a row that needs two steps ("nmtui", then the radio) reads as
-/// a paragraph rather than as two unrelated rows.
-fn action_row(buttons: &[&gtk::Button]) -> gtk::Box {
+/// The left end of any control row: the mark and the name, spaced like a tile's
+/// heading - because that is what they are, once per row.
+fn row_head(icon: &str, name: &str) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.add_css_class("actions");
-    row.set_halign(gtk::Align::End);
-    for button in buttons {
-        row.append(*button);
-    }
+    row.add_css_class("control-row");
+    row.append(&section_icon(icon));
+    row.append(&section_label(name));
     row
 }
 
@@ -1291,10 +1464,29 @@ fn stretch() -> gtk::Box {
     spacer
 }
 
-/// A chip with a leading icon and a word: the popup's button. The icon says
-/// what kind of thing the button is (a terminal, a magnifier), the word says what
-/// it does - and the word is what changes ("Wi-Fi off" → "Wi-Fi on"), so it is
-/// reachable through [`word_of`] and the icon through [`set_chip_icon`].
+/// The box a row's controls sit in, at the row's right end.
+///
+/// It is explicitly *not* expandable: a `GtkBox` inherits expansion from the
+/// children that want it (the spacer inside, which holds a lone chip against the
+/// right edge), and without this the box would swallow slack of its own and drag
+/// the reading to its left out of its column. Every row of both tiles - the
+/// controls and the controller, and each device - ends with one of these, so
+/// every switch and every button in the popup shares one right edge.
+fn actions() -> gtk::Box {
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    actions.add_css_class("actions");
+    actions.set_hexpand(false);
+    actions.set_valign(gtk::Align::Center);
+    actions.append(&stretch());
+    actions
+}
+
+/// A chip with a leading icon and a word: the popup's labelled button, and the
+/// shape a *tile's* own action wears (btop, Install, Scan) where a row's
+/// controls are round and wordless. The icon says what kind of thing the button
+/// is (a terminal, a magnifier) and the word says what it does, so the word is
+/// reachable through [`word_of`] when it has to change ("Wi-Fi off" → "Wi-Fi
+/// on").
 fn glyph_chip(icon: &str, text: &str, action: impl Fn() + 'static) -> gtk::Button {
     let icon = icons::lucide(icon, BUTTON_ICON);
     let word = gtk::Label::new(Some(text));
@@ -1339,20 +1531,15 @@ fn word_of(button: &gtk::Button) -> gtk::Label {
         .expect("a chip's last child is its word")
 }
 
-/// The icon inside a [`glyph_chip`] (which is the button's first child).
-fn icon_of(button: &gtk::Button) -> gtk::Image {
-    button
+/// Re-point an [`icon_button`]'s drawing at another icon - how a switch that
+/// shows its *state* (a radio that is on, a sink that is muted, a controller
+/// that is visible) follows the reading without the button being rebuilt.
+fn set_icon(button: &gtk::Button, icon: &str) {
+    let image = button
         .child()
-        .and_downcast::<gtk::Box>()
-        .and_then(|row| row.first_child())
         .and_downcast::<gtk::Image>()
-        .expect("a chip's first child is its icon")
-}
-
-/// Re-point a chip's icon at another drawing - how the bluetooth visibility
-/// switch says which way it is switched without the button being rebuilt.
-fn set_chip_icon(button: &gtk::Button, icon: &str) {
-    icons::set_lucide(&icon_of(button), icon, BUTTON_ICON);
+        .expect("an icon button's child is its drawing");
+    icons::set_lucide(&image, icon, BUTTON_ICON);
 }
 
 fn connect_chip<F>(button: &gtk::Button, view: Rc<StatsView>, action: F)

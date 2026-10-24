@@ -1,0 +1,10 @@
+/* ── the energy daemon ───────────────────────────────────────────────────────
+ *
+ * This element never shows a card: it watches the machine's power profile and
+ * rewrites the compositor's effect options, so there is nothing to style. It is
+ * still an element like the rest - one GTK application, one surface, verbs on the
+ * command line - and this is the (empty) sheet that element carries.
+ *
+ * The palette lives in ~/.config/hypr-osd/theme.css; see base.css for the shared
+ * recipes. Nothing here draws, so nothing here uses a colour.
+ */

@@ -185,23 +185,62 @@ label.upd-list {
 }
 
 /* ---- rows ----------------------------------------------------------------- */
+/* One setting per row, and every row is exactly this tall whatever it carries -
+ * a number, a chip, two buttons, a three-way switch - so the tile reads down a
+ * grid instead of stepping to the height of each line's contents. The controls
+ * inside are held below that height (see the margin rules under this one). */
 box.control-row {
-    margin-bottom: 1px;
+    min-height: 28px;
 }
 
-/* The buttons of one control sit under it, lined up with its right edge, so a
- * two-step row reads as one paragraph rather than as two unrelated rows. */
-box.actions {
-    margin-bottom: 4px;
+/* The controls are sized by their own height, not by the theme's idea of a
+ * button: an adw-gtk3 button carries a 3px margin and a padded chip is taller
+ * than a round one, which is exactly what would make one row 35px and the next
+ * 26px. Pinned, so the row's own min-height is what decides. */
+box.control-row button,
+box.control-row box.segmented {
+    margin: 0;
 }
 
-box.actions button.chipbtn {
+/* A chip inside a row is a *switch* (the presentation toggle), and the row it
+ * heads is as tall as the round buttons beside it, so its padding comes in a
+ * size to match them. */
+box.control-row button.chipbtn {
     padding: 3px 7px;
 }
 
+/* The three-way switch is the tallest thing in the tile otherwise, and one row
+ * a few pixels taller than its neighbours is exactly the raggedness this table
+ * exists to avoid - so its padding comes in at the size that fits the row. */
+box.control-row button.seg {
+    padding: 1px 6px;
+}
+
+/* A row's controls, at its end. The box is explicitly not expandable in
+ * view.rs; all this adds is the controls off the row's edge, and - on the rows
+ * of the controls table, where a reading sits right beside the first button -
+ * enough room that the reading is not read as part of it. A device row has its
+ * own 8px rhythm and keeps its slot exactly two buttons wide instead, so every
+ * row's meter and battery land in the same place. */
+box.control-row box.actions {
+    margin: 0 0 0 4px;
+}
+
+/* The hairline that divides one tile's clusters of rows: the pair you *use*
+ * above it, the settings you *set* below. */
+separator.rule {
+    background-color: @hairline;
+    min-height: 1px;
+    margin: 1px 0;
+}
+
 /* ---- the bluetooth tile --------------------------------------------------- */
+/* The controller's row: the reading on the left, its two switches in the box
+ * every row of the controls tile ends with. Same height as one of those rows, so
+ * the two tiles have one rhythm rather than two. */
 box.bt-state {
-    margin-bottom: 3px;
+    min-height: 28px;
+    margin-bottom: 4px;
 }
 
 /* The round buttons: the power switch, and the action at the end of a device's
@@ -231,7 +270,13 @@ button.iconbtn.on {
 
 /* The forget button: the one action here that cannot be undone from this
  * panel, so its hover is the danger colour rather than the accent - the same
- * distinction `chipbtn.danger` draws for the chips. */
+ * distinction `chipbtn.danger` draws for the chips - and it rests dimmer than
+ * the action beside it, because connecting is the row's business and forgetting
+ * is not. */
+button.iconbtn.danger {
+    color: @fg_faint;
+}
+
 button.iconbtn.danger:hover {
     background-color: @crit_tint;
     border-color: rgba(255, 85, 102, 0.30);
@@ -273,9 +318,14 @@ box.actions label.btn-word {
 /* A device: an edge mark when it is live, a badge with its class icon, the
  * name and its state, then the link meter, the battery pill, and the one
  * action that makes sense for it. The hover fill is what says the row is a
- * thing at all, since only the buttons at its end are clickable. */
+ * thing at all, since only the buttons at its end are clickable.
+ *
+ * The padding is on the left only: the row's buttons are not inset with it, so
+ * they share the right edge the heading's own actions and the controller's
+ * switches sit on - the hover fill reaches under them (and is barely visible
+ * there, because a button has a surface of its own). */
 box.dev {
-    padding: 4px 5px;
+    padding: 4px 0 4px 5px;
     border-radius: 10px;
 }
 

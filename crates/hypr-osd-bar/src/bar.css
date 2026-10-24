@@ -62,35 +62,60 @@ box.face label.separator {
 
 /* ---- workspaces ------------------------------------------------------------ */
 /* The five (or however many) pills that keep room for the workspaces you can
- * switch to. State is carried by colour, not by a different mark, except for
- * the one you are on: that one gets the accent fill, a dark dot and a dark
- * number. */
+ * switch to. The row says three things at once, one per channel:
+ *
+ *   shape   the workspace you are on is its *number*, the rest are dots
+ *   fill    a dot is solid when the workspace holds a window, hollow when empty
+ *   colour  the accent means "this one is up on another monitor"
+ *
+ * The number is the only reading in the row, so the active pill is the one you
+ * find without hovering; the dots around it are deliberately quiet enough to
+ * stay context. All pills share a min-width so that moving between workspaces
+ * slides the accent capsule instead of reflowing the row. */
 button.ws {
-    min-width: 20px;
-    padding: 0 5px;
-    border-radius: 9px;
-    color: @fg_dim;
-    font-size: 12px;
-}
-
-button.ws.empty {
+    min-width: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
     color: @fg_faint;
+    font-size: 12px;
+    font-weight: 600;
+    transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
 }
 
+/* Something is in there: a solid dot, a step brighter, on a quiet capsule. The
+ * capsule is what makes the row read as "these are the ones with windows" even
+ * when the colour is too faint to tell at a glance. */
 button.ws.occupied {
     color: @fg_dim;
+    background-color: @surface;
 }
 
-/* on screen, but on another monitor */
+/* Nothing in there: the hollow ring, the faintest ink in the bar. */
+button.ws.empty {
+    color: @fg_faint;
+    background-color: transparent;
+}
+
+/* On screen, but on another monitor: the accent says where it is, the tint
+ * says it is live rather than merely occupied. */
 button.ws.visible {
     color: @accent;
+    background-color: @accent_tint;
 }
 
+button.ws:hover {
+    color: @fg;
+    background-color: @surface_h;
+}
+
+/* The one you are on: no dot, its number in the accent capsule. The gradient
+ * and the glow are the loudest thing in the bar on purpose - it is the one pill
+ * that answers "where am I" without a word being read. */
 button.ws.active {
     background-image: linear-gradient(135deg, @accent, @accent2);
     color: @on_accent;
     font-weight: 700;
-    box-shadow: 0 0 10px rgba(51, 204, 255, 0.45);
+    box-shadow: 0 0 12px rgba(51, 204, 255, 0.5);
 }
 
 button.ws.active:hover {

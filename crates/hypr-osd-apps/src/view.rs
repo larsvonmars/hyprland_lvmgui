@@ -153,8 +153,11 @@ impl AppsView {
 
         let grid = gtk::Grid::new();
         grid.add_css_class("grid");
-        grid.set_column_spacing(settings.gap as u32);
-        grid.set_row_spacing(settings.gap as u32);
+        // The tile gap, not the bar's: this is the spacing `Settings::columns`
+        // counted with, so using anything else would make a row wider or
+        // narrower than the number of tiles it holds.
+        grid.set_column_spacing(settings.tile_gap as u32);
+        grid.set_row_spacing(settings.tile_gap as u32);
         // A grid that is given room hands the slack to its children; these tiles
         // are the size the layout was built around, so the grid keeps its natural
         // size and the pane decides where it sits.
@@ -198,7 +201,7 @@ impl AppsView {
             columns: settings.columns(),
             tile_width: settings.tile_width,
             tile_height: settings.tile_height,
-            gap: settings.gap,
+            gap: settings.tile_gap,
             icon_size: settings.icon_size,
             sidebar_width: settings.sidebar_width,
             on_query: Rc::new(RefCell::new(None)),

@@ -11,6 +11,11 @@
 # it is the single source of truth for every colour in this theme, and every
 # element reads it at start-up.
 #
+# An element that is already running is stopped and started again at the end:
+# every element reads its binary, its config and the palette exactly once, at
+# start-up, so a re-install that left a running process alone would leave the
+# session on the old code and the old settings until the next login.
+#
 # On Hyprland it also wires up the compositor side (Wayland cannot be driven from
 # inside an app):
 #   - ~/.config/hypr/osd.lua            the bar, autostart, keys, layer rule
@@ -37,7 +42,22 @@ cd "$(dirname "$0")/.."
 
 # The elements this script installs. Add an element here (and to osd.lua) when
 # the collection grows. Order is only the order they are reported in.
-ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview hypr-osd-launcher hypr-osd-apps)
+ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview hypr-osd-launcher hypr-osd-apps hypr-osd-settings hypr-osd-energy)
+
+# The pids of `$1` if it is running, nothing otherwise. Every element is a
+# long-lived process (the bar and the card daemons sit in the background for the
+# whole session), so "is it up?" is a question about the process table.
+#
+# `-f` because `pgrep -x` only matches the 15 characters the kernel keeps of a
+# process name, and half of the elements are longer than that (`hypr-osd-bar` is
+# the shortest at 12; `hypr-osd-switcher` is 17). The pattern matches both the
+# absolute path the autostart uses and the bare name a hand-started element has,
+# and it cannot match a longer name by accident because of the closing anchor.
+# pgrep never reports itself, so the pattern in this function's own command line
+# is harmless.
+element_pids() {
+  pgrep -f "(^|[/ ])$1( |$)" 2>/dev/null || true
+}
 
 SKIP_HYPRLAND=0
 TAKE_OVER_KEYS=0
@@ -49,7 +69,10 @@ for arg in "$@"; do
     --take-over-keys) TAKE_OVER_KEYS=1 ;;
     --keep-waybar) KEEP_WAYBAR=1 ;;
     --keep-launchpad) KEEP_LAUNCHPAD=1 ;;
-    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+    # Print the comment block at the top (everything above the first line of code)
+    # rather than a fixed line range, which would go stale the moment a comment
+    # is added - as it just did.
+    -h|--help) awk 'NR > 1 && /^set -euo pipefail$/ { exit } NR > 1' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -92,7 +115,7 @@ command -v wpctl >/dev/null || {
 # The bar reads the system directly, and reports what it cannot read by leaving a
 # pill out. These are the tools whose absence costs a pill or two, not the whole
 # bar - so they are reported, never required.
-for tool in iw playerctl swaync-client busctl hyprctl; do
+for tool in iw playerctl swaync-client busctl hyprctl powerprofilesctl; do
   command -v "$tool" >/dev/null || {
     case "$tool" in
       iw) echo "WARNING: iw not found - the bar's network pill stays hidden." >&2 ;;
@@ -105,6 +128,8 @@ for tool in iw playerctl swaync-client busctl hyprctl; do
               echo "         `busctl monitor --json=`), so the tile shows the count" >&2
               echo "         and the buttons only." >&2 ;;
       hyprctl) echo "WARNING: hyprctl not found - the bar cannot see workspaces or windows." >&2 ;;
+      powerprofilesctl) echo "WARNING: powerprofilesctl not found - the energy daemon has no" >&2
+                        echo "         power profile to watch, so it leaves the effects alone." >&2 ;;
     esac
   }
 done
@@ -171,6 +196,26 @@ exclusive = true
 # unplugged one takes its bar away. Set a connector name (eDP-1, DP-2, ...) to
 # keep the bar on a single screen.
 output =
+
+# What is *on* the bar. Every one of these is a switch on the settings window's
+# Bar page (the gear in the system popup's header), and every one defaults to
+# on - a part switched off is not built, not read and not drawn. They are the
+# whole answer to "my bar has too much on it": a bar with only the clock and the
+# status pill is four `false` lines, and nothing else has to be touched.
+#
+# The two handles go with their pills: hiding the clock takes the island popup's
+# trigger with it, and hiding the status pill takes the system popup's - so keep
+# `show_status` on if the settings window is how you change all this.
+show_apps = true          # the grid button that opens the applications panel
+show_workspaces = true    # the row of workspace pills
+show_title = true         # the focused window's title
+show_clock = true         # the clock (and the island popup's handle)
+show_media = true         # what is playing
+show_stats = true         # CPU, memory, temperature, pending updates
+show_status = true        # link/sound/battery (and the system popup's handle)
+show_tray = true          # the application indicators (off: the names are not claimed)
+show_minimised = true     # the windows put away with SUPER + H
+show_power = true         # the session button at the far right
 
 # How many numbered workspaces the row keeps room for, so a workspace you have
 # never visited is still clickable. Workspaces that exist beyond this number get
@@ -241,8 +286,9 @@ stats_command = __BIN_DIR__/hypr-osd-stats
 # The clock's left click opens the notification centre, the right one toggles
 # do-not-disturb.
 notifications_command = swaync-client
-# The applications button at the bar's *left* end: a left click asks this element
-# to open the applications panel (the drawer of every installed application).
+# The applications button at the bar's *left* end: the pointer arriving on it (or
+# a click) asks this element to open the applications panel (the drawer of every
+# installed application).
 apps_command = __BIN_DIR__/hypr-osd-apps
 # Where the popups put the things they open: btop, nmtui, bluetoothctl, pacman.
 terminal_command = kitty
@@ -263,9 +309,10 @@ fi
 if ! grep -qE '^[[:space:]]*apps_command' "$OSD_CONFIG_DIR/bar.conf"; then
   cat >> "$OSD_CONFIG_DIR/bar.conf" <<EOF
 
-# The applications button at the bar's *left* end: a left click asks this element
-# to open the applications panel. (Added by the installer; the built-in default is
-# the bare name, which needs ~/.local/bin on the bar's PATH.)
+# The applications button at the bar's *left* end: the pointer arriving on it (or
+# a click) asks this element to open the applications panel. (Added by the
+# installer; the built-in default is the bare name, which needs ~/.local/bin on
+# the bar's PATH.)
 apps_command = $BIN_DIR/hypr-osd-apps
 EOF
   echo "   -> $OSD_CONFIG_DIR/bar.conf (apps_command added)"
@@ -407,10 +454,33 @@ updates_command = checkupdates
 # something put it (btop, nmtui, bluetoothctl, pacman).
 network_interface = wlan0
 terminal_command = kitty
+
+# What the gear at the right end of this panel's header runs: the settings
+# window, which is a program of its own (hypr-osd-settings). The installer
+# writes the absolute path, because ~/.local/bin is usually not on Hyprland's
+# PATH; the bare name is the built-in default and works only when it is.
+settings_command = __BIN_DIR__/hypr-osd-settings
 EOF
+  sed -i "s|__BIN_DIR__|$BIN_DIR|g" "$OSD_CONFIG_DIR/stats.conf"
   echo "   -> $OSD_CONFIG_DIR/stats.conf (new)"
 else
   echo "   -> $OSD_CONFIG_DIR/stats.conf (left alone)"
+fi
+
+# A stats.conf that was written before the settings window existed has no
+# `settings_command` in it, and the built-in default is the bare program name -
+# which only works when ~/.local/bin happens to be on the popup's PATH. The
+# template is never overwritten, so the one key the gear needs is appended here,
+# once - the same repair `apps_command` gets above.
+if ! grep -qE '^[[:space:]]*settings_command' "$OSD_CONFIG_DIR/stats.conf"; then
+  cat >> "$OSD_CONFIG_DIR/stats.conf" <<EOF
+
+# What the gear in the header runs: the settings window. (Added by the
+# installer; the built-in default is the bare name, which needs ~/.local/bin on
+# the popup's PATH.)
+settings_command = $BIN_DIR/hypr-osd-settings
+EOF
+  echo "   -> $OSD_CONFIG_DIR/stats.conf (settings_command added)"
 fi
 
 if [ ! -f "$OSD_CONFIG_DIR/volume.conf" ]; then
@@ -627,8 +697,8 @@ if [ ! -f "$OSD_CONFIG_DIR/apps.conf" ]; then
 # Without a card, the verbs answer on the command line - which is also how the
 # panel is tested:
 #     hypr-osd-apps status        # how many applications, which drawers, open?
-#     hypr-osd-apps toggle        # the bar's button does this
-#     hypr-osd-apps show          # the panel, without touching the bar
+#     hypr-osd-apps open          # what the bar's button runs (the pointer arrived)
+#     hypr-osd-apps show          # the panel, pinned, without touching the bar
 #     hypr-osd-apps drawer Pinned # open on a drawer by name (or by number)
 #     hypr-osd-apps apps          # one line per application: drawer, id, name
 
@@ -654,9 +724,10 @@ icon_size = 40
 # Space between tiles in a row and between the rows above.
 tile_gap = 6
 
-# Where the bar is, so the panel can hang below it and line its left edge up with
-# the bar's. These have to match ~/.config/hypr-osd/bar.conf: the bar tells the
-# panel nothing, it works the geometry out from these numbers.
+# Where the bar is, so the panel can hang below it, line its left edge up with
+# the bar's and measure its two hover zones. These have to match
+# ~/.config/hypr-osd/bar.conf: the bar tells the panel nothing, it works the
+# geometry out from these numbers.
 bar_height = 40
 bar_margin_top = 8
 bar_margin_x = 12
@@ -664,12 +735,24 @@ bar_margin_x = 12
 # The distance between the bar's bottom edge and the panel's top edge.
 gap = 6
 
-# Close the panel after this long with no key press and no pointer movement over
-# it, in milliseconds. The panel takes the keyboard while it is up (a layer
-# surface cannot be typed into otherwise), and this is what keeps that safe: a
-# session lock takes the keyboard from every other surface, so a panel that was
-# up when the screen locked hears nothing - not even the Escape meant for it. 0
-# never closes by itself.
+# Hovering the bar's left-end button opens the panel, and moving the pointer off
+# it (and off the panel) closes it again - the same gesture as the island under
+# the clock and the system popup under the status pill. `hot_width` is the strip
+# at the bar's left end treated as the button when `hypr-osd-apps open` is typed
+# without the button's measured rectangle; the bar itself always sends it.
+# `open_delay_ms` is how long the pointer rests before the panel appears, and
+# `close_delay_ms` how long it may be away before it goes.
+#
+# Close the panel after `idle_close_ms` with no key press and no pointer movement
+# over it. The panel takes the keyboard while it is up (a layer surface cannot be
+# typed into otherwise), and this is what keeps that safe: a session lock takes
+# the keyboard from every other surface, so a panel that was up when the screen
+# locked hears nothing - not even the Escape meant for it. 0 never closes by
+# itself.
+hot_width = 60
+open_delay_ms = 120
+close_delay_ms = 300
+poll_ms = 50
 idle_close_ms = 60000
 
 # Pinned applications are not here: they are a state file, not a setting -
@@ -679,6 +762,191 @@ EOF
   echo "   -> $OSD_CONFIG_DIR/apps.conf (new)"
 else
   echo "   -> $OSD_CONFIG_DIR/apps.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/settings.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/settings.conf" <<'EOF'
+# hypr-osd-settings - settings for the settings window itself: every element's
+# config in one card, opened by the gear at the right end of the system popup's
+# header. Read once at start-up:
+#     pkill -f hypr-osd-settings && ~/.local/bin/hypr-osd-settings &
+#
+#     hypr-osd-settings show          # the window, without the gear
+#     hypr-osd-settings sections      # the pages, and what they are called
+#     hypr-osd-settings keys bar      # what every key of the bar is set to
+#     hypr-osd-settings status        # the pages, the files, open or closed
+#
+# What it writes: one line in ~/.config/hypr-osd/<element>.conf per change, in
+# place, so the comments and the order of a file you have edited by hand survive.
+#
+# Its second tab is Hyprland itself - the compositor's own options, kept in
+# ~/.config/hypr-osd/desktop.conf and read by this window as option paths
+# (`general:gaps_out`). A change there is *not* a restart: the window regenerates
+# ~/.config/hypr/hypr-osd-desktop.lua from that file and hands it to the running
+# compositor, so it takes effect at once (see the comments in desktop.conf).
+
+# The card's width and the height of the scrolling pane. The pane height is what
+# the card settles at, whatever page is on it - a mapped layer surface grows with
+# its content but does not shrink with it, so a page cannot be allowed to size the
+# window.
+width = 760
+pane_height = 380
+
+# The list of elements down the left side.
+sidebar_width = 190
+
+# Close the window after this long with no key press and no pointer movement over
+# it, in milliseconds. The window takes the keyboard while it is up (the fields
+# could not be typed into otherwise), and this is what keeps that safe: a session
+# lock takes the keyboard from every other surface, so a window that was up when
+# the screen locked hears nothing - not even the Escape meant for it. 0 never
+# closes by itself.
+idle_close_ms = 120000
+
+# Where the elements' binaries live, for the per-page `Restart` button - a restart
+# is `pkill` and the binary again, because every element reads its config once, at
+# start-up. A session started by a display manager usually does not have
+# ~/.local/bin on its PATH, which is why this is a path and not a program name.
+# The System tab's two energy buttons ask `hypr-osd-energy` in this same
+# directory; an `energy_command` key overrides where they look.
+bin_dir = ~/.local/bin
+EOF
+  echo "   -> $OSD_CONFIG_DIR/settings.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/settings.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/energy.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/energy.conf" <<'EOF'
+# hypr-osd-energy - the energy-saving policy: which power profile means "save
+# energy", and which of the compositor's expensive effects are dropped while it is
+# set. Enforced by the headless `hypr-osd-energy` daemon and edited from the
+# settings window's **System** tab (the gear in the system popup's header).
+#
+# Read once at start-up, like every element's config:
+#     pkill -f hypr-osd-energy && ~/.local/bin/hypr-osd-energy &
+# (`-f`, because the element's name is longer than the 15 characters that
+#  `pkill -x` can match.)
+#
+# Without a card, the verbs answer on the command line - which is also how it is
+# tested without touching the desktop:
+#     hypr-osd-energy status     # the profile, the policy, and every effect key
+#     hypr-osd-energy apply      # drop the effects now and keep them off until
+#                                #   `restore` (the profile no longer matters)
+#     hypr-osd-energy restore    # put the remembered values back now
+#     hypr-osd-energy refresh    # re-read this file and decide again
+#
+# Before the first effect is dropped, the values the *running compositor* has for
+# those keys are read and remembered in $XDG_RUNTIME_DIR/hypr-osd-energy.state, so
+# leaving the saving profile restores the machine's own config - including the
+# parts of a hand-written hyprland.lua this collection knows nothing about.
+
+# Whether the daemon acts at all. On, the effects below are dropped while the
+# machine is in the trigger profile and put back when it is not; off, the daemon
+# still answers its verbs but does nothing on its own.
+enabled = true
+
+# The power profile that counts as saving energy. Which profile the machine is
+# actually in is set from the system popup's POWER switch (power-profiles-daemon).
+profile = power-saver
+
+# How often the profile is re-read, in milliseconds. A change here needs the
+# daemon restarted (the settings window's System page has a Restart chip).
+poll_ms = 4000
+
+# Which effects to drop while energy is being saved. Each is on by default; turn
+# one off to leave that effect alone. The value written while saving is Hyprland's
+# own "off" for the option, and every option is also a row on the Decoration or
+# Animations page of the settings window's Hyprland tab - where the value the
+# machine goes back to is set.
+
+# Animations: windows appear and move instantly instead of easing into place.
+disable_animations = true
+# The two dragging animations, which Hyprland keeps separate from the rest.
+disable_resize_animation = true
+disable_drag_animation = true
+# Blur is the heaviest of the lot on an integrated chip.
+disable_blur = true
+# The drop shadow under windows.
+disable_shadows = true
+# Do not dim the windows that are not focused.
+disable_dim_inactive = true
+# One switch for both opacities: every window becomes fully opaque.
+flatten_opacity = true
+# Square the window corners off.
+square_corners = true
+EOF
+  echo "   -> $OSD_CONFIG_DIR/energy.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/energy.conf (left alone)"
+fi
+
+if [ ! -f "$OSD_CONFIG_DIR/desktop.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/desktop.conf" <<'EOF'
+# hypr-osd-settings, the Hyprland tab: the desktop this collection sits on, i.e.
+# the compositor's own options, edited from the same window (the `Hypr OSD` tab
+# is the elements, this one is Hyprland). A key here is an option *path*:
+#
+#     general:gaps_out = 20
+#     decoration:rounding = 10
+#     input:kb_layout = ch
+#
+# The value names the option the way `hyprctl getoption general:gaps_out` does, and
+# the control the window draws is a switch, a spinner or a field according to the
+# kind Hyprland reports for it.
+#
+# The keyboard rows are different in kind: a layout, a variant, a model and the
+# options are *names*, and a name that is wrong is not refused by anything - the
+# option is accepted, and the keyboard is then the thing that does not work. So
+# those four are picked from this machine's own xkeyboard-config lists (the layout
+# and the variants with their descriptions; the variants are the ones of the
+# layout in force). `hypr-osd-settings choices input` prints what a page offers.
+#
+# The Display page is different again: its rows are the *connected outputs*, read
+# from `hyprctl monitors` when the page is drawn, and a key there is a field
+# qualified by the output -
+#
+#     monitor:eDP-1:mode = 2736x1824@59.96
+#     monitor:eDP-1:scale = 2
+#     monitor:DP-1:position = 1368x0
+#
+# - which the window turns into one `hl.monitor({...})` call per output. A monitor
+# rule replaces *everything* known about that output, so a field the file does not
+# set is filled from what the monitor is doing at the moment (or from Hyprland's
+# default, for an output that is not plugged in). An output with no key at all is
+# left completely alone.
+#
+# A change is *live*: the window rewrites this file, regenerates
+# ~/.config/hypr/hypr-osd-desktop.lua from it (one `hl.config({...})` holding only
+# the options you have set, then one `hl.monitor({...})` per configured output)
+# and hands that file to the compositor with
+#     hyprctl eval 'dofile("/home/USER/.config/hypr/hypr-osd-desktop.lua")'
+# which is how this Hyprland takes a runtime change - `hyprctl keyword` is
+# refused by its Lua parser. ~/.config/hypr/osd.lua loads that same generated file
+# at login, so a setting here is part of the session's config and survives a
+# reboot; your own hyprland.lua is never rewritten.
+#
+# A line *removed* (the ↺ in the window) means "leave this option alone": the
+# value your own config sets is the one that is used from the next login, and
+# nothing here overrides it in the meantime either.
+#
+# Every page and every key, with what each one is worth right now:
+#     hypr-osd-settings sections            # the two tabs, and their pages
+#     hypr-osd-settings keys general        # one page's options, set or default
+#     hypr-osd-settings keys display        # every output, field by field
+#     hypr-osd-settings status              # the files, and the last apply
+#
+# e.g.
+# general:gaps_in = 5
+# general:border_size = 2
+# decoration:blur:enabled = true
+# input:kb_layout = ch
+# input:kb_variant = de
+# monitor:eDP-1:scale = 2
+EOF
+  echo "   -> $OSD_CONFIG_DIR/desktop.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/desktop.conf (left alone)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -776,6 +1044,9 @@ elif [ -d "$HYPR_DIR" ]; then
       -e "s|@OVERVIEW_OSD_BIN@|$BIN_DIR/hypr-osd-overview|g" \
       -e "s|@LAUNCHER_OSD_BIN@|$BIN_DIR/hypr-osd-launcher|g" \
       -e "s|@APPS_OSD_BIN@|$BIN_DIR/hypr-osd-apps|g" \
+      -e "s|@SETTINGS_OSD_BIN@|$BIN_DIR/hypr-osd-settings|g" \
+      -e "s|@ENERGY_OSD_BIN@|$BIN_DIR/hypr-osd-energy|g" \
+      -e "s|@DESKTOP_OSD_LUA@|$HYPR_DIR/hypr-osd-desktop.lua|g" \
       scripts/hyprland/osd.lua > "$HYPR_DIR/osd.lua"
     echo "   -> $HYPR_DIR/osd.lua"
 
@@ -969,6 +1240,93 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Restart the elements that were already running
+# ---------------------------------------------------------------------------
+# The binaries have just been replaced and the config files repaired, and every
+# element reads all three of those - binary, config, palette - exactly once, at
+# start-up. So a re-install that left the running processes alone would leave
+# the session on the old code and the old settings until the next login, which
+# is the "I installed it but nothing changed" state this step exists to avoid.
+#
+# Only the elements that are up are started again: this is a re-install, not a
+# session start, and bringing up a card the user never had is not its business.
+echo "== Restarting the running elements =="
+running=()
+for element in "${ELEMENTS[@]}"; do
+  if [ -n "$(element_pids "$element")" ]; then
+    running+=("$element")
+  fi
+done
+
+if [ "${#running[@]}" -eq 0 ]; then
+  echo "   -> nothing was running"
+elif [ -z "${WAYLAND_DISPLAY:-}" ] || [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+  # A GTK layer surface draws on the compositor it was started against, and this
+  # script is often run from a TTY as well. Killing the bar there would leave
+  # nothing in its place, so the running elements are left alone - and said so.
+  {
+    echo "   ! no Hyprland session in this shell (WAYLAND_DISPLAY or"
+    echo "     HYPRLAND_INSTANCE_SIGNATURE is unset), so nothing was restarted:"
+    printf '       %s\n' "${running[@]}"
+    echo "     They keep the old binary until they are restarted from the session"
+    echo "     (or until the next login)."
+  } >&2
+else
+  # Stop them first, then start them: a new element must not come up while the
+  # process it replaces is still on its way out.
+  for element in "${running[@]}"; do
+    pids=$(element_pids "$element")
+    kill $pids 2>/dev/null || true
+
+    # Wait for it to actually leave before starting the new one: an element is
+    # single-instance over D-Bus, so an invocation that arrives while the old
+    # process still owns the name is *forwarded to it* and exits - which would
+    # leave the session on the old binary with no new one.
+    for _ in $(seq 1 50); do
+      if [ -z "$(element_pids "$element")" ]; then
+        break
+      fi
+      sleep 0.1
+    done
+
+    # A process that ignored TERM would otherwise keep the old binary for the
+    # rest of the session. SIGKILL cannot be ignored.
+    pids=$(element_pids "$element")
+    if [ -n "$pids" ]; then
+      kill -KILL $pids 2>/dev/null || true
+      sleep 0.1
+    fi
+    echo "   -> $element stopped"
+  done
+
+  for element in "${running[@]}"; do
+    # No verb: every element waits for one when started bare (the bar paints
+    # itself, the cards wait for a key or a click). `setsid` so the new process
+    # outlives this script, whose shell is about to exit.
+    #
+    # The bar is the StatusNotifier host, and an indicator registers when *it*
+    # starts - so restarting the bar empties its tray until those indicators are
+    # restarted (it fills back in as they do; there is nothing to do here).
+    setsid "$BIN_DIR/$element" >/dev/null 2>&1 < /dev/null &
+
+    # A card that crashed on start-up (a bad config line, no compositor in this
+    # shell) must not be reported as a restart: wait for the process to appear
+    # and say so when it never does.
+    for _ in $(seq 1 20); do
+      if [ -n "$(element_pids "$element")" ]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [ -n "$(element_pids "$element")" ]; then
+      echo "   -> $element restarted"
+    else
+      echo "   ! $element did not come back up - run '$BIN_DIR/$element status' to see why" >&2
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # fish: make ~/.local/bin reachable
 # ---------------------------------------------------------------------------
 if [ "$BIN_DIR" = "$HOME/.local/bin" ] \
@@ -1002,7 +1360,10 @@ if [ "$hypr_installed" -eq 1 ]; then
   echo "   SUPER + SHIFT + TAB                   # every workspace, every window"
   echo "   SUPER + SPACE                         # search applications and files"
   echo "   the grid button at the bar's left     # every application, in drawers"
+  echo "   the gear in the system popup's header  # every element's settings"
   echo "   $BIN_DIR/hypr-osd-apps show           # ... the panel, without the button"
+  echo "   $BIN_DIR/hypr-osd-settings show       # ... the settings window, too"
+  echo "   $BIN_DIR/hypr-osd-energy status       # the power profile and the effects"
   echo "   SUPER + L                             # lock the screen (hyprlock)"
   echo "or just log out and back in."
   echo

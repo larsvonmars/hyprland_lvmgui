@@ -18,6 +18,8 @@ members = [
     "crates/hypr-osd-overview",
     "crates/hypr-osd-launcher",
     "crates/hypr-osd-apps",
+    "crates/hypr-osd-settings",
+    "crates/hypr-osd-energy",
 ]
 
 [workspace.package]

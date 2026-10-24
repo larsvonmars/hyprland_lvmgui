@@ -155,6 +155,11 @@ struct Settings {
     interface: String,
     /// Where the buttons that open something put it, and where `pacman` runs.
     terminal_command: String,
+    /// What the header's gear runs: the settings element (see
+    /// `hypr-osd-settings`). A program name or an absolute path - the installer
+    /// writes the absolute one, because `~/.local/bin` is usually not on
+    /// Hyprland's `PATH`.
+    settings_command: String,
     /// What prints the pending-update list (`checkupdates`). Empty turns the
     /// updates tile off: it then says nothing at all rather than "up to date".
     updates_command: String,
@@ -194,6 +199,7 @@ impl Settings {
             max_devices: config.i32("max_devices", DEFAULT_MAX_DEVICES).max(1) as usize,
             interface: config.string("network_interface", "wlan0"),
             terminal_command: config.string("terminal_command", "kitty"),
+            settings_command: config.string("settings_command", "hypr-osd-settings"),
             updates_command: config.string("updates_command", "checkupdates"),
         }
     }

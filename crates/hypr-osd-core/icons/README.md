@@ -46,7 +46,9 @@ results are committed.
   are `fetch-lucide.sh`, which is also where the list of names lives; the
   outliner's install lands in `.outline/` and is not committed.
 * `local/` - anything we draw ourselves. There is one: `circle-filled.svg`, a
-  solid dot for the workspace you are on (Lucide draws outlines only).
+  solid dot for an occupied workspace (Lucide draws outlines only). The
+  workspace you are on is drawn as its number instead, and an empty one as
+  Lucide's hollow `circle`.
 * `LICENSE` - Lucide's ISC licence, which covers everything under `lucide/`.
 * `outline.js` - the stroke-to-fill step, and the place to look when an icon
   arrives as a silhouette.

@@ -66,3 +66,156 @@ pub fn focus_workspace(name: &str) -> bool {
     dispatch(&format!("hl.dsp.focus({{ workspace = {target} }})"))
         || dispatch(&format!("workspace {name}"))
 }
+
+/// One of Hyprland's own options, as it stands *now*: the value it is using, and
+/// whether the config states it or it is the built-in default.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Reading {
+    pub value: String,
+    pub set: bool,
+}
+
+/// Ask Hyprland what one option is worth right now (`general:gaps_in`).
+///
+/// `None` means "this compositor has no such option" - either the path is wrong
+/// or it is from another Hyprland version. The settings window shows the answer
+/// next to a key it manages, so a value that is set elsewhere (in the user's own
+/// `hyprland.lua`, say) is visible instead of being silently overridden.
+pub fn option(path: &str) -> Option<Reading> {
+    parse_option(&json(&["getoption", path])?)
+}
+
+/// Run a Lua expression in the compositor (`hyprctl eval '…'`).
+///
+/// `Ok` carries whatever Hyprland printed, which for a successful `hl.config` is
+/// usually nothing at all; `Err` carries its complaint, and for an unknown option
+/// that complaint *names the option* - which is the whole reason the answer is
+/// read rather than the exit status alone. Used by the settings window (whose
+/// Hyprland tab hands over a generated document) and by the energy daemon (whose
+/// document carries the dropped effects).
+pub fn eval(expression: &str) -> Result<String, String> {
+    let answer = Command::new("hyprctl")
+        .args(["eval", expression])
+        .output()
+        .map_err(|error| format!("cannot run hyprctl: {error}"))?;
+    let said = String::from_utf8_lossy(&answer.stdout).trim().to_string();
+    if answer.status.success() {
+        return Ok(said);
+    }
+    let refused = String::from_utf8_lossy(&answer.stderr).trim().to_string();
+    Err(if refused.is_empty() { said } else { refused })
+}
+
+/// Pull the value out of `hyprctl -j getoption`'s answer.
+///
+/// The shape depends on the option's type: `int`, `float` and `str` for the
+/// scalars, `bool` for the switches, and `css` for the box-ish ones - `gaps_in`
+/// answers `"5 5 5 5"`, because Hyprland keeps it as four numbers. So the value
+/// is whichever of those fields is there, and `set` travels with it.
+fn parse_option(answer: &Value) -> Option<Reading> {
+    let set = answer.get("set").and_then(Value::as_bool).unwrap_or(false);
+    for key in ["int", "float", "bool", "str", "css"] {
+        let Some(field) = answer.get(key) else {
+            continue;
+        };
+        if field.is_null() {
+            continue;
+        }
+        // A string option that is empty answers with a placeholder rather than
+        // with nothing, and that placeholder is not a value.
+        let value = match field {
+            Value::String(text) => text.trim_matches('"').to_string(),
+            Value::Bool(flag) => flag.to_string(),
+            Value::Number(number) => number.to_string(),
+            _ => continue,
+        };
+        if value.is_empty() || value == "[[EMPTY]]" {
+            return Some(Reading {
+                value: String::new(),
+                set,
+            });
+        }
+        return Some(Reading { value, set });
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(text: &str) -> Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn a_value_is_read_out_of_whichever_field_it_arrived_in() {
+        // The three scalar shapes, exactly as Hyprland spells them...
+        let int = parse_option(&answer(
+            r#"{"option":"general:border_size","int":2,"set":true}"#,
+        ));
+        assert_eq!(
+            int,
+            Some(Reading {
+                value: "2".into(),
+                set: true
+            })
+        );
+
+        let float = parse_option(&answer(
+            r#"{"option":"input:sensitivity","float":0.5,"set":false}"#,
+        ));
+        assert_eq!(
+            float,
+            Some(Reading {
+                value: "0.5".into(),
+                set: false
+            })
+        );
+
+        let flag = parse_option(&answer(
+            r#"{"option":"decoration:blur:enabled","bool":true,"set":true}"#,
+        ));
+        assert_eq!(
+            flag,
+            Some(Reading {
+                value: "true".into(),
+                set: true
+            })
+        );
+
+        // ...and the box-ish ones, which answer as four numbers in a string.
+        let css = parse_option(&answer(
+            r#"{"option":"general:gaps_in","css":"5 5 5 5","set":true}"#,
+        ));
+        assert_eq!(
+            css,
+            Some(Reading {
+                value: "5 5 5 5".into(),
+                set: true
+            })
+        );
+    }
+
+    #[test]
+    fn an_option_with_no_value_reads_as_empty() {
+        // An empty string option answers with a placeholder; it is still a
+        // value - "the config sets this to nothing" - so it counts as set.
+        let empty = parse_option(&answer(
+            r#"{"option":"input:kb_options","str":"[[EMPTY]]","set":true}"#,
+        ));
+        assert_eq!(
+            empty,
+            Some(Reading {
+                value: String::new(),
+                set: true
+            })
+        );
+
+        // An option Hyprland does not know has no value field at all.
+        assert_eq!(
+            parse_option(&answer(r#"{"option":"nonsense","set":false}"#)),
+            None
+        );
+    }
+}

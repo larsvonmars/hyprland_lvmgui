@@ -11,10 +11,13 @@
 //! Verbs (`hypr-osd-apps <verb>`):
 //!
 //! ```text
-//!   toggle               open the panel, or close it again (what the bar's
-//!                        left-end button runs)
-//!   show [query]         open it, with an empty filter or the one given
-//!   hide | close         take it away
+//!   open [connector] [x y w h]
+//!                        what the bar's left-end button runs: the pointer has
+//!                        arrived, so start watching for the dwell (see
+//!                        `core::hover`)
+//!   close | hide         take it away
+//!   toggle               open the panel (pinned), or close it again
+//!   show [query]         open it (pinned), with an empty filter or the one given
 //!   refresh              re-scan the installed applications
 //!   drawer <name>        show a drawer ("All", "Pinned", or a category's name)
 //!   pin <id>             pin an application (its desktop file id)
@@ -26,11 +29,12 @@
 //!
 //! Three things about how it behaves are deliberate:
 //!
-//! * **It is a panel you asked for, not one you hover.** Clicking the button
-//!   opens it and it stays put until Escape, the button again, the application you
-//!   picked, or the idle watchdog. The island and the system popup follow the
-//!   pointer because they *inform*; a grid you are reading would be unusable if it
-//!   slid away every time the pointer wandered off it.
+//! * **It unfolds from the button, like the island and the system popup.** The
+//!   pointer arriving on the bar's left-end button *asks* the panel to open;
+//!   this element watches the pointer itself (see `core::hover`) and takes the
+//!   panel away once it has left both the button and the panel. The bar can only
+//!   ever ask - a pinned panel is not watched, so a bar that sent `toggle` could
+//!   leave it up for good.
 //! * **It takes the keyboard while it is up.** The filter has to be typed into,
 //!   and a layer-shell surface has no other way to be typed into (see
 //!   `Keyboard::Exclusive`). Escape and the arrows are therefore the panel's own
@@ -50,15 +54,17 @@ mod view;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::apps::{self, App};
+use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Rect, Side};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
-    css, icons, run, state, text, Config, Content, Keyboard, Opts, Osd, Placement,
+    css, icons, run, state, text, Config, Content, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
+    CARD_PAD_Y,
 };
 
 use view::{AppsView, Row, Tile};
@@ -86,6 +92,13 @@ const DEFAULT_GAP: i32 = 6;
 const DEFAULT_BAR_HEIGHT: i32 = 40;
 const DEFAULT_BAR_MARGIN_TOP: i32 = 8;
 const DEFAULT_BAR_MARGIN_X: i32 = 12;
+// The strip at the bar's left end that counts as the button when a hand-typed
+// `open` does not send the button's rectangle. The bar normally measures it, so
+// this is only for a `hypr-osd-apps open` typed into a terminal.
+const DEFAULT_HOT_WIDTH: i32 = 60;
+const DEFAULT_OPEN_DELAY_MS: u64 = 120;
+const DEFAULT_CLOSE_DELAY_MS: u64 = 300;
+const DEFAULT_POLL_MS: u64 = 50;
 const DEFAULT_IDLE_CLOSE_MS: u64 = 60_000;
 
 /// What the config file resolved to.
@@ -102,14 +115,21 @@ struct Settings {
     icon_size: i32,
     /// Space between tiles.
     tile_gap: i32,
-    /// Space between the bar's bottom edge and the panel's top edge.
-    gap: i32,
-    /// Where the bar is, so the panel can hang below it and line its left edge up
-    /// with the bar's. These have to match `~/.config/hypr-osd/bar.conf`: the bar
-    /// tells the panel nothing, it works the geometry out from these numbers.
-    bar_height: i32,
-    bar_margin_top: i32,
-    bar_margin_x: i32,
+    /// Where the bar is, so the panel can hang below it, line its left edge up
+    /// with the bar's and measure the two hover zones. These have to match
+    /// `~/.config/hypr-osd/bar.conf`: the bar tells the panel nothing, it works
+    /// the geometry out from these numbers (`gap` is the distance between the
+    /// bar's bottom edge and the panel's top).
+    bar: BarGeometry,
+    /// The strip at the bar's left end used as the button when `open` sent no
+    /// rectangle - a hand-typed `open` rather than the bar's own request, which
+    /// carries the measured button.
+    hot_width: f64,
+    /// How long the pointer rests on the button before the panel opens, and how
+    /// long it may be away before it closes again (see `hover::Delays`).
+    delays: Delays,
+    /// How often the pointer is sampled while the panel is being tracked.
+    poll: Duration,
     /// Close after this long without a key press or pointer movement (`0` never).
     idle_close: Option<Duration>,
 }
@@ -125,10 +145,22 @@ impl Settings {
             tile_height: config.i32("tile_height", DEFAULT_TILE_HEIGHT).max(56),
             icon_size: config.i32("icon_size", DEFAULT_ICON_SIZE).clamp(16, 96),
             tile_gap: config.i32("tile_gap", DEFAULT_TILE_GAP).clamp(0, 40),
-            gap: config.i32("gap", DEFAULT_GAP).clamp(0, 60),
-            bar_height: config.i32("bar_height", DEFAULT_BAR_HEIGHT).max(1),
-            bar_margin_top: config.i32("bar_margin_top", DEFAULT_BAR_MARGIN_TOP).max(0),
-            bar_margin_x: config.i32("bar_margin_x", DEFAULT_BAR_MARGIN_X).max(0),
+            bar: BarGeometry {
+                height: config.i32("bar_height", DEFAULT_BAR_HEIGHT).max(1) as f64,
+                margin_top: config.i32("bar_margin_top", DEFAULT_BAR_MARGIN_TOP).max(0) as f64,
+                margin_x: config.i32("bar_margin_x", DEFAULT_BAR_MARGIN_X).max(0) as f64,
+                gap: config.i32("gap", DEFAULT_GAP).clamp(0, 60) as f64,
+                // A `TopLeft` card keeps its shadow inset only below and to its
+                // right - its top edge sits on the margin the placement asks
+                // for - so the panel's visible top is exactly `margin_top()`.
+                shadow_pad: 0.0,
+            },
+            hot_width: config.i32("hot_width", DEFAULT_HOT_WIDTH).max(1) as f64,
+            delays: Delays {
+                open: config.millis("open_delay_ms", DEFAULT_OPEN_DELAY_MS),
+                close: config.millis("close_delay_ms", DEFAULT_CLOSE_DELAY_MS),
+            },
+            poll: config.millis("poll_ms", DEFAULT_POLL_MS),
             idle_close: if idle.is_zero() { None } else { Some(idle) },
         }
     }
@@ -154,7 +186,7 @@ impl Settings {
     /// Where the card hangs: one gap below the bar, its left edge lined up with
     /// the bar's own margin.
     fn margin_top(&self) -> i32 {
-        self.bar_height + self.bar_margin_top + self.gap
+        self.bar.margin_top as i32 + self.bar.height as i32 + self.bar.gap as i32
     }
 }
 
@@ -191,6 +223,20 @@ struct Panel {
     osd: Rc<Osd>,
     view: Rc<AppsView>,
     settings: Rc<Settings>,
+    /// The hover's state machine (see `core::hover`): the bar's button only
+    /// *asks*, and this decides when the panel has been dwelt on long enough to
+    /// appear and when the pointer has been away long enough to take it down
+    /// again.
+    machine: RefCell<Machine>,
+    /// The connector the bar is on, when it said so with `open`. The bar is
+    /// pinned to the output it started on, which is not necessarily the focused
+    /// one - so every coordinate this panel works with, and the surface it draws
+    /// on, come from here rather than from "the focused output".
+    monitor: RefCell<Option<String>>,
+    /// The button's rectangle inside the bar's card, when the bar sent it. The
+    /// bar is the only program that can measure the button, and its hot zone has
+    /// to be the button: `hot_width` is only the fallback for a hand-typed open.
+    pill: RefCell<Option<Rect>>,
     /// Every application on the machine, scanned once at start-up.
     apps: RefCell<Vec<App>>,
     /// The sidebar, in the order it is drawn.
@@ -218,6 +264,9 @@ impl Panel {
             osd: osd.clone(),
             view,
             settings,
+            machine: RefCell::new(Machine::default()),
+            monitor: RefCell::new(None),
+            pill: RefCell::new(None),
             apps: RefCell::new(Vec::new()),
             drawers: RefCell::new(Vec::new()),
             drawer: RefCell::new(Drawer::All),
@@ -230,23 +279,68 @@ impl Panel {
         })
     }
 
-    /// Open the panel, or close it if it is already up - what the bar's button
-    /// runs, because one click should be able to undo itself.
-    fn toggle(self: &Rc<Self>) {
-        if self.osd.is_visible() {
-            self.close();
-        } else {
-            self.open(None);
+    /// The pointer arrived on the bar's button: start watching it for the dwell
+    /// (`hover::Machine::arm`).
+    ///
+    /// This is all the bar ever says - it cannot take the panel away again, and
+    /// it must not pin it either: a pinned panel is not watched, so a `toggle`
+    /// from a hover would leave it up for good (see the bar's status pill's
+    /// note). The connector and the button's rectangle come with the request
+    /// because neither can be worked out here: the panel knows the bar's
+    /// margins, but not which of the bars the pointer came from, nor how wide
+    /// its own button is.
+    fn ask(self: &Rc<Self>, connector: Option<&str>, pill: Option<Rect>) {
+        if let Some(connector) = connector {
+            // Where the bar is, so this panel can be there too - the shell moves
+            // the surface if it is not.
+            self.osd.pin_output(Some(connector));
+            *self.monitor.borrow_mut() = Some(connector.to_string());
         }
+        *self.pill.borrow_mut() = pill;
+        self.machine.borrow_mut().arm(Instant::now());
     }
 
-    /// Open the panel at the "All" drawer with an empty filter (or the one given,
-    /// which is for `show <query>` rather than for the button).
+    /// Open the panel (pinned), or close it if it is already up - for a script;
+    /// the bar's button sends `open` instead, because a pinned panel is not
+    /// watched.
+    fn toggle(self: &Rc<Self>) {
+        let action = {
+            let mut machine = self.machine.borrow_mut();
+            if machine.is_open() {
+                machine.dismiss()
+            } else {
+                machine.pin();
+                Action::Show
+            }
+        };
+        if action == Action::Show {
+            self.present(None);
+        }
+        self.act(action);
+    }
+
+    /// Open the panel (pinned) on the "All" drawer with an empty filter, or the
+    /// one given - the `show <query>` verb.
+    fn show(self: &Rc<Self>, query: Option<&str>) {
+        self.machine.borrow_mut().pin();
+        self.present(query);
+        self.act(Action::Show);
+    }
+
+    /// Take the panel away - `close`/`hide`, Escape, the idle watchdog and the
+    /// pointer leaving it all end up here, so there is one way out.
+    fn close(self: &Rc<Self>) {
+        let action = self.machine.borrow_mut().dismiss();
+        self.act(action);
+    }
+
+    /// Paint the panel: reset to the "All" drawer with the filter given, and put
+    /// the finished grid in the card.
     ///
-    /// Opening resets the view on purpose: the panel is a place you go to look for
-    /// something, and one that reopened where you left it would make the button
-    /// mean something different every time.
-    fn open(self: &Rc<Self>, query: Option<&str>) {
+    /// Opening resets the view on purpose: the panel is a place you go to look
+    /// for something, and one that reopened where you left it would make the
+    /// button mean something different every time.
+    fn present(self: &Rc<Self>, query: Option<&str>) {
         let query = query.unwrap_or("");
 
         *self.drawer.borrow_mut() = Drawer::All;
@@ -260,23 +354,32 @@ impl Panel {
         // text and GTK therefore saw no change at all.
         self.view.set_query(query);
         self.changed(query);
-
-        self.osd.show();
-        // The bar's button reads this to light up while the panel is up (see
-        // `state`).
-        state::write(&state::apps_panel(), true);
-
-        self.view.focus_entry();
-        // Again once GTK has laid the panel out: a freshly mapped surface can
-        // refuse focus until it has been allocated.
-        let view = self.view.clone();
-        glib::timeout_add_local_once(Duration::ZERO, move || view.focus_entry());
     }
 
-    fn close(self: &Rc<Self>) {
-        self.idle.cancel();
-        state::write(&state::apps_panel(), false);
-        self.osd.hide();
+    /// Show or hide the surface, and say so in the state flag while doing it.
+    ///
+    /// The flag is what the bar's button reads to light up. It is written here
+    /// and nowhere else, so the two programs cannot disagree about whether the
+    /// panel is up.
+    fn act(self: &Rc<Self>, action: Action) {
+        match action {
+            Action::None => {}
+            Action::Show => {
+                self.osd.show();
+                state::write(&state::apps_panel(), true);
+                self.view.focus_entry();
+                // Again once GTK has laid the panel out: a freshly mapped
+                // surface can refuse focus until it has been allocated.
+                let view = self.view.clone();
+                glib::timeout_add_local_once(Duration::ZERO, move || view.focus_entry());
+                self.arm_idle();
+            }
+            Action::Hide => {
+                self.idle.cancel();
+                state::write(&state::apps_panel(), false);
+                self.osd.hide();
+            }
+        }
     }
 
     /// Re-scan the installed applications and paint the result.
@@ -506,23 +609,58 @@ impl Panel {
 
     fn status_lines(&self) -> String {
         let drawer = self.drawer.borrow();
-        let state = if self.osd.is_visible() {
-            "open"
-        } else {
-            "closed"
+        // What the machine makes of the pointer - and in particular whether the
+        // panel is still being watched. A panel that is up and *not* watched can
+        // only be closed by a verb, which is the answer to "why will it not go
+        // away" (`show` and `toggle` pin it; the bar never does).
+        let state = {
+            let machine = self.machine.borrow();
+            match (machine.is_open(), machine.is_watching()) {
+                (false, _) => "closed".to_string(),
+                (true, true) => "open, watching the pointer".to_string(),
+                (true, false) => "open, pinned - only a verb closes this".to_string(),
+            }
         };
         format!(
-            "apps {}\ndrawers {}\nshowing {}\npinned {}\nstate {state}\nsize {}x{} ({} columns of {}x{})\nmeasured: {}",
+            "apps {}\ndrawers {}\nshowing {}\npinned {}\nstate {state}\n{}\nsize {}x{} ({} columns of {}x{})\nmeasured: {}",
             self.apps.borrow().len(),
             self.drawers.borrow().len(),
             drawer.label(),
             self.pins.borrow().len(),
+            self.zone_line(),
             self.settings.width,
             self.settings.grid_height,
             self.settings.columns(),
             self.settings.tile_width,
             self.settings.tile_height,
             self.view.measured(),
+        )
+    }
+
+    /// Where the two hover zones ended up, in the layout.
+    ///
+    /// There is no way to move a pointer from here, so this is how "the panel
+    /// does not open" (or "will not close") gets diagnosed: the button's zone has
+    /// to be the button, and the panel's zone the panel.
+    fn zone_line(&self) -> String {
+        let Some((pill, panel)) = zones(self, &self.settings) else {
+            return "zones none - the compositor did not answer hyprctl".to_string();
+        };
+        format!(
+            "zones pill {:.0},{:.0} {:.0}x{:.0}{}  panel {:.0},{:.0} to {:.0},{:.0}",
+            pill.x,
+            pill.y,
+            pill.width,
+            pill.height,
+            if self.pill.borrow().is_some() {
+                " (from the bar)"
+            } else {
+                " (fallback strip)"
+            },
+            panel.x,
+            panel.y,
+            panel.x + panel.width,
+            panel.bottom(),
         )
     }
 
@@ -572,6 +710,109 @@ impl Panel {
         self.select_drawer(index);
         Ok(())
     }
+}
+
+/// One pointer sample: read the cursor, work out whether it is over the button
+/// or over the panel, and let the machine decide what to do about it.
+fn sample(panel: &Rc<Panel>, settings: &Settings) -> Action {
+    let Some((pill, panel_rect)) = zones(panel, settings) else {
+        return Action::None;
+    };
+    let Some(cursor) = hover::cursor() else {
+        // The compositor did not answer. Leaving the state alone is the right
+        // reaction: a panel that closed because a socket hiccupped would be worse
+        // than one that stayed up a moment too long.
+        return Action::None;
+    };
+    panel.machine.borrow_mut().sample(
+        pill.contains(cursor, 0.0),
+        panel_rect.contains(cursor, 8.0),
+        Instant::now(),
+        settings.delays,
+    )
+}
+
+/// The two rectangles the machine reasons about, in the layout: the button's hot
+/// zone at the left end of the bar, and where the panel itself is.
+///
+/// `None` when the compositor cannot say where the monitor is - which is also
+/// when nothing should open, because neither rectangle means anything without it.
+///
+/// The panel's own position needs no query: `TopLeft` anchoring plus the known
+/// margins make it computable. The button's is the rectangle the bar sent with
+/// `open`, translated out of the bar's card into the layout - the card is the one
+/// origin both programs can agree on, and the bar is the only one that can
+/// measure its own button.
+fn zones(panel: &Panel, settings: &Settings) -> Option<(Rect, Rect)> {
+    // The monitor the *bar* is on, not the focused one: the panel unfolds from
+    // the bar, so every zone it has is measured in the bar's coordinates. The
+    // focused output is the fallback for a hand-typed `open`, and for a bar too
+    // old to say where it is.
+    let monitor = panel
+        .monitor
+        .borrow()
+        .as_deref()
+        .and_then(hover::monitor_of)
+        .or_else(hover::focused_monitor)?;
+    // The card is the content *plus* the padding the shell puts around it, which
+    // is what is really on screen.
+    let (width, height) = {
+        let root = &panel.view.root;
+        (
+            f64::from(root.width() + 2 * CARD_PAD_X),
+            f64::from(root.height() + 2 * CARD_PAD_Y),
+        )
+    };
+    let pill = panel
+        .pill
+        .borrow()
+        .map(|rect| Rect {
+            x: monitor.x + settings.bar.margin_x + rect.x,
+            y: monitor.y + settings.bar.margin_top + rect.y,
+            ..rect
+        })
+        .unwrap_or_else(|| hover::pill_rect(monitor, settings.bar, settings.hot_width, Side::Left));
+    let panel_rect = hover::panel_rect(monitor, settings.bar, Side::Left, (width, height));
+    Some((pill, panel_rect))
+}
+
+/// The `open` arguments: the connector the bar is on, and the button's rectangle
+/// inside the bar's card.
+///
+/// Both are optional, and positional, so the connector is found by looking for
+/// the first number instead of by counting: the bar sends
+/// `open eDP-1 0 5 44 28`, and a hand-typed `open eDP-1` (or `open 0 5 44 28`)
+/// does the sensible thing too.
+fn parse_open(args: &[String]) -> (Option<String>, Option<Rect>) {
+    let start = args.iter().position(|arg| arg.parse::<f64>().is_ok());
+    let rect = start.and_then(|index| parse_rect(&args[index..]));
+    let connector = match start {
+        // Everything before the numbers is the connector; it has no spaces, so
+        // the word right in front of the rectangle is the one.
+        Some(index) => index
+            .checked_sub(1)
+            .and_then(|index| args.get(index))
+            .cloned(),
+        // No rectangle at all: the first word is the connector (`open eDP-1`).
+        None => args.first().filter(|arg| !arg.is_empty()).cloned(),
+    };
+    (connector, rect)
+}
+
+/// The four numbers the bar sends with `open`, or `None` when it did not.
+fn parse_rect(args: &[String]) -> Option<Rect> {
+    let numbers: Vec<f64> = args
+        .iter()
+        .filter_map(|value| value.parse().ok())
+        .take(4)
+        .collect();
+    let [x, y, width, height] = <[f64; 4]>::try_from(numbers).ok()?;
+    Some(Rect {
+        x,
+        y,
+        width,
+        height,
+    })
 }
 
 /// Wire the keys the panel lives on.
@@ -682,7 +923,7 @@ fn main() -> glib::ExitCode {
         // is what came out of that button, not a card in the middle of the screen.
         placement: Placement::TopLeft {
             margin_top: settings.margin_top(),
-            margin_left: settings.bar_margin_x,
+            margin_left: settings.bar.margin_x as i32,
         },
         // It has to be typed into - see the module comment.
         keyboard: Keyboard::Exclusive,
@@ -741,6 +982,29 @@ fn main() -> glib::ExitCode {
                 move || panel.arm_idle()
             });
 
+            // The pointer, on its own faster clock - and only while the panel is
+            // being tracked. An idle panel asks the compositor for nothing at
+            // all, where a poll for the whole session would be a socket
+            // round-trip every 50 ms for as long as the element lives.
+            {
+                let panel = panel.clone();
+                let settings = settings.clone();
+                glib::timeout_add_local(settings.poll, move || {
+                    if !panel.machine.borrow().is_watching() {
+                        return glib::ControlFlow::Continue;
+                    }
+                    let action = sample(&panel, &settings);
+                    if action == Action::Show {
+                        // Painted before the surface appears, so the first frame
+                        // is the finished grid rather than an empty card filling
+                        // in behind the pointer.
+                        panel.present(None);
+                    }
+                    panel.act(action);
+                    glib::ControlFlow::Continue
+                });
+            }
+
             install_keys(osd, panel.clone());
             let root = view.root.clone().upcast::<gtk::Widget>();
             state_cell.set(panel).ok();
@@ -761,8 +1025,15 @@ fn main() -> glib::ExitCode {
                     return Ok(String::new());
                 };
                 match verb {
+                    // What the bar's left-end button runs when the pointer
+                    // arrives. It only *arms* the panel: the dwell, and the
+                    // decision to open, are the panel's own (see `hover`).
+                    "open" => {
+                        let (connector, rect) = parse_open(&args[1..]);
+                        panel.ask(connector.as_deref(), rect);
+                    }
                     "toggle" => panel.toggle(),
-                    "show" => panel.open(args.get(1).map(String::as_str)),
+                    "show" => panel.show(args.get(1).map(String::as_str)),
                     "hide" | "close" => panel.close(),
                     "refresh" => panel.refresh(),
                     "drawer" => {
@@ -777,8 +1048,9 @@ fn main() -> glib::ExitCode {
                     "status" => return Ok(panel.status_lines()),
                     other => {
                         return Err(format!(
-                            "unknown verb `{other}` (toggle | show [query] | hide | refresh | \
-                             drawer <name> | pin <id> | unpin <id> | apps | status)"
+                            "unknown verb `{other}` (open [connector] [x y w h] | toggle | \
+                             show [query] | hide | refresh | drawer <name> | pin <id> | \
+                             unpin <id> | apps | status)"
                         ))
                     }
                 }
@@ -825,10 +1097,19 @@ mod tests {
             tile_height: 96,
             icon_size: 40,
             tile_gap: 6,
-            gap: 6,
-            bar_height: 40,
-            bar_margin_top: 8,
-            bar_margin_x: 12,
+            bar: BarGeometry {
+                height: 40.0,
+                margin_top: 8.0,
+                margin_x: 12.0,
+                gap: 6.0,
+                shadow_pad: 0.0,
+            },
+            hot_width: 60.0,
+            delays: Delays {
+                open: Duration::from_millis(120),
+                close: Duration::from_millis(300),
+            },
+            poll: Duration::from_millis(50),
             idle_close: None,
         };
         // 760 - 2*16 = 728 of content; less the sidebar and the pane gap.
@@ -838,5 +1119,38 @@ mod tests {
         assert_eq!(settings.columns(), 5);
         // The panel hangs one gap below the bar's bottom edge.
         assert_eq!(settings.margin_top(), 40 + 8 + 6);
+    }
+
+    /// The bar sends `open <connector> <x> <y> <w> <h>`; the arguments are
+    /// optional, so both halves have to survive being left out - the connector is
+    /// found by looking for the first number, not by counting words.
+    #[test]
+    fn the_open_arguments_are_positional() {
+        let words = |args: &[&str]| args.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+
+        let (connector, pill) = parse_open(&words(&["eDP-1", "0", "5", "44", "28"]));
+        assert_eq!(connector.as_deref(), Some("eDP-1"));
+        assert_eq!(
+            pill,
+            Some(Rect {
+                x: 0.0,
+                y: 5.0,
+                width: 44.0,
+                height: 28.0,
+            })
+        );
+
+        // Hand-typed, without a rectangle: the connector is still the connector.
+        let (connector, pill) = parse_open(&words(&["DP-1"]));
+        assert_eq!(connector.as_deref(), Some("DP-1"));
+        assert_eq!(pill, None);
+
+        // Hand-typed, without a connector: the fallback strip is the zone.
+        let (connector, pill) = parse_open(&words(&["0", "5", "44", "28"]));
+        assert_eq!(connector, None);
+        assert!(pill.is_some());
+
+        // Neither: nothing to place, nothing to measure.
+        assert_eq!(parse_open(&[]), (None, None));
     }
 }
