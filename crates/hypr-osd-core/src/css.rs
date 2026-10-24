@@ -66,10 +66,14 @@ pub fn theme_file() -> PathBuf {
     config_home.join(crate::config::DIR).join("theme.css")
 }
 
-/// `@define-color name value;` for every token, ready to be prepended to a
-/// stylesheet. Values come from the theme file when it can be read, and from
-/// [`FALLBACK`] otherwise.
-pub fn palette() -> String {
+/// Every token of the palette, in the theme file's order (the mirror's order for
+/// the ones the theme does not mention). Values come from the theme file when it
+/// can be read, and from [`FALLBACK`] otherwise.
+///
+/// This is the shape another program needs - the lock screen's config cannot
+/// read CSS, so it is written *from* these values (see [`crate::lock`]) - while
+/// [`palette`] is the same thing spelled as the CSS every element wears.
+pub fn tokens() -> Vec<(String, String)> {
     let mut tokens: Vec<(String, String)> = FALLBACK
         .iter()
         .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
@@ -89,6 +93,22 @@ pub fn palette() -> String {
     }
 
     tokens
+}
+
+/// One token, exactly as the theme file spells it (`rgba(11, 15, 21, 0.92)`), or
+/// the mirror's value when the theme does not name it. `None` only for a name
+/// that is not a token at all - which is a typo, not a missing colour.
+pub fn token(name: &str) -> Option<String> {
+    tokens()
+        .into_iter()
+        .find(|(known, _)| known == name)
+        .map(|(_, value)| value)
+}
+
+/// `@define-color name value;` for every token, ready to be prepended to a
+/// stylesheet.
+pub fn palette() -> String {
+    tokens()
         .iter()
         .map(|(name, value)| format!("@define-color {name} {value};\n"))
         .collect()

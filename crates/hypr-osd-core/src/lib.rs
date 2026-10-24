@@ -38,6 +38,8 @@
 //! * [`energy`] - the power profile the machine is in and the compositor effects
 //!   worth dropping while it is set to save, shared by the settings window's
 //!   System tab and the `hypr-osd-energy` daemon that enforces it.
+//! * [`lock`] - the lock screen's generated half: the palette and the knobs, as
+//!   the variables `hyprlock.conf` is written in terms of.
 //! * [`icons`] - a window's class turned into the application's icon.
 //! * [`hyprctl`] - asking Hyprland itself (the focused output, the window list,
 //!   a dispatch) the same way audio goes through `wpctl`.
@@ -64,6 +66,7 @@ pub mod hyprctl;
 pub mod hypripc;
 pub mod icons;
 pub mod keymap;
+pub mod lock;
 pub mod monitors;
 pub mod mpris;
 mod osd;

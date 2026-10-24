@@ -49,6 +49,12 @@ pub const HYPRLAND_HINT: &str =
 pub const ENERGY_HINT: &str =
     "esc closes \u{b7} a change is written to the policy file at once \u{b7} \
      restart the energy daemon to make it read it again";
+/// The lock screen is the one page whose change is complete the moment the file
+/// is written: hyprlock reads its config at every lock, so nothing has to be
+/// restarted and nothing handed to the compositor.
+pub const LOCK_HINT: &str =
+    "esc closes \u{b7} a change rewrites the lock screen's variables at once \u{b7} \
+     hyprlock reads them at the next lock";
 pub const SHORTCUTS_HINT: &str = "esc closes \u{b7} a list to read, not a page to change \u{b7} \
      the bound keys live in ~/.config/hypr/osd.lua";
 
@@ -104,6 +110,10 @@ pub enum PageAction {
     /// again. (A change is applied at once anyway - this is for after a
     /// hand-edited file.)
     Apply,
+    /// The lock screen's page: rewrite the variables `hyprlock.conf` is written in
+    /// terms of. (A change rewrites them anyway - this is for after a hand-edited
+    /// `theme.css`, which the generated file is cut from.)
+    Regenerate,
     /// No chip: the settings window's own page, which cannot act on itself.
     None,
 }
@@ -488,6 +498,9 @@ impl SettingsView {
         self.hint.set_text(match section.applies {
             Applies::Element => KEYS_HINT,
             Applies::Energy => ENERGY_HINT,
+            // Regenerating is the whole of it, and it has already happened by the
+            // time the page is drawn.
+            Applies::Lock => LOCK_HINT,
             // A page of keys is reference: nothing on it can be changed, so the
             // footer says where the bound half really lives instead.
             Applies::Shortcuts => SHORTCUTS_HINT,
@@ -978,6 +991,12 @@ fn set_chip(chip: &gtk::Button, action: PageAction) {
             "Apply",
             "Write the generated config and hand it to Hyprland again - a change is \
              applied as you make it, so this is for re-applying a file edited by hand",
+        ),
+        PageAction::Regenerate => (
+            "Re-apply",
+            "Write the lock screen's generated variables again, from theme.css and \
+             lock.conf - a change is written as you make it, so this is for after \
+             retinting the theme by hand",
         ),
         PageAction::None => {
             chip.set_visible(false);

@@ -14,18 +14,19 @@
  *
  *     pkill -x hypr-osd-bar && ~/.local/bin/hypr-osd-bar &   # the whole bar
  *
- * Two things are not tokens and therefore live in two places by necessity:
+ * One thing is not a token and therefore lives elsewhere: the geometry (radii, the
+ * font) is CSS in `base.css`, which `hypr-osd-core` carries in the binary, because
+ * it is the same for every element and is not something you retheme. It is: 16px
+ * for cards and the bar, 12px for tiles, 10px for flat rows, 999px for capsules,
+ * and the face is "MesloLGS Nerd Font Mono" at 13px/500 - a text face only: the
+ * icons are Lucide drawings inside the binaries, not characters from a font (see
+ * `crates/hypr-osd-core/icons/`).
  *
- *  - hyprlock cannot read CSS at all (it is not a GTK program). Its config,
- *    ~/.config/hypr/hyprlock.conf, mirrors these values as `$variables` at the
- *    top of the file - change them together with this block.
- *  - the geometry (radii, the font) is CSS in `base.css`, which `hypr-osd-core`
- *    carries in the binary, because it is the same for every element and is not
- *    something you retheme. It is: 16px for cards and the bar, 12px for tiles,
- *    10px for flat rows, 999px for capsules, and the face is
- *    "MesloLGS Nerd Font Mono" at 13px/500 - a text face only: the icons are
- *    Lucide drawings inside the binaries, not characters from a font (see
- *    `crates/hypr-osd-core/icons/`).
+ * hyprlock cannot read CSS at all (it is not a GTK program), so its palette is not
+ * mirrored by hand: `hypr-osd-lock-vars` writes these values - converted to
+ * hyprlock's `rgb()`/`rgba()` - into ~/.config/hypr/hyprlock-vars.conf, which
+ * ~/.config/hypr/hyprlock.conf sources. Change a colour here, run it (or open the
+ * settings window, which does), and the lock screen follows.
  */
 
 /* ---- surfaces ---- */

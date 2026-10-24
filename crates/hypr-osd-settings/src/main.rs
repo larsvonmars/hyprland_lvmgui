@@ -67,8 +67,8 @@ use hypr_osd_core::icons::names;
 use hypr_osd_core::settings::{self as catalogue, Applies, Kind, MonitorList, Section};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
-    config, css, desktop, energy, hardware, hyprctl, keymap, monitors, run, state, Config, Content,
-    Keyboard, Opts, Osd, Placement, CARD_PAD_X,
+    config, css, desktop, energy, hardware, hyprctl, keymap, lock, monitors, run, state, Config,
+    Content, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
 };
 
 use view::{Field, Heading, PageAction, SectionRow, SettingsView, TabRow};
@@ -292,6 +292,11 @@ impl Panel {
             match section.applies {
                 Applies::Element | Applies::Energy => PageAction::Restart,
                 Applies::Compositor | Applies::Displays => PageAction::Apply,
+                // The lock screen is *generated*: there is no element to restart
+                // and no compositor to hand a document to, so the chip rewrites
+                // the variables (which is what a change does too - it is there
+                // for a `theme.css` that was edited by hand).
+                Applies::Lock => PageAction::Regenerate,
                 Applies::Shortcuts => PageAction::None,
             }
         };
@@ -544,6 +549,14 @@ impl Panel {
             }
         }
 
+        // The lock screen has no daemon to restart either: the variables are
+        // rewritten as the value is written, and hyprlock reads them at the next
+        // lock - which is why that page needs no chip to make a change take
+        // effect.
+        if self.page().applies == Applies::Lock && self.page().file == file {
+            self.regenerate();
+        }
+
         if self.page().applies == Applies::Displays && self.page().file == file {
             self.refresh_displays();
         } else if value.is_none() && self.page().file == file {
@@ -560,10 +573,31 @@ impl Panel {
                     eprintln!("hypr-osd-settings: {error}");
                 }
             }
+            // Regenerating the lock screen's variables is the whole job: it reads
+            // the theme and the file and writes what hyprlock will read.
+            Applies::Lock => self.regenerate(),
             // The window's own page has no chip at all (see `show_section`).
             Applies::Element | Applies::Energy if page.file != ELEMENT => self.restart(page.file),
             // Nothing to restart and nothing to re-apply: a list of keys.
             Applies::Element | Applies::Energy | Applies::Shortcuts => {}
+        }
+    }
+
+    /// Rewrite `~/.config/hypr/hyprlock-vars.conf` - the palette and the knobs the
+    /// hand-written `hyprlock.conf` is written in terms of (see [`lock`]).
+    ///
+    /// Writing it *is* making the change take effect, because hyprlock reads its
+    /// config at every lock: there is nothing to restart, and no document to hand
+    /// to the compositor. What comes of it is kept in `applied`, the same line the
+    /// Hyprland tab reports through, so `status` can say whether the last write
+    /// worked.
+    fn regenerate(&self) {
+        match lock::write_vars() {
+            Ok(path) => *self.applied.borrow_mut() = format!("wrote {}", path.display()),
+            Err(error) => {
+                *self.applied.borrow_mut() = format!("failed: {error}");
+                eprintln!("hypr-osd-settings: {error}");
+            }
         }
     }
 
@@ -766,6 +800,11 @@ impl Panel {
         // setting too: it goes into the same generated document.
         if matches!(page.applies, Applies::Compositor | Applies::Displays) {
             self.apply()?;
+        }
+        // A lock screen value is live too, by the same mechanism: write the file,
+        // rewrite the variables that are generated from it.
+        if page.applies == Applies::Lock {
+            self.regenerate();
         }
         if self.page().file == page.file {
             self.show_section(self.section.get());
@@ -1006,6 +1045,9 @@ fn group(section: &Section) -> &str {
     match section.applies {
         Applies::Element => section.file,
         Applies::Energy => section.file,
+        // The lock screen is grouped by its own name too: `lock`, which is both
+        // the page's file and what the verbs call it.
+        Applies::Lock => section.file,
         // A list of keys has no file of ours; its own name is what the verbs call
         // it (`keys shortcuts`).
         Applies::Shortcuts => section.file,
@@ -1697,6 +1739,14 @@ fn main() -> glib::ExitCode {
             );
             let panel = Panel::new(osd, view.clone(), settings.clone());
 
+            // The lock screen's variables are cut from the theme, so opening this
+            // window rewrites them: a `theme.css` edited by hand would otherwise
+            // reach the lock screen only when someone pressed that page's
+            // Re-apply. It goes through the same path a change does, so a failure
+            // is reported in `status` rather than only on the terminal, and is not
+            // fatal - the file that is already there still works.
+            panel.regenerate();
+
             // A `kill`ed window leaves "open" behind, which would keep the gear
             // lit with nothing behind it - so the flag starts closed, exactly as
             // the island's and the panel's do.
@@ -1887,12 +1937,16 @@ mod tests {
         assert_eq!(page_index("1", 0), Some((0, 0)));
         assert_eq!(page_index("11", 0), Some((0, 10)));
         assert_eq!(page_index("12", 0), Some((0, 11)));
-        assert_eq!(page_index("13", 0), None);
+        assert_eq!(page_index("13", 0), Some((0, 12)));
+        assert_eq!(page_index("14", 0), None);
         assert_eq!(page_index("0", 0), None);
+        // The lock screen is a page with a config file but no binary of its own.
+        assert_eq!(page_index("lock", 0), Some((0, 6)));
+        assert_eq!(page_index("Lock screen", 0), Some((0, 6)));
         // The list of keys is a page like any other, though it has no config file
         // of its own.
-        assert_eq!(page_index("shortcuts", 0), Some((0, 11)));
-        assert_eq!(page_index("Shortcuts", 0), Some((0, 11)));
+        assert_eq!(page_index("shortcuts", 0), Some((0, 12)));
+        assert_eq!(page_index("Shortcuts", 0), Some((0, 12)));
         // ...and a Hyprland page by its option group, its title, or the file all
         // of them share. The Display page comes first, and "desktop" names it
         // because it is the first page that shares that file.

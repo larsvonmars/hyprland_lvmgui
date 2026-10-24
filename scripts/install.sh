@@ -27,6 +27,9 @@
 #     applications panel is the old launcher's *main window*, and is opened by
 #     the button at the bar's left end
 #   - ~/.config/hypr/hyprlock.conf      the lock screen, when hyprlock is there
+#   - ~/.config/hypr/hyprlock-vars.conf the palette and numbers that file is
+#                                       written in terms of: generated from
+#                                       theme.css and hypr-osd/lock.conf
 #   - ~/.config/hypr/hypridle.conf      idle timers, when hypridle is there
 #
 # Usage:
@@ -152,6 +155,19 @@ for element in "${ELEMENTS[@]}"; do
   echo "   -> $BIN_DIR/$element"
 done
 
+# Not an element: the lock screen's generator. The lock screen is hyprlock, not us,
+# but its palette and its numbers are *generated* from the theme and from
+# `~/.config/hypr-osd/lock.conf` (see `hypr_osd_core::lock`), so the thing that
+# writes them has to be installed like anything else - the installer needs it
+# below, and it is worth running by hand after retinting theme.css.
+generator=target/release/hypr-osd-lock-vars
+if [ ! -x "$generator" ]; then
+  echo "ERROR: $generator was not built" >&2
+  exit 1
+fi
+install -m755 "$generator" "$BIN_DIR/hypr-osd-lock-vars"
+echo "   -> $BIN_DIR/hypr-osd-lock-vars"
+
 # ---------------------------------------------------------------------------
 # Configuration templates
 # ---------------------------------------------------------------------------
@@ -166,6 +182,60 @@ if [ ! -f "$OSD_CONFIG_DIR/theme.css" ]; then
   echo "   -> $OSD_CONFIG_DIR/theme.css (new)"
 else
   echo "   -> $OSD_CONFIG_DIR/theme.css (left alone)"
+fi
+
+# The lock screen's knobs. Not an element's config: hyprlock draws the lock screen
+# and is not ours, but the settings window's Lock screen page edits this file and
+# `hypr-osd-lock-vars` turns it (and the palette) into the variables
+# ~/.config/hypr/hyprlock.conf is written in terms of.
+if [ ! -f "$OSD_CONFIG_DIR/lock.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/lock.conf" <<'EOF'
+# hypr-osd lock screen - settings for ~/.config/hypr/hyprlock.conf
+# (hyprland_lvmgui).
+#
+# hyprlock is the locker, not one of this collection's binaries - but the lock
+# screen wears this desktop's palette, so the half of its config that has to keep
+# up is generated: this file and ~/.config/hypr-osd/theme.css go into
+# ~/.config/hypr/hyprlock-vars.conf, which the structure sources. Nothing has to
+# be restarted for a change to take effect, because hyprlock reads its config at
+# every lock.
+#
+#     ~/.local/bin/hypr-osd-lock-vars     # write the variables now
+#
+# Every key has a built-in default (the value written below); delete a line to
+# fall back to it, or edit it here - the Lock screen page in the settings window
+# is the same file.
+
+# The picture behind the lock screen. Empty follows the wallpaper hyprpaper draws
+# (read out of ~/.config/hypr/hyprpaper.conf), so the desktop and the lock screen
+# cannot disagree; `screenshot` re-takes the live desktop at every lock instead.
+wallpaper =
+
+# The picture's blur, dim and grain. 1 is essentially untouched, 8-16 is frosted
+# glass; keep blur_passes at 1 or more, because 0 skips the rest of the pipeline.
+blur_passes = 1
+blur_size = 1
+brightness = 0.7
+contrast = 1.02
+vibrancy = 0.1
+vibrancy_darkness = 0.1
+noise = 0.004
+
+# The sheet of dark glass behind the clock and the field, in pixels.
+panel_width = 800
+panel_height = 670
+
+# No pointer on the lock screen (there is nothing there to point at); an empty
+# Enter is not a wrong password, so it cannot spend one of PAM's attempts; draw
+# the glass before the picture is ready; and how long a wrong password stays red.
+hide_cursor = true
+ignore_empty_input = true
+immediate_render = true
+fail_timeout = 2000
+EOF
+  echo "   -> $OSD_CONFIG_DIR/lock.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/lock.conf (left alone)"
 fi
 
 if [ ! -f "$OSD_CONFIG_DIR/bar.conf" ]; then
@@ -1150,23 +1220,49 @@ EOF
     fi
 
     if command -v hyprlock >/dev/null; then
+      # The structure below is written in terms of variables, not colours: the
+      # palette (hyprlock cannot read CSS) and the knobs of
+      # `~/.config/hypr-osd/lock.conf` are generated into `hyprlock-vars.conf`.
+      #
+      # The file this repository shipped *before* that carried the palette as
+      # literal `$bg = rgba(...)` lines - a hand-maintained mirror, the one place
+      # a retint did not follow - which is what the `$_name = rgb` pattern below
+      # looks for (any such file, however it was worded or edited). Such a file
+      # cannot follow the theme, so it is replaced once, with a backup; a `.conf`
+      # that already sources the variables is left alone, and so is one that was
+      # edited into something else entirely.
       if [ ! -f "$HYPR_DIR/hyprlock.conf" ]; then
         install -m644 configs/hyprlock.conf "$HYPR_DIR/hyprlock.conf"
         echo "   -> $HYPR_DIR/hyprlock.conf (new)"
-        # A lock screen that does not parse is worse than none: hyprlock ignores
-        # bad options instead of refusing to run, so a typo would be invisible
-        # until it mattered. Point it at a display that does not exist - it reads
-        # the config first and prints errors with line numbers, then fails to
-        # connect, so it cannot lock the session it is being checked from.
-        config_errors=$(WAYLAND_DISPLAY=hypr-osd-install-check \
-          hyprlock --config "$HYPR_DIR/hyprlock.conf" -v 2>&1 \
-          | grep -c "Config error" || true)
-        if [ "${config_errors:-0}" -gt 0 ]; then
-          echo "   ! hyprlock reported ${config_errors} config error(s). Check with:" >&2
-          echo "       hyprlock --config $HYPR_DIR/hyprlock.conf -v" >&2
-        fi
+      elif ! grep -q 'hyprlock-vars\.conf' "$HYPR_DIR/hyprlock.conf" \
+        && grep -qE '^\$[a-z_]+[[:space:]]*=[[:space:]]*(rgb|rgba)\(' "$HYPR_DIR/hyprlock.conf"; then
+        cp "$HYPR_DIR/hyprlock.conf" "$HYPR_DIR/hyprlock.conf.bak-palette"
+        install -m644 configs/hyprlock.conf "$HYPR_DIR/hyprlock.conf"
+        echo "   -> $HYPR_DIR/hyprlock.conf now reads the generated palette (backup: hyprlock.conf.bak-palette)"
       else
         echo "   -> $HYPR_DIR/hyprlock.conf (left alone)"
+      fi
+
+      # Write those variables before checking the config: without them every
+      # `$name` in the structure is undefined, and hyprlock would report an error
+      # per line for a file that is in fact correct.
+      if "$BIN_DIR/hypr-osd-lock-vars" >/dev/null; then
+        echo "   -> $HYPR_DIR/hyprlock-vars.conf (generated from the theme)"
+      else
+        echo "   ! the lock screen's variables could not be written" >&2
+      fi
+
+      # A lock screen that does not parse is worse than none: hyprlock ignores
+      # bad options instead of refusing to run, so a typo would be invisible
+      # until it mattered. Point it at a display that does not exist - it reads
+      # the config first and prints errors with line numbers, then fails to
+      # connect, so it cannot lock the session it is being checked from.
+      config_errors=$(WAYLAND_DISPLAY=hypr-osd-install-check \
+        hyprlock --config "$HYPR_DIR/hyprlock.conf" -v 2>&1 \
+        | grep -c "Config error" || true)
+      if [ "${config_errors:-0}" -gt 0 ]; then
+        echo "   ! hyprlock reported ${config_errors} config error(s). Check with:" >&2
+        echo "       hyprlock --config $HYPR_DIR/hyprlock.conf -v" >&2
       fi
     fi
 
@@ -1365,6 +1461,9 @@ if [ "$hypr_installed" -eq 1 ]; then
   echo "   $BIN_DIR/hypr-osd-settings show       # ... the settings window, too"
   echo "   $BIN_DIR/hypr-osd-energy status       # the power profile and the effects"
   echo "   SUPER + L                             # lock the screen (hyprlock)"
+  echo "   $BIN_DIR/hypr-osd-lock-vars           # ... and re-cut its palette after"
+  echo "                                         #     editing theme.css (or use the"
+  echo "                                         #     settings window's Lock page)"
   echo "or just log out and back in."
   echo
   echo "Hover the clock in the bar for the island popup; the tray fills in as"

@@ -10,6 +10,13 @@ license.workspace = true
 name = "hypr-osd-settings"
 path = "src/main.rs"
 
+# The lock screen's generator, without a window: the installer runs it, and so
+# does anyone retinting theme.css by hand (the settings window writes the same
+# file when it opens). See `hypr_osd_core::lock`.
+[[bin]]
+name = "hypr-osd-lock-vars"
+path = "src/bin/hypr-osd-lock-vars.rs"
+
 [dependencies]
 hypr-osd-core.workspace = true
 gtk.workspace = true

@@ -70,7 +70,8 @@ scripts/
 configs/
   theme.css            the palette: every colour of this desktop
   hyprpaper.conf       the desktop wallpaper (the lock screen's, too)
-  hyprlock.conf        the lock screen, in this theme's palette
+  hyprlock.conf        the lock screen: the structure, written in terms of
+                       variables that are generated (palette + knobs)
   hypridle.conf        idle timers: lock, blank the panel, sleep
 ```
 
@@ -129,7 +130,7 @@ What it does:
 
 | | |
 | --- | --- |
-| `~/.local/bin/hypr-osd-*` | the eleven binaries (the bar, the island, and the nine cards) |
+| `~/.local/bin/hypr-osd-*` | the element binaries (the bar, the island, the cards and the settings window), plus `hypr-osd-lock-vars` — the lock screen's generator, for after retinting the theme by hand |
 | `~/.config/hypr-osd/theme.css` | the palette — only if the file is missing, so your edits survive |
 | `~/.config/hypr-osd/bar.conf` | the bar's settings (only created if missing) |
 | `~/.config/hypr-osd/island.conf` | the island popup's settings (only created if missing) |
@@ -142,7 +143,8 @@ What it does:
 | `~/.config/hypr/hyprland.lua` | waybar's autostart commented out, and waybar stopped (backup: `hyprland.lua.bak-waybar`) — see [Waybar](#waybar) |
 | `~/.config/hypr/hyprland.lua` | `require("launchpad")` commented out, and the old launcher daemon stopped, because `SUPER + SPACE` now belongs to `hypr-osd-launcher` (backup: `hyprland.lua.bak-launchpad`) — see [Launcher](#launcher) |
 | `~/.config/hypr/hyprpaper.conf` | the desktop wallpaper — only when hyprpaper is installed, and only if the file is missing |
-| `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed, and only if the file is missing |
+| `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed: written when missing, and replaced once from the old hand-written palette (backup: `hyprlock.conf.bak-palette`) — see [Lock screen](#lock-screen) |
+| `~/.config/hypr/hyprlock-vars.conf` | **generated** by `hypr-osd-lock-vars` from `theme.css` and `~/.config/hypr-osd/lock.conf`: the palette and the numbers the lock screen above is written in terms of — see [Lock screen](#lock-screen) |
 | `~/.config/hypr/hypridle.conf` | idle timers — only when `hypridle` is installed, and only if the file is missing |
 | a running element | stopped and started again, once the new binary and the config repairs are in place: every element reads its binary, its config and the palette exactly once, at start-up, so a re-install that left the process alone would keep the old code until the next login. Only the elements that were running are restarted |
 
@@ -324,9 +326,11 @@ the window is up. It has no keybinding of its own; `osd.lua` carries a commented
 It has **three tabs**, because this desktop is three things at once: the elements,
 and the machine they run on.
 
-* **Hypr OSD** — this collection. Eleven pages, one per element, exactly the keys
-  and defaults its own binary reads, and a twelfth that is not an element:
-  **Shortcuts**, every key the collection implements. See [The Shortcuts
+* **Hypr OSD** — this collection. Twelve pages: one per element, with exactly the
+  keys and defaults its own binary reads, and the **Lock screen** — not one of our
+  binaries (hyprlock draws it), but its palette and its numbers are generated from
+  `theme.css` and `lock.conf` like everything else here. A thirteenth is not a form
+  at all: **Shortcuts**, every key the collection implements. See [The Shortcuts
   page](#the-shortcuts-page).
 * **Hyprland** — the compositor itself: the **displays** (`display`, one row per
   connected output — resolution and refresh rate, position, scale, rotation,
@@ -348,7 +352,7 @@ and the machine they run on.
 | Pick a page | a click on the list down the left, or `hypr-osd-settings section <name\|number>` |
 | Change a value | the control on the row: a switch, a spinner, a text field (Enter or leaving it commits), or a dropdown for a value that is one of a list |
 | Reset one key | the ↺ beside a key that is set — the line is *removed*, so the built-in default applies again |
-| Apply it | the **Restart** chip on an element's page (that element stops and starts again), the **Apply** chip on a Hyprland one, or nothing at all: a Hyprland value is applied as you change it |
+| Apply it | the **Restart** chip on an element's page (that element stops and starts again), the **Apply** chip on a Hyprland one, the **Re-apply** chip on the lock screen's, or nothing at all: a Hyprland value and a lock screen value are applied as you change it |
 | Close | `Escape`, the ✕, or `hypr-osd-settings hide` |
 
 Three things about it are worth knowing:
@@ -365,7 +369,9 @@ Three things about it are worth knowing:
   starts it again, waiting for the old one to let go of its D-Bus name (an element
   that starts too early would just forward its empty command line to the process
   that is going away and leave nothing running). The Hyprland tab is the opposite —
-  the compositor takes a change at once.
+  the compositor takes a change at once. The lock screen's page needs neither:
+  hyprlock reads its config at every lock, so a change rewrites the generated
+  variables and is live on the next lock, with nothing to restart.
 * **It takes the keyboard while it is up**, because the text fields have to be
   typed into and a layer-shell surface has no other way. It ends with `Escape`, the
   ✕, or `idle_close_ms` (two minutes by default) if you walked away — and the card
@@ -1148,18 +1154,58 @@ a change there is *live* instead of waiting for a restart — see
 the file is missing — it is meant to be edited, so re-running `install.sh` leaves
 your version alone.
 
-hyprlock cannot read CSS, so the palette is mirrored at the top of that file as
-`$variables` — the same `@define-color` values every element reads out of
-`~/.config/hypr-osd/theme.css`, written as `#RRGGBBAA`. Same deal as everywhere
-else in this theme: change a colour in `theme.css`, change it here.
+hyprlock cannot read CSS, and nothing here should be kept in step by hand: the
+palette is **generated** out of `~/.config/hypr-osd/theme.css` — the same
+`@define-color` values every element reads, converted to hyprlock's `rgb()` /
+`rgba()` dialect, plus the accent at the opacities the panel, the field's fill and
+its outline are cut from — together with the numbers, which are the knobs of
+`~/.config/hypr-osd/lock.conf` (the settings window's **Lock screen** page). Both
+land in `~/.config/hypr/hyprlock-vars.conf`, and the first line of the structure
+sources it:
+
+```ini
+source = ~/.config/hypr/hyprlock-vars.conf
+```
+
+so a retint reaches this screen with no hyprlang to edit, and no colour on it can
+be out of step with the bar. Nothing has to be restarted either — hyprlock reads
+its config at every lock, which is what makes the page live as you change a value:
+
+```sh
+hypr-osd-lock-vars            # rewrite the variables now
+hypr-osd-lock-vars --print    # ...or just look at what they are
+```
+
+The installer runs it, the settings window runs it when it opens and on every
+change on that page, and after editing `theme.css` by hand it is the one command
+to run. `crates/hypr-osd-core/src/lock.rs` is the generator; a test holds every
+row of that page against a variable it defines, so a switch cannot sit on the page
+and change nothing.
+
+The keys of `~/.config/hypr-osd/lock.conf`, all of them rows on that page:
+
+| key | default | what |
+| --- | --- | --- |
+| `wallpaper` | *(empty)* | the picture behind the lock screen: empty follows hyprpaper's, `screenshot` re-takes the live desktop |
+| `blur_passes`, `blur_size` | `1`, `1` | how the picture is blurred — 1 is essentially untouched, 8–16 is frosted glass |
+| `brightness`, `contrast` | `0.7`, `1.02` | dim the picture, and lift or flatten it |
+| `vibrancy`, `vibrancy_darkness` | `0.1`, `0.1` | how much colour the picture keeps |
+| `noise` | `0.004` | a whisper of grain over the picture |
+| `panel_width`, `panel_height` | `800`, `670` | the sheet of dark glass behind the clock and the field |
+| `hide_cursor` | `true` | no pointer on the lock screen |
+| `ignore_empty_input` | `true` | an empty Enter is not a wrong password, so it cannot spend a PAM attempt |
+| `immediate_render` | `true` | draw the glass before the picture is ready |
+| `fail_timeout` | `2000` | how long a wrong password stays red, in milliseconds |
 
 What it draws, over **your desktop wallpaper** — the lock screen points straight at
 the image the desktop uses, rather than at a screenshot of the desktop, so it
 shows the background you chose, never the shape of what you had open, and the
 backdrop holds still while everything else sleeps:
 
-- a sheet of dark glass — one `shape`, 800×670, hairline accent border, deep
-  shadow — so the type sits on a known contrast instead of on the wallpaper;
+- a sheet of dark glass — one `shape`, `$panel_width` × `$panel_height`
+  (`Glass width` / `Glass height` on the page, 800×670 unset), hairline accent
+  border, deep shadow — so the type sits on a known contrast instead of on the
+  wallpaper;
 - the **clock at 170px**, twice the bar's own type, with an accent colon and a
   soft shadow; the date in caps underneath, then a short accent rule;
 - the password field **only while there is something to type into**: a tall
@@ -1167,26 +1213,28 @@ backdrop holds still while everything else sleeps:
   the state (accent while PAM checks, red when the password is wrong, amber while
   capslock is on).
 
-The `path` in that block (`~/Bilder/Wallpapers/1022522.jpg` here) names the same
-image [`configs/hyprpaper.conf`](configs/hyprpaper.conf) puts on the desktop —
-the wallpaper and the lock screen's backdrop are one picture, and those two files
-are where it is decided. hyprlock draws a still image, so a *video* wallpaper
-needs a frame of it instead — the comment above the line has the one-liner — and
-pointing it back at `screenshot` re-takes the live desktop on every lock instead.
-Blur, dim and grain are the four numbers just below it: at `blur_size = 1` the
-picture is essentially untouched, and 8–16 is frosted glass.
+`$wallpaper` is the `path` of [`configs/hyprpaper.conf`](configs/hyprpaper.conf),
+read when the variables are written, so the wallpaper and the lock screen's
+backdrop are one picture and one file decides it. A picture of its own is the
+page's **Wallpaper** row; empty follows hyprpaper, and `screenshot` (the fallback
+when there is no hyprpaper config at all) re-takes the live desktop on every lock.
+hyprlock draws a still image, so a *video* wallpaper needs a frame of it instead —
+the comment above that line has the one-liner. Blur, dim, contrast, vibrancy and
+grain are that page's other picture rows: at **Blur size** 1 the image is
+essentially untouched, and 8–16 is frosted glass.
 
 Switching wallpapers at runtime is one command —
-`hyprctl hyprpaper wallpaper ",/path/to/image.jpg"` — but do change the lock
-screen's `path` too, or the two will disagree until you do.
+`hyprctl hyprpaper wallpaper ",/path/to/image.jpg"` — and the lock screen follows
+the next time the variables are written, which is the next time the settings
+window opens or changes anything (or `hypr-osd-lock-vars`).
 
 The field is what makes the resting screen quiet: it fades out while the buffer
 is empty and back in with the first keystroke, so what you walk up to says
 "locked" instead of "type here". A padlock glyph and one faint line carry that.
 **Enter on its own does not reveal it** — hyprlock follows the buffer, not the
-key, and an empty Enter is deliberately a no-op (`ignore_empty_input`, so a stray
-Enter cannot spend one of PAM's three attempts). Once there is something to
-submit, Enter submits it, as always.
+key, and an empty Enter is deliberately a no-op (`ignore_empty_input`, a switch on
+the Lock screen page, so a stray Enter cannot spend one of PAM's three attempts).
+Once there is something to submit, Enter submits it, as always.
 
 One thing to know before moving anything: `position` is a `layoutxy` offset from
 the alignment anchor, and **y points up** — `position = 0, 259` is 259px *above*

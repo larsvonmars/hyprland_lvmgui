@@ -277,6 +277,17 @@ pub enum Applies {
     /// the *readings* the page opens with and the two buttons it carries, neither
     /// of which is a key in the file (see [`Kind::Info`] and [`Kind::Actions`]).
     Energy,
+    /// The **Lock screen** page: hyprlock's own look. Its keys live in
+    /// `~/.config/hypr-osd/lock.conf` like an element's, and what they change is
+    /// the *generated* half of `~/.config/hypr/hyprlock.conf` - the variables it
+    /// is written in terms of, palette included (see [`crate::lock`]).
+    ///
+    /// What makes it its own case is that there is nothing to restart and nothing
+    /// to re-apply in the compositor: hyprlock reads its config at every lock, so a
+    /// change is live the moment the variables are rewritten. The chip is there
+    /// for a `theme.css` that was edited by hand - it rewrites the same file the
+    /// change does.
+    Lock,
     /// The **Shortcuts** page: the keys this collection implements, list *only*.
     /// It has no config file and no values to write - what it shows is
     /// [`SHORTCUTS`] - so its rows are readings with the keys in place of a name,
@@ -353,12 +364,13 @@ pub struct Tab {
 
 /// The window's tabs, in the order their buttons are drawn.
 ///
-/// The first is this collection - one page per element, each with its own config
-/// file. The second is the desktop the collection sits on: Hyprland's own
-/// options, which belong together because they are not *about* any one element
-/// and are applied to the compositor rather than to a program of ours. The third
-/// is the machine under both: the energy policy that ties the compositor's
-/// effects to the power profile (see [`crate::energy`]).
+/// The first is this collection - one page per element and one for the lock
+/// screen, each with its own config file. The second is the desktop the
+/// collection sits on: Hyprland's own options, which belong together because they
+/// are not *about* any one element and are applied to the compositor rather than
+/// to a program of ours. The third is the machine under both: the energy policy
+/// that ties the compositor's effects to the power profile (see
+/// [`crate::energy`]).
 pub const TABS: &[Tab] = &[
     Tab {
         id: "osd",
@@ -384,7 +396,8 @@ pub const TABS: &[Tab] = &[
 
 /// The first tab: every element of the collection, in the order the sidebar shows
 /// them - the bar first (it is the furniture), then the two popups that belong to
-/// it, then the cards, then the two keyboard panels, then the settings window
+/// it, then the cards, then the lock screen (a page without a binary of its own:
+/// hyprlock draws it), then the two keyboard panels, then the settings window
 /// itself.
 pub const OSD: &[Section] = &[
     Section {
@@ -440,6 +453,16 @@ pub const OSD: &[Section] = &[
                 the destructive ones follow.",
         applies: Applies::Element,
         settings: SESSION,
+    },
+    Section {
+        file: crate::lock::FILE,
+        title: "Lock screen",
+        icon: names::LOCK,
+        blurb: "SUPER + L, and the session card's Lock row: hyprpaper's wallpaper under a \
+                sheet of glass, the clock, and the field. The palette is the desktop's, \
+                written out for hyprlock.",
+        applies: Applies::Lock,
+        settings: LOCK,
     },
     Section {
         file: "switcher",
@@ -1292,6 +1315,135 @@ const SESSION: &[Setting] = &[
     ),
 ];
 
+// --- the lock screen -------------------------------------------------------
+//
+// hyprlock's config is `~/.config/hypr/hyprlock.conf`: structure, in hyprlang -
+// the glass, the clock, the field and where each of them sits - carried by this
+// repository and installed by `install.sh`. What this page edits is the *other*
+// half, `~/.config/hypr-osd/lock.conf`, which `hypr-osd-lock-vars` turns into the
+// variables that structure is written in terms of (see [`crate::lock`]), palette
+// included: hyprlock cannot read CSS, so those variables are how the desktop's
+// one palette reaches it.
+//
+// Three groups of numbers are deliberately *not* rows here. The label positions,
+// the shadows and the sizes of the type are one composition tuned against each
+// other - the file explains each measurement - so a row for one of them on its
+// own would break the arrangement rather than adjust it. What is exposed is what
+// can move independently: the picture, the glass, and the behaviour.
+//
+// Public because [`crate::lock`] holds it against the file it generates (a test
+// there): every row has to be a variable that file defines.
+pub const LOCK: &[Setting] = &[
+    text(
+        "wallpaper",
+        "Wallpaper",
+        "The picture behind the lock screen; empty follows the wallpaper hyprpaper draws, \
+         so the desktop and the lock screen cannot disagree.",
+        crate::lock::DEFAULT_WALLPAPER,
+    ),
+    number(
+        "blur_size",
+        "Blur size",
+        "How far the picture is blurred: 1 is essentially untouched, 8-16 is frosted glass.",
+        crate::lock::DEFAULT_BLUR_SIZE,
+        0,
+        32,
+    ),
+    number(
+        "blur_passes",
+        "Blur passes",
+        "How many times the blur runs; keep it at 1 or more, because 0 skips the rest of \
+         the pipeline with it.",
+        crate::lock::DEFAULT_BLUR_PASSES,
+        1,
+        5,
+    ),
+    fraction(
+        "brightness",
+        "Brightness",
+        "Dim the picture, so a bright wallpaper does not glare at midnight.",
+        crate::lock::DEFAULT_BRIGHTNESS,
+        0.2,
+        1.5,
+    ),
+    fraction(
+        "contrast",
+        "Contrast",
+        "Lift or flatten the picture's contrast.",
+        crate::lock::DEFAULT_CONTRAST,
+        0.5,
+        2.0,
+    ),
+    fraction(
+        "vibrancy",
+        "Vibrancy",
+        "How much colour the picture keeps.",
+        crate::lock::DEFAULT_VIBRANCY,
+        0.0,
+        1.0,
+    ),
+    fraction(
+        "vibrancy_darkness",
+        "Vibrancy darkness",
+        "How dark the vibrancy pass is allowed to go; it is the pair to the row above.",
+        crate::lock::DEFAULT_VIBRANCY_DARKNESS,
+        0.0,
+        1.0,
+    ),
+    fraction(
+        "noise",
+        "Grain",
+        "A whisper of film grain over the picture.",
+        crate::lock::DEFAULT_NOISE,
+        0.0,
+        0.05,
+    ),
+    number(
+        "panel_width",
+        "Glass width",
+        "How wide the sheet of dark glass behind the clock and the field is.",
+        crate::lock::DEFAULT_PANEL_WIDTH,
+        200,
+        1600,
+    ),
+    number(
+        "panel_height",
+        "Glass height",
+        "How tall that sheet is; the type inside is placed against its middle.",
+        crate::lock::DEFAULT_PANEL_HEIGHT,
+        200,
+        1200,
+    ),
+    flag(
+        "hide_cursor",
+        "Hide cursor",
+        "No pointer on the lock screen - there is nothing on it to point at.",
+        crate::lock::DEFAULT_HIDE_CURSOR,
+    ),
+    flag(
+        "ignore_empty_input",
+        "Ignore empty Enter",
+        "An empty Enter is not a wrong password, so a stray one cannot spend a PAM \
+         attempt.",
+        crate::lock::DEFAULT_IGNORE_EMPTY_INPUT,
+    ),
+    flag(
+        "immediate_render",
+        "Draw immediately",
+        "Draw the glass before the picture is ready, so a lock looks deliberate a beat \
+         earlier instead of showing the wallpaper appearing underneath it.",
+        crate::lock::DEFAULT_IMMEDIATE_RENDER,
+    ),
+    millis(
+        "fail_timeout",
+        "Failure timeout",
+        "How long a wrong password stays red, in milliseconds.",
+        crate::lock::DEFAULT_FAIL_TIMEOUT,
+        0,
+        10000,
+    ),
+];
+
 // --- the keyboard panels ---------------------------------------------------
 
 const SWITCHER: &[Setting] = &[
@@ -2066,8 +2218,8 @@ mod tests {
     fn the_osd_tab_covers_the_whole_collection() {
         let files: Vec<&str> = OSD.iter().map(|section| section.file).collect();
         for expected in [
-            "bar", "island", "stats", "volume", "media", "session", "switcher", "overview",
-            "launcher", "apps", "settings",
+            "bar", "island", "stats", "volume", "media", "session", "lock", "switcher",
+            "overview", "launcher", "apps", "settings",
         ] {
             assert!(
                 files.contains(&expected),
@@ -2075,11 +2227,15 @@ mod tests {
             );
         }
         // Every other page of the first tab is an element's, so it can be
-        // restarted; the last one is the list of keys, which belongs to no
-        // element of its own.
+        // restarted - or the lock screen's, which is not a binary of ours and so
+        // has nothing to restart; the last one is the list of keys, which belongs
+        // to no element of its own.
         for section in OSD {
             assert!(
-                matches!(section.applies, Applies::Element | Applies::Shortcuts),
+                matches!(
+                    section.applies,
+                    Applies::Element | Applies::Lock | Applies::Shortcuts
+                ),
                 "{} is not an element's page",
                 section.title
             );
@@ -2203,6 +2359,7 @@ mod tests {
                 }
                 Applies::Element => panic!("{} is an element's page", section.title),
                 Applies::Energy => panic!("{} is an energy page", section.title),
+                Applies::Lock => panic!("{} is the lock screen's page", section.title),
                 Applies::Shortcuts => panic!("{} is a list of keys", section.title),
             }
         }
