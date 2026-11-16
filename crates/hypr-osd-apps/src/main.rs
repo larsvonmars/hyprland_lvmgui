@@ -76,7 +76,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::apps::{self, App};
-use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Rect, Side};
+use hypr_osd_core::hover::{self, parse_open, Action, BarGeometry, Delays, Machine, Rect, Side};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
     css, icons, run, state, text, touch, Config, Content, Hole, Keyboard, Opts, Osd, Placement,
@@ -106,8 +106,8 @@ const DEFAULT_ICON_SIZE: i32 = 40;
 const DEFAULT_TILE_GAP: i32 = 6;
 const DEFAULT_GAP: i32 = 6;
 const DEFAULT_BAR_HEIGHT: i32 = 40;
-const DEFAULT_BAR_MARGIN_TOP: i32 = 8;
-const DEFAULT_BAR_MARGIN_X: i32 = 12;
+const DEFAULT_BAR_MARGIN_TOP: i32 = 0;
+const DEFAULT_BAR_MARGIN_X: i32 = 0;
 // The strip at the bar's left end that counts as the button when a hand-typed
 // `open` does not send the button's rectangle. The bar normally measures it, so
 // this is only for a `hypr-osd-apps open` typed into a terminal.
@@ -957,45 +957,6 @@ fn warn_missing_osk() {
             eprintln!("hypr-osd-apps: {message}");
         }
     });
-}
-
-/// The `open` arguments: the connector the bar is on, and the button's rectangle
-/// inside the bar's card.
-///
-/// Both are optional, and positional, so the connector is found by looking for
-/// the first number instead of by counting: the bar sends
-/// `open eDP-1 0 5 44 28`, and a hand-typed `open eDP-1` (or `open 0 5 44 28`)
-/// does the sensible thing too.
-fn parse_open(args: &[String]) -> (Option<String>, Option<Rect>) {
-    let start = args.iter().position(|arg| arg.parse::<f64>().is_ok());
-    let rect = start.and_then(|index| parse_rect(&args[index..]));
-    let connector = match start {
-        // Everything before the numbers is the connector; it has no spaces, so
-        // the word right in front of the rectangle is the one.
-        Some(index) => index
-            .checked_sub(1)
-            .and_then(|index| args.get(index))
-            .cloned(),
-        // No rectangle at all: the first word is the connector (`open eDP-1`).
-        None => args.first().filter(|arg| !arg.is_empty()).cloned(),
-    };
-    (connector, rect)
-}
-
-/// The four numbers the bar sends with `open`, or `None` when it did not.
-fn parse_rect(args: &[String]) -> Option<Rect> {
-    let numbers: Vec<f64> = args
-        .iter()
-        .filter_map(|value| value.parse().ok())
-        .take(4)
-        .collect();
-    let [x, y, width, height] = <[f64; 4]>::try_from(numbers).ok()?;
-    Some(Rect {
-        x,
-        y,
-        width,
-        height,
-    })
 }
 
 /// Wire the keys the panel lives on.

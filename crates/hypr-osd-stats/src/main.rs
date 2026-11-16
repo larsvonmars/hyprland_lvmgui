@@ -69,7 +69,7 @@ use std::time::{Duration, Instant};
 
 use gtk::glib;
 use gtk::prelude::*;
-use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Rect, Side};
+use hypr_osd_core::hover::{self, parse_open, Action, BarGeometry, Delays, Machine, Rect, Side};
 use hypr_osd_core::system;
 use hypr_osd_core::{
     css, hardware, run, state, Config, Content, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y,
@@ -91,8 +91,8 @@ const ELEMENT: &str = "stats";
 // and lines its right edge up with the bar's, neither of which the compositor can
 // work out on its own (see `hover::BarGeometry`).
 const DEFAULT_BAR_HEIGHT: i32 = 40;
-const DEFAULT_BAR_MARGIN_TOP: i32 = 8;
-const DEFAULT_BAR_MARGIN_X: i32 = 12;
+const DEFAULT_BAR_MARGIN_TOP: i32 = 0;
+const DEFAULT_BAR_MARGIN_X: i32 = 0;
 const DEFAULT_GAP: i32 = 6;
 /// Only used for an `open` that arrives without a rectangle (a hand-typed one,
 /// or a bar too old to send one): the width of the strip at the bar's right end
@@ -776,41 +776,6 @@ fn describe_zone(panel: &Panel, settings: &Settings) -> String {
         panel_rect.x + panel_rect.width,
         panel_rect.bottom(),
     )
-}
-
-/// The `open` arguments: the connector the bar is on, and the pill's rectangle
-/// inside the bar's card.
-///
-/// Both are optional, and positional, so the connector is found by looking for
-/// the first number instead of by counting: the bar sends
-/// `open eDP-1 1097 5 192 28`, and a hand-typed `open 1097 5 192 28` does the
-/// sensible thing too.
-fn parse_open(args: &[String]) -> (Option<String>, Option<Rect>) {
-    let start = args.iter().position(|arg| arg.parse::<f64>().is_ok());
-    let connector = start
-        .and_then(|index| index.checked_sub(1))
-        .and_then(|index| args.get(index))
-        .cloned();
-    let rect = start.and_then(|index| parse_rect(&args[index..]));
-    (connector, rect)
-}
-
-/// The four numbers the bar sends with `open`, or `None` when it did not.
-fn parse_rect(args: &[String]) -> Option<Rect> {
-    let numbers: Vec<f64> = args
-        .iter()
-        .filter_map(|value| value.parse().ok())
-        .take(4)
-        .collect();
-    match numbers[..] {
-        [x, y, width, height] if width > 0.0 && height > 0.0 => Some(Rect {
-            x,
-            y,
-            width,
-            height,
-        }),
-        _ => None,
-    }
 }
 
 /// What the `wifi` verb accepts - one string, so an unknown sub-verb and a

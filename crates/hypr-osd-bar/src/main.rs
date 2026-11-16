@@ -99,7 +99,6 @@ use gtk::prelude::*;
 // bar's pills are drawn from.
 use hypr_osd_core::hardware::{self as sources, Battery, Network, Volume};
 use hypr_osd_core::mpris::{self, Track};
-use hypr_osd_core::system::{self as stats, Reading};
 use hypr_osd_core::{css, monitors, run, state, touch, Config, Content, Opts, Osd, Placement};
 
 use view::BarView;
@@ -131,8 +130,8 @@ pub const TOUCH_HEIGHT_EXTRA: i32 = 12;
 /// pointer's marks are 11-16px; a finger uses the same pill, so the picture on it
 /// has to be readable at arm's length too.
 pub const TOUCH_ICON_EXTRA: i32 = 3;
-const DEFAULT_MARGIN_TOP: i32 = 8;
-const DEFAULT_MARGIN_X: i32 = 12;
+const DEFAULT_MARGIN_TOP: i32 = 0;
+const DEFAULT_MARGIN_X: i32 = 0;
 /// How many numbered workspaces the row keeps room for, so a workspace you have
 /// never visited is still clickable.
 const DEFAULT_WORKSPACES: i32 = 5;
@@ -154,15 +153,6 @@ const DEFAULT_TICK_MS: u64 = 1000;
 const DEFAULT_VOLUME_EVERY_MS: u64 = 1000;
 const DEFAULT_NETWORK_EVERY_MS: u64 = 5000;
 const DEFAULT_BATTERY_EVERY_MS: u64 = 30000;
-/// CPU load, memory and temperature: cheap file reads, so they keep up with the
-/// heartbeat. (The CPU number is a delta between two readings, which is why the
-/// pill appears on the second tick rather than the first.)
-const DEFAULT_STATS_EVERY_MS: u64 = 1000;
-/// How often a stale update count is refreshed. `checkupdates` syncs a pacman
-/// database in a temporary directory, and the count only changes when somebody
-/// syncs anyway - so half an hour, which is also how long a count is believed
-/// (see `stats::UPDATES_MAX_AGE`).
-const DEFAULT_UPDATES_EVERY_MS: u64 = 1_800_000;
 /// How often the bar re-reads Hyprland even with no event, and re-asks MPRIS.
 /// The event socket is the real mechanism; this is the safety net for a socket
 /// that quietly died, which would otherwise leave the row frozen for the
@@ -185,13 +175,12 @@ pub struct Shows {
     pub workspaces: bool,
     /// The focused window's title.
     pub title: bool,
-    /// The clock at the right end - and the handle that unfolds the island popup.
-    /// Hiding it takes that popup's trigger with it.
+    /// The clock at the right end. It is a reading: the player in the middle is
+    /// the island popup's handle.
     pub clock: bool,
-    /// The media pill (what is playing).
+    /// The media pill (what is playing) - and the handle that unfolds the island
+    /// popup. Hiding it takes that popup's trigger with it.
     pub media: bool,
-    /// The system info pill: CPU, memory, temperature, pending updates.
-    pub stats: bool,
     /// The combined status pill: the link, the sound and the battery - and the
     /// handle that unfolds the system popup.
     pub status: bool,
@@ -214,7 +203,6 @@ impl Shows {
             title: config.bool("show_title", true),
             clock: config.bool("show_clock", true),
             media: config.bool("show_media", true),
-            stats: config.bool("show_stats", true),
             status: config.bool("show_status", true),
             tray: config.bool("show_tray", true),
             minimised: config.bool("show_minimised", true),
@@ -231,7 +219,6 @@ impl Shows {
             ("workspaces", self.workspaces),
             ("title", self.title),
             ("media", self.media),
-            ("stats", self.stats),
             ("minimised", self.minimised),
             ("tray", self.tray),
             ("status", self.status),
@@ -272,8 +259,6 @@ pub struct Settings {
     volume_every: u64,
     network_every: u64,
     battery_every: u64,
-    stats_every: u64,
-    updates_every: u64,
     resync_every: u64,
     /// What the clock's hover and clicks run. All of them are programs the
     /// desktop already has, and every one of them is replaceable: the bar only
@@ -282,7 +267,6 @@ pub struct Settings {
     notifications_command: String,
     volume_command: String,
     session_command: String,
-    terminal_command: String,
     /// The system popup the status pill unfolds. The pill asks it to open - on
     /// hover and on a left click alike - and to switch the wireless radio on a
     /// right click. It is never *pinned* from here: a pinned panel is not watched
@@ -294,9 +278,6 @@ pub struct Settings {
     /// that keeps the keyboard while it is up, so the button is the way back out
     /// of it (see `hypr-osd-apps`).
     apps_command: String,
-    /// What prints the pending-update list (`checkupdates`). Empty turns the
-    /// update count off: the pill then shows only the three readings.
-    updates_command: String,
 }
 
 impl Settings {
@@ -327,12 +308,6 @@ impl Settings {
             battery_every: config
                 .millis("battery_every_ms", DEFAULT_BATTERY_EVERY_MS)
                 .as_millis() as u64,
-            stats_every: config
-                .millis("stats_every_ms", DEFAULT_STATS_EVERY_MS)
-                .as_millis() as u64,
-            updates_every: config
-                .millis("updates_every_ms", DEFAULT_UPDATES_EVERY_MS)
-                .as_millis() as u64,
             resync_every: config
                 .millis("resync_every_ms", DEFAULT_RESYNC_EVERY_MS)
                 .as_millis() as u64,
@@ -340,10 +315,8 @@ impl Settings {
             notifications_command: config.string("notifications_command", "swaync-client"),
             volume_command: config.string("volume_command", "hypr-osd-volume"),
             session_command: config.string("session_command", "hypr-osd-session"),
-            terminal_command: config.string("terminal_command", "kitty"),
             stats_command: config.string("stats_command", "hypr-osd-stats"),
             apps_command: config.string("apps_command", "hypr-osd-apps"),
-            updates_command: config.string("updates_command", "checkupdates"),
         }
     }
 
@@ -421,7 +394,7 @@ fn main() -> glib::ExitCode {
     // because the verbs reach it too - and because the shell's per-output factory
     // has to be able to hand out views before `build` has even returned: it is
     // `run` that asks for the first one (see `Content::PerOutput`).
-    let bars = Rc::new_cyclic(|me| Bars::new(settings.clone(), me.clone()));
+    let bars = Rc::new(Bars::new(settings.clone()));
 
     // One monitor's bar, as the shell asks for it: once per output at start-up,
     // and again whenever a screen appears.
@@ -488,21 +461,7 @@ fn main() -> glib::ExitCode {
                 }
             });
 
-            // 4. The system info pill. The reading is a delta between two ticks,
-            //    so the pill appears on the second one; the update count is either
-            //    in the cache or asked for in the background.
-            if settings.updates_command.is_empty() {
-                // Turned off in the config: no count, and nothing runs.
-            } else if let Some(count) = stats::cached_updates() {
-                // A fresh cache from the last half hour: no reason to ask again.
-                bars.updates.set(count);
-            } else {
-                // Nothing usable cached, so ask once. Asynchronously, because
-                // `checkupdates` syncs a pacman database first.
-                stats::refresh_updates(&settings.updates_command, refresher(&bars));
-            }
-
-            // 5. The tick. One timer for everything periodic, so the bars have a
+            // 4. The tick. One timer for everything periodic, so the bars have a
             //    single heartbeat to reason about; each source decides how often
             //    it is worth asking (see `Bars::tick`).
             {
@@ -655,9 +614,6 @@ fn main() -> glib::ExitCode {
 /// battery for up to half a minute.
 struct Bars {
     settings: Rc<Settings>,
-    /// A weak self-reference, so the heartbeat can hand `checkupdates` a callback
-    /// that keeps the bars alive until it answers.
-    me: Weak<Bars>,
     /// The shell, so the heartbeat can ask which bars are still on screen (see
     /// [`Bars::keep_tray`]).
     osd: RefCell<Weak<Osd>>,
@@ -678,11 +634,6 @@ struct Bars {
     /// The screen it actually ended up on, so it can be moved if that screen
     /// goes away.
     tray_output: RefCell<Option<String>>,
-    /// The system info pill's readings. The CPU number is a *delta* between two
-    /// samples, so the sampler has to outlive a single reading.
-    sampler: RefCell<stats::Sampler>,
-    reading: RefCell<Option<Reading>>,
-    updates: Cell<i32>,
     /// How many heartbeats have happened, for the "every N ticks" intervals.
     ticks: Cell<u64>,
     /// Whether the cache has been filled yet (see [`Bars::adopt`]).
@@ -729,7 +680,7 @@ struct Paint {
 }
 
 impl Bars {
-    fn new(settings: Rc<Settings>, me: Weak<Bars>) -> Self {
+    fn new(settings: Rc<Settings>) -> Self {
         // The tray is a session-wide object with one set of icons, and a widget
         // can only be in one bar - so it goes on exactly one of them: the screen
         // the config names, else the one that had the focus when the bar started
@@ -741,7 +692,6 @@ impl Bars {
             .unwrap_or_default();
         Bars {
             settings,
-            me,
             osd: RefCell::new(Weak::new()),
             views: RefCell::new(BTreeMap::new()),
             paint: RefCell::new(Paint::default()),
@@ -749,9 +699,6 @@ impl Bars {
             memory: RefCell::new(minimise::Memory::default()),
             tray_home,
             tray_output: RefCell::new(None),
-            sampler: RefCell::new(stats::Sampler::new()),
-            reading: RefCell::new(None),
-            updates: Cell::new(0),
             ticks: Cell::new(0),
             warm: Cell::new(false),
             tablet: Cell::new(None),
@@ -942,17 +889,14 @@ impl Bars {
 
     /// Paint one bar from the cached values.
     fn paint_one(&self, view: &BarView) {
-        let paint = self.paint.borrow();
-        let reading = self.reading.borrow();
-        apply(view, &paint, reading.as_ref(), self.updates.get());
+        apply(view, &self.paint.borrow());
     }
 
     /// Paint every bar from the cached values.
     fn repaint(&self) {
         let paint = self.paint.borrow();
-        let reading = self.reading.borrow();
         for view in self.views.borrow().values() {
-            apply(view, &paint, reading.as_ref(), self.updates.get());
+            apply(view, &paint);
         }
     }
 
@@ -1132,24 +1076,6 @@ impl Bars {
         let due = |interval: u64| every(count, interval, settings.tick);
         let resync = due(settings.resync_every);
 
-        // The system info pill comes first, and outside the repaint: the *timer*
-        // is what holds the previous CPU sample, because the pill is the delta
-        // between two of them.
-        if due(settings.stats_every) {
-            *self.reading.borrow_mut() = Some(self.sampler.borrow_mut().read());
-        }
-        if due(settings.updates_every)
-            && !settings.updates_command.is_empty()
-            && stats::cached_updates().is_none()
-        {
-            // The count is believed for half an hour (see
-            // `stats::UPDATES_MAX_AGE`), and this is what asks again once it goes
-            // stale - in the background, so a slow mirror never touches the bars.
-            if let Some(me) = self.me.upgrade() {
-                stats::refresh_updates(&settings.updates_command, refresher(&me));
-            }
-        }
-
         // Read before the repaint (see [`Bars::read_hypr`]): a resync is the
         // safety net for an event socket that quietly died, so it reads exactly
         // what the event path reads - including the tray's icons, which no event
@@ -1217,13 +1143,7 @@ impl Bars {
     }
 
     /// The one-line-per-pill summary the `status` verb prints.
-    ///
-    /// A status read should be true when it is printed, and the heartbeat may not
-    /// have produced a reading yet (in the first second of the bars' life, or if
-    /// the daemon was started a moment ago) - so take one now. That costs two
-    /// samples 200 ms apart, which is only ever paid here.
     fn status(&self) -> String {
-        *self.reading.borrow_mut() = Some(stats::read_now());
         self.refresh();
 
         let paint = self.paint.borrow();
@@ -1374,10 +1294,6 @@ impl Bars {
                     .map(|battery| format!("{}%", battery.percent))
                     .unwrap_or_else(|| "none".to_string())
             ),
-            format!(
-                "system     {}",
-                describe_stats(&self.reading.borrow(), self.updates.get())
-            ),
         ]
         .join("\n")
     }
@@ -1436,7 +1352,7 @@ impl Bars {
 }
 
 /// Paint one bar from the cached values.
-fn apply(view: &BarView, paint: &Paint, reading: Option<&Reading>, updates: i32) {
+fn apply(view: &BarView, paint: &Paint) {
     view.render_hypr(&paint.hypr);
     view.render_minimised(&paint.minimised);
     view.render_clock(&paint.clock, &paint.date);
@@ -1449,12 +1365,6 @@ fn apply(view: &BarView, paint: &Paint, reading: Option<&Reading>, updates: i32)
         view.set_network(network);
     }
     view.set_battery(paint.battery);
-    // The readings come from the heartbeat, which is the only thing that can take
-    // two CPU samples. Before the first one there is nothing honest to draw, and
-    // the pill stays away.
-    if let Some(reading) = reading {
-        view.render_stats(reading, updates);
-    }
 }
 
 /// Whether this tick is the one for an interval.
@@ -1462,39 +1372,6 @@ fn every(count: u64, interval_ms: u64, tick: Duration) -> bool {
     let tick_ms = tick.as_millis().max(1) as u64;
     let ticks = (interval_ms / tick_ms).max(1);
     count.is_multiple_of(ticks)
-}
-
-/// What to do when `checkupdates` answers: remember the count, and repaint.
-///
-/// A closure rather than an inline block, because the same thing has to happen
-/// for the start-up refresh and for the half-hourly one.
-fn refresher(bars: &Rc<Bars>) -> impl FnOnce(i32) + 'static {
-    let bars = bars.clone();
-    move |count| {
-        bars.updates.set(count);
-        bars.repaint();
-    }
-}
-
-/// The `status` line for the system info pill.
-fn describe_stats(reading: &Option<stats::Reading>, updates: i32) -> String {
-    let Some(reading) = reading else {
-        return "no reading yet (the bar samples once a second)".to_string();
-    };
-    let temperature = match reading.temperature {
-        Some(temperature) => format!("{temperature:.0}°C"),
-        None => "no sensor".to_string(),
-    };
-    format!(
-        "CPU {:.0}% · memory {:.0}% · {temperature} · {}",
-        reading.cpu,
-        reading.memory,
-        match updates {
-            0 => "no updates pending".to_string(),
-            1 => "1 pending update".to_string(),
-            count => format!("{count} pending updates"),
-        }
-    )
 }
 
 /// The current local time in a `strftime` format, through glib - the same C
@@ -1553,7 +1430,7 @@ mod tests {
         // ...and everything else is still on, because a bar that lost a pill
         // nobody asked it to lose would read as a bug.
         assert!(shows.apps && shows.workspaces && shows.title && shows.clock);
-        assert!(shows.stats && shows.status && shows.minimised && shows.power);
+        assert!(shows.status && shows.minimised && shows.power);
 
         let path = std::env::temp_dir().join("hypr-osd-bar-shows-default-test.conf");
         std::fs::write(&path, "height = 40\n").unwrap();

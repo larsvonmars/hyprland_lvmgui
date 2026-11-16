@@ -2,11 +2,11 @@
 //!
 //! Left: the button that opens the applications panel, then the workspaces, then
 //! the focused window's title. Centre: the player - the cover and the track, the
-//! one thing in the bar that is not about this machine. Right: the system info
-//! pill (CPU, memory, temperature, pending updates), the tray and the windows put
-//! away, the combined status pill (link, sound, battery), the power button - and
-//! at the far end the clock, which is also the handle for the island popup (hover
-//! it and the panel unfolds; see the `hypr-osd-island` element).
+//! one thing in the bar that is not about this machine, and the handle for the
+//! island popup (hover it and the panel unfolds; see the `hypr-osd-island`
+//! element). Right: the tray and the windows put away, the combined status pill
+//! (link, sound, battery), the power button - and at the far end the clock, which
+//! is a reading and nothing more.
 //!
 //! The view owns no state of its own beyond what the last render put on screen.
 //! Everything it shows is handed to it by `main` (a snapshot from Hyprland, a
@@ -22,7 +22,7 @@
 //!
 //! A finger changes two things here, both in the handlers rather than in the
 //! paint: a *tap* on one of the three handles (the applications button, the
-//! clock, the status pill) asks its panel to open pinned - `tap` instead of
+//! player, the status pill) asks its panel to open pinned - `tap` instead of
 //! `open`, because there is no pointer to leave and so no hover to close it -
 //! and the pointer's arrival no longer asks at all on a tablet, because GDK
 //! turns a tap into an emulated pointer that enters a pill and never leaves it.
@@ -44,7 +44,6 @@ use hypr_osd_core::art;
 use hypr_osd_core::hardware::{self as sources, Battery, Charging, Network, Volume};
 use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::Track;
-use hypr_osd_core::system::Reading;
 use hypr_osd_core::text;
 use hypr_osd_core::touch;
 use hypr_osd_core::windows::Window;
@@ -304,8 +303,7 @@ impl Pill {
 // The clock
 // ---------------------------------------------------------------------------
 
-/// The clock at the right end of the bar: the time over the small date, and the
-/// handle the island popup unfolds from.
+/// The clock at the right end of the bar: the time over the small date.
 ///
 /// It is not a [`Pill`]: a pill's face is a mark and a reading side by side, and
 /// this is two strings *stacked* - which is the point (the rice this bar follows
@@ -1173,8 +1171,6 @@ pub struct BarView {
     title: gtk::Label,
     clock: Clock,
     media: MediaPill,
-    /// The system info pill: what the machine is *doing*.
-    stats: Pill,
     /// The combined status pill: the link, the sound and the battery, and the
     /// handle the system popup unfolds from.
     status: Pill,
@@ -1281,19 +1277,20 @@ impl BarView {
 
         let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         left.add_css_class("section");
+        // Which screen edge this tab is welded to. The two outer tabs run into
+        // the corners of the screen, so their outer corners are square and only
+        // the one facing the bar is rounded (see `edge-left` in bar.css).
+        left.add_css_class("edge-left");
         left.append(&apps.button);
         left.append(&workspaces.root);
         left.append(&title);
 
         // --- centre: the player --------------------------------------------
         let media = MediaPill::new(icon, media_art, media_hint, settings.media_width);
-        // The click is bound with `touch::on_click` rather than the button's own
-        // `clicked`, because this pill has a long press beside it: on a release
-        // that followed one, the click stands down and only the long press's
-        // action runs (see `touch::on_click`).
-        touch::on_click(&media.button, move |_| {
-            sources::launch("playerctl", &["play-pause"]);
-        });
+        // The pointer's left click is play/pause, but a *finger's* tap unfolds the
+        // island instead - the panel is where the finger-sized transport lives.
+        // That handler is wired after the row is built, because the request
+        // measures the pill (see below).
         {
             // The previous track is on the middle button; GTK's `clicked` is
             // button 1 only, so it arrives as a gesture.
@@ -1322,63 +1319,26 @@ impl BarView {
             sources::launch("playerctl", &["next"]);
         });
 
-        // --- the clock: the island popup's handle, at the right end --------
+        // --- the clock, at the right end ------------------------------------
         let clock = Clock::new();
-        // Hovering the clock unfolds the island popup. The bar only *asks*: the
-        // island decides when to go away again, because leaving a popup is the
-        // pointer moving somewhere the bar cannot see (onto the popup itself).
-        //
-        // A finger is not a pointer, and asking here would be wrong twice: it
-        // has no hover, and GDK turns its tap into an emulated pointer that
-        // enters the pill and never leaves it. So a tablet's way in is the
-        // `tap` verb below, and this handler stays a pointer's.
-        let motion = gtk::EventControllerMotion::new();
+        // The clock is a reading now, not the island's handle - the player in the
+        // middle unfolds it. Its clicks still run the notification centre and
+        // do-not-disturb, which is what they always did; a long press is the same
+        // gesture on a touchscreen (see `touch::on_secondary`).
         {
-            let island = settings.island_command.clone();
-            let connector = connector.to_owned();
-            motion.connect_enter(move |motion, _, _| {
-                if touch::tablet() || from_finger(motion) {
-                    return;
-                }
-                // The island's own hot zone is the right end of the bar, where
-                // the clock now is, so the panel only needs to be told *which*
-                // bar - i.e. which monitor. It cannot look that up itself: the
-                // focused output is not necessarily the one this bar is on.
-                sources::launch(&island, &["open", &connector]);
-            });
-        }
-        clock.button.add_controller(motion);
-        {
-            let island = settings.island_command.clone();
             let notifications = settings.notifications_command.clone();
-            let connector = connector.to_owned();
-            // A finger's tap opens the island *pinned*: the island puts a tap
-            // catcher around its card, because the only way out of a hover popup
-            // is a pointer moving off it, and this screen has no pointer. A
-            // mouse's click keeps the gesture it always had - the notification
-            // centre - so the difference lives in this one flag, not in a second
-            // button.
-            touch::on_click(&clock.button, move |from_finger| {
-                if from_finger {
-                    sources::launch(&island, &["tap", &connector]);
-                } else {
-                    sources::launch(&notifications, &["-t", "-sw"]);
-                }
+            touch::on_click(&clock.button, move |_| {
+                sources::launch(&notifications, &["-t", "-sw"]);
             });
         }
         {
-            // Do-not-disturb had the right button; a long press is the same
-            // gesture on a touchscreen (see `touch::on_secondary`). The tap bound
-            // above is a `touch::on_click`, so it stands down for a release that
-            // followed this long press: holding the clock toggles do-not-disturb
-            // without also opening the island.
             let notifications = settings.notifications_command.clone();
             touch::on_secondary(&clock.button, move || {
                 sources::launch(&notifications, &["-d", "-sw"]);
             });
         }
 
-        // --- right: stats, tray, status, power, clock ----------------------
+        // --- right: tray, status, power, clock ------------------------------
         let tray = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         tray.add_css_class("tray");
 
@@ -1437,28 +1397,9 @@ impl BarView {
             });
         }
 
-        // The system info pill sits to the left of the status pill: what the
-        // machine is doing first, then what it is connected to and holding.
-        let stats = Pill::new("stats", icon);
-        if !settings.updates_command.is_empty() {
-            // The count is the one part of this pill with something behind it, and
-            // the old pill's tooltip promised exactly this: the full list, in a
-            // terminal (where it can be read at leisure and scrolls).
-            let terminal = settings.terminal_command.clone();
-            let command = settings.updates_command.clone();
-            stats.on_click(move || {
-                sources::launch(
-                    &terminal,
-                    &[
-                        "-e",
-                        "sh",
-                        "-c",
-                        &format!("{command}; printf '\\n-- press enter to close --\\n'; read _"),
-                    ],
-                );
-            });
-        }
-
+        // The power button closes the row: between the status pill and the
+        // clock, which keeps the dangerous button off the corner a pointer flies
+        // into.
         let power = Pill::new("power", power_icon);
         {
             let session = settings.session_command.clone();
@@ -1469,7 +1410,7 @@ impl BarView {
 
         let right = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         right.add_css_class("section");
-        right.append(&stats.button);
+        right.add_css_class("edge-right");
         right.append(&minimised);
         right.append(&tray);
         // The status pill sits to the right of the tray, where the rice puts its
@@ -1482,11 +1423,75 @@ impl BarView {
         right.append(&power.button);
         right.append(&clock.button);
 
+        // The three pills reach the surface's top edge: the bar paints nothing
+        // behind them, so their shapes are all that is on screen - and a tab that
+        // floated a few pixels down would be a pill again, not a tab. The height
+        // is the one the surface was made with (a fold makes it taller), which is
+        // why it is asked here rather than written in CSS.
+        let pill_height = settings.bar_height(tablet);
+        for section in [&left, &right] {
+            section.set_size_request(-1, pill_height);
+        }
+        media.button.set_size_request(-1, pill_height);
+
         // --- the row -------------------------------------------------------
         let root = gtk::CenterBox::new();
         root.set_start_widget(Some(&left));
         root.set_center_widget(Some(&media.button));
         root.set_end_widget(Some(&right));
+
+        // The player is the island popup's handle: the pointer arriving on it
+        // *asks* the island to unfold, and a finger's tap opens it pinned - the
+        // same pair of gestures the clock carried when it was the bar's centre
+        // child. The island decides when to go away again, because leaving a
+        // popup is the pointer moving somewhere the bar cannot see (onto the
+        // popup itself).
+        //
+        // The bar sends the pill's own rectangle, measured inside the bar's card,
+        // because the player is as wide as its track: a fixed strip would be
+        // either narrower than the pill or wide enough to reach the workspaces.
+        // Wired here rather than with the transport bindings, because measuring
+        // the pill needs the widget tree it ends up in.
+        {
+            let island = settings.island_command.clone();
+            let pill = media.button.clone();
+            let root = root.clone();
+            let connector = connector.to_owned();
+            let ask = Rc::new(move |verb: &str| {
+                let mut args: Vec<String> = vec![verb.to_string(), connector.clone()];
+                if let Some(card) = root.parent() {
+                    if let Some(bounds) = bounds_in(&pill, &card) {
+                        args.extend(bounds.iter().map(|value| format!("{value:.0}")));
+                    }
+                }
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                sources::launch(&island, &refs);
+            });
+            {
+                let ask = ask.clone();
+                let motion = gtk::EventControllerMotion::new();
+                motion.connect_enter(move |motion, _, _| {
+                    // A finger has no hover, and GDK turns its tap into an
+                    // emulated pointer that enters the pill and never leaves.
+                    if touch::tablet() || from_finger(motion) {
+                        return;
+                    }
+                    ask("open");
+                });
+                media.button.add_controller(motion);
+            }
+            // A pointer's click is play/pause; a finger's tap is the island,
+            // whose transport is sized for it. The binding is a
+            // `touch::on_click` so it can tell the two apart, and so the long
+            // press beside it (next track) takes precedence.
+            touch::on_click(&media.button, move |from_finger| {
+                if from_finger {
+                    ask("tap");
+                } else {
+                    sources::launch("playerctl", &["play-pause"]);
+                }
+            });
+        }
 
         // The applications button's handles: the pointer arriving on it, and a
         // press. Both ask the panel to open - with the connector the bar is on
@@ -1601,7 +1606,6 @@ impl BarView {
             title,
             clock,
             media,
-            stats,
             status,
             tray,
             minimised,
@@ -1620,9 +1624,6 @@ impl BarView {
         this.apps
             .tooltip(Some("Applications: everything installed, in drawers"));
         this.media.set_visible(false);
-        // The system info pill has nothing to show until the second CPU sample
-        // a second from now; it is filled in by the first real reading.
-        this.stats.set_visible(false);
         // And the status pill waits for the first readings of all three of its
         // parts, which is the first `refresh`.
         this.status.set_visible(false);
@@ -1736,11 +1737,10 @@ impl BarView {
         self.clock.render(time, date);
     }
 
-    /// Whether the island popup is on screen, so the clock can light up while
-    /// the panel is unfolded - the same feedback the pill and its window shared
-    /// before.
+    /// Whether the island popup is on screen, so the player pill can light up
+    /// while the panel is unfolded - the pill and its window read as one object.
     pub fn set_island_open(&self, open: bool) {
-        set_class(&self.clock.button, "panel-open", open);
+        set_class(&self.media.button, "panel-open", open);
     }
 
     /// The same for the system popup and the status pill. Two flags, because the
@@ -1885,52 +1885,6 @@ impl BarView {
         }
         self.media.render(track, playing);
     }
-
-    /// The system info pill: CPU, memory, temperature, and how many updates are
-    /// waiting.
-    ///
-    /// The readings and the update count are one pill on purpose (that is how the
-    /// bar this replaces had them): a machine that is busy *and* has 40 updates
-    /// waiting is one story about the machine, and the state colour is the same
-    /// answer either way - amber for "have a look", red for "look now".
-    pub fn render_stats(&self, reading: &Reading, updates: i32) {
-        let mut parts = vec![
-            Part::new(names::CPU, format!("{:.0}%", reading.cpu)),
-            Part::new(names::MEMORY, format!("{:.0}%", reading.memory)),
-        ];
-        // A machine with no such sensor says nothing rather than 0°.
-        if let Some(temperature) = reading.temperature {
-            parts.push(Part::new(names::TEMPERATURE, format!("{temperature:.0}°")));
-        }
-        if updates > 0 {
-            // Bold, the way the update count stood out before: it is the one
-            // number here that is a *task* rather than a reading.
-            parts.push(Part::new(names::UPDATES, format!("<b>{updates}</b>")));
-        }
-        self.stats.set(
-            &parts,
-            &[
-                ("warning", reading.warning()),
-                ("critical", reading.critical()),
-                ("updates", updates > 0),
-            ],
-        );
-
-        let mut tooltip = vec![format!("CPU: {:.0}%", reading.cpu)];
-        tooltip.push(format!("Memory: {:.0}%", reading.memory));
-        tooltip.push(match reading.temperature {
-            Some(temperature) => format!("Temperature: {temperature:.0}°C"),
-            None => "Temperature: no sensor".to_string(),
-        });
-        tooltip.push(match updates {
-            0 => "No updates pending".to_string(),
-            1 => "1 pending update".to_string(),
-            count => format!("{count} pending updates"),
-        });
-        tooltip.push("Left click: the list, in a terminal".to_string());
-        self.stats.tooltip(Some(&tooltip.join("\n")));
-        self.stats.set_visible(self.shows.stats);
-    }
 }
 
 /// What a put-away window is drawn as: the application's icon, or its first
@@ -1966,7 +1920,7 @@ fn picture(window: &Window, size: i32) -> gtk::Widget {
 /// here - but the event the controller is handling can. That is what keeps a
 /// *laptop* session usable with a touchscreen: with the Type Cover attached the
 /// machine is not a tablet (so the pill is pointer-sized and `tablet()` is
-/// false), and a finger touching the clock still must not be mistaken for a
+/// false), and a finger touching the player still must not be mistaken for a
 /// pointer *hovering* it - the panel would open on the dwell and then stay up,
 /// because the emulated pointer never leaves.
 fn from_finger(controller: &impl IsA<gtk::EventController>) -> bool {

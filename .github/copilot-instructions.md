@@ -28,7 +28,7 @@ hands the shell a `Content::PerOutput` factory and the shell calls it once per
 output (`Osd::sync_outputs`); the bar keys its views by connector and paints them
 all from one set of readings. One of them carries the session's tray.
 
-See also `crates/hypr-osd-island` (the panel under the clock: a player tile that
+See also `crates/hypr-osd-island` (the panel under the bar's player pill: a player tile that
 carries the cover, the transport, shuffle/repeat, the player's own volume and a
 chip per running player - and reads MPRIS itself, because a click on its progress
 bar or a chip changes what it shows; its notification hub is read in two halves:
@@ -101,8 +101,9 @@ button on hover, like the island and the system popup).
   `theme.css` when the file leaves one unset, like the lock screen's, and
   `install_script()` is the installer the page runs through sudo).
 - `crates/hypr-osd-bar/` — the bar: `main.rs` (verbs, settings, and one
-  `BarView` per monitor painted from one set of readings), `view.rs` (the pills,
-  and the workspace row's accent capsule, which glides to the new pill from a
+  `BarView` per monitor painted from one set of readings), `view.rs` (the pills
+  and the three clusters: left corner, the player in the middle, right corner;
+  plus the workspace row's accent capsule, which glides to the new pill from a
   tick callback because GTK CSS cannot animate a widget's position),
   `hypr.rs` (the workspace row and title, from the event socket), `tray.rs` (the
   StatusNotifier host), `bar.css`. Its far-left pill is the applications button:

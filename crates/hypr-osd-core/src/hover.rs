@@ -218,6 +218,48 @@ pub fn panel_rect(monitor: Rect, bar: BarGeometry, side: Side, size: (f64, f64))
     }
 }
 
+/// The `open` arguments a bar sends a panel: the connector the bar is on, and
+/// the pill's rectangle inside the bar's card.
+///
+/// Both are optional, and positional, so the connector is found by looking for
+/// the first number instead of by counting: the bar sends
+/// `open eDP-1 1097 5 192 28`, and a hand-typed `open 1097 5 192 28` does the
+/// sensible thing too. All three panels read this line, so the parser lives here
+/// rather than three times in their `open` arms.
+pub fn parse_open(args: &[String]) -> (Option<String>, Option<Rect>) {
+    let start = args.iter().position(|arg| arg.parse::<f64>().is_ok());
+    let rect = start.and_then(|index| parse_rect(&args[index..]));
+    let connector = match start {
+        // Everything before the numbers is the connector; it has no spaces, so
+        // the word right in front of the rectangle is the one.
+        Some(index) => index
+            .checked_sub(1)
+            .and_then(|index| args.get(index))
+            .cloned(),
+        // No rectangle at all: the first word is the connector (`open eDP-1`).
+        None => args.first().filter(|arg| !arg.is_empty()).cloned(),
+    };
+    (connector, rect)
+}
+
+/// The four numbers a bar sends with `open`, or `None` when it did not.
+pub fn parse_rect(args: &[String]) -> Option<Rect> {
+    let numbers: Vec<f64> = args
+        .iter()
+        .filter_map(|value| value.parse().ok())
+        .take(4)
+        .collect();
+    match numbers[..] {
+        [x, y, width, height] if width > 0.0 && height > 0.0 => Some(Rect {
+            x,
+            y,
+            width,
+            height,
+        }),
+        _ => None,
+    }
+}
+
 /// What the island should do about a pointer sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -541,6 +583,40 @@ mod tests {
             panel.y,
             monitor.y + bar.margin_top + bar.height + bar.gap + bar.shadow_pad
         );
+    }
+
+    #[test]
+    fn the_open_arguments_are_the_connector_and_the_pills_rectangle() {
+        let words = |list: &[&str]| -> Vec<String> { list.iter().map(|w| w.to_string()).collect() };
+
+        // What the bar sends: the connector, then the pill inside the bar's card.
+        let (connector, pill) = parse_open(&words(&["eDP-1", "720", "5", "400", "28"]));
+        assert_eq!(connector.as_deref(), Some("eDP-1"));
+        assert_eq!(
+            pill,
+            Some(Rect {
+                x: 720.0,
+                y: 5.0,
+                width: 400.0,
+                height: 28.0,
+            })
+        );
+
+        // The connector is optional; a hand-typed `open` with just a rectangle
+        // still opens the panel where the pointer is.
+        let (connector, pill) = parse_open(&words(&["720", "5", "400", "28"]));
+        assert_eq!(connector, None);
+        assert!(pill.is_some());
+
+        // And so is the rectangle: the panel then falls back to the derived zone.
+        let (connector, pill) = parse_open(&words(&["DP-1"]));
+        assert_eq!(connector.as_deref(), Some("DP-1"));
+        assert_eq!(pill, None);
+        assert_eq!(parse_open(&[]), (None, None));
+
+        // A degenerate rectangle is not one: a zero-width pill would be a hole
+        // the pointer can never be in, so it is treated as "not sent".
+        assert_eq!(parse_rect(&words(&["0", "5", "0", "28"])), None);
     }
 
     #[test]

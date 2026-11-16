@@ -248,11 +248,12 @@ if [ ! -f "$OSD_CONFIG_DIR/bar.conf" ]; then
 # The palette is NOT here: it lives in ~/.config/hypr-osd/theme.css, which the
 # bar reads at start-up and paints itself from.
 
-# The bar's geometry, in pixels: it floats below the top edge with an equal
-# margin at each side.
+# The bar's geometry, in pixels: its pills hang from the very top edge and reach
+# the left and right screen edges (0 is what welds them to all three), and nothing
+# is painted behind them.
 height = 40
-margin_top = 8
-margin_x = 12
+margin_top = 0
+margin_x = 0
 
 # Whether the bar reserves its strip with the compositor. On, tiled windows are
 # laid out below it; off, they slide under it.
@@ -271,15 +272,14 @@ output =
 # whole answer to "my bar has too much on it": a bar with only the clock and the
 # status pill is four `false` lines, and nothing else has to be touched.
 #
-# The two handles go with their pills: hiding the clock takes the island popup's
+# The two handles go with their pills: hiding the player takes the island popup's
 # trigger with it, and hiding the status pill takes the system popup's - so keep
 # `show_status` on if the settings window is how you change all this.
 show_apps = true          # the grid button that opens the applications panel
 show_workspaces = true    # the row of workspace pills
 show_title = true         # the focused window's title
-show_clock = true         # the clock (and the island popup's handle)
-show_media = true         # what is playing
-show_stats = true         # CPU, memory, temperature, pending updates
+show_clock = true         # the clock at the right end (time over the date)
+show_media = true         # the player in the middle (and the island popup's handle)
 show_status = true        # link/sound/battery (and the system popup's handle)
 show_tray = true          # the application indicators (off: the names are not claimed)
 show_minimised = true     # the windows put away with SUPER + H
@@ -317,26 +317,12 @@ network_interface = wlan0
 tray_icon_size = 18
 
 # The heartbeat, in milliseconds, and how often each source is read. The tick is
-# the clock's resolution; the three intervals are how often the slow pills are
-# refreshed, counted in ticks (so `volume_every_ms = 1000` with a 1000 ms tick
-# means every tick).
+# the clock's resolution; the intervals are how often the slow parts of the
+# status pill are refreshed.
 tick_ms = 1000
 volume_every_ms = 1000
 network_every_ms = 5000
 battery_every_ms = 30000
-
-# The system info pill (CPU, memory, temperature). Three file reads, so it keeps
-# up with the heartbeat - the CPU number is a delta between two of them, which is
-# why the pill appears on the second tick rather than the first.
-stats_every_ms = 1000
-
-# The pending-update count in the same pill. It comes from `checkupdates`, which
-# syncs a throwaway pacman database and takes a second or two, so its answer is
-# cached in a file and believed for half an hour; this is how often a stale cache
-# is refreshed, in the background. Leave `updates_command` empty to drop the
-# count and show the three readings alone.
-updates_every_ms = 1800000
-updates_command = checkupdates
 
 # How often Hyprland is re-read even with no event, and how often MPRIS is asked
 # again. The Hyprland event socket and `playerctl --follow` are the real
@@ -364,8 +350,6 @@ notifications_command = swaync-client
 # a click) asks this element to open the applications panel (the drawer of every
 # installed application).
 apps_command = __BIN_DIR__/hypr-osd-apps
-# Where the popups put the things they open: btop, nmtui, bluetoothctl, pacman.
-terminal_command = kitty
 EOF
   sed -i "s|__BIN_DIR__|$BIN_DIR|g" "$OSD_CONFIG_DIR/bar.conf"
   echo "   -> $OSD_CONFIG_DIR/bar.conf (new)"
@@ -403,8 +387,8 @@ if [ ! -f "$OSD_CONFIG_DIR/island.conf" ]; then
 # match ~/.config/hypr-osd/bar.conf: the bar tells the panel nothing, it works
 # the geometry out from these numbers.
 bar_height = 40
-bar_margin_top = 8
-bar_margin_x = 12
+bar_margin_top = 0
+bar_margin_x = 0
 
 # The distance between the bar's bottom edge and the panel's top edge.
 gap = 6
@@ -471,8 +455,8 @@ if [ ! -f "$OSD_CONFIG_DIR/stats.conf" ]; then
 # Where the bar is, so the panel can hang below it and line its right edge up
 # with the bar's. These have to match ~/.config/hypr-osd/bar.conf.
 bar_height = 40
-bar_margin_top = 8
-bar_margin_x = 12
+bar_margin_top = 0
+bar_margin_x = 0
 
 # The distance between the bar's bottom edge and the panel's top edge.
 gap = 6
@@ -814,8 +798,8 @@ tile_gap = 6
 # ~/.config/hypr-osd/bar.conf: the bar tells the panel nothing, it works the
 # geometry out from these numbers.
 bar_height = 40
-bar_margin_top = 8
-bar_margin_x = 12
+bar_margin_top = 0
+bar_margin_x = 0
 
 # The distance between the bar's bottom edge and the panel's top edge.
 gap = 6

@@ -25,7 +25,7 @@ own it while they are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
-| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen — and **every one of those parts can be switched off** (the settings window's Bar page, or the `show_*` keys in `bar.conf`), so the bar can be anything from all of it to a clock and a status pill. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup, and the same on the grid button at the left end unfolds the applications panel. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
+| The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the combined status pill (link, sound, battery), clock and the power button, across the top of every screen - in **three isolated pills**: one in the left corner, the player in the middle, one in the right corner. **Every part can be switched off** (the settings window's Bar page, or the `show_*` keys in `bar.conf`), so the bar can be anything from all of it to a clock and a status pill. Hovering the player unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup, and the same on the grid button at the left end unfolds the applications panel. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
 | Island popup | `hypr-osd-island` | What is playing (cover, title, artist, progress with click-to-seek, shuffle/previous/play/next/repeat, the player's own volume and a chip per player), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
 | System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. Its header's **gear** opens the settings window, and the bluetooth tile's **Manage** chip opens the bluetooth manager. |
 | Bluetooth manager | `hypr-osd-bluetooth` | Every device BlueZ knows — paired and merely nearby — with its kind, battery and link quality, the one action that fits its state (connect, disconnect, pair, forget), a filter, a scan and the controller's power and visibility switches. The card the system popup's bluetooth tile opens instead of a terminal full of `bluetoothctl` — see [Bluetooth manager](#bluetooth-manager). |
@@ -58,7 +58,7 @@ crates/
                        icons, the machine's own keyboard layouts and variants, and
                        the two ways to run a command without blocking
   hypr-osd-bar/        the bar, and the StatusNotifier tray host it carries
-  hypr-osd-island/     the popup that unfolds from the clock
+  hypr-osd-island/     the popup that unfolds from the player pill
   hypr-osd-stats/      the system popup under the status pill
   hypr-osd-bluetooth/ element #10: the bluetooth manager (the popup's Manage chip)
   hypr-osd-volume/     element #1: the volume card
@@ -125,7 +125,7 @@ consistent with every other surface on the desktop.
 ```sh
 # after editing ~/.config/hypr-osd/theme.css
 pkill -f hypr-osd-bar;     hypr-osd-bar &        # the bar (and its tray)
-pkill -f hypr-osd-island;  hypr-osd-island &     # the popup under the clock
+pkill -f hypr-osd-island;  hypr-osd-island &     # the popup under the player pill
 ```
 
 ## Install
@@ -282,8 +282,9 @@ webview, no Node build), with one difference that is the whole point of it:
 bar is a grid of squares; the pointer resting on it asks this element to `open`
 (the pill lights up in the accent while the panel is up), and the panel takes
 itself away again once the pointer has left both the button and the panel — the
-same gesture as the island under the clock and the system popup under the status
-pill. A launcher you have to remember a key for is one you use when you already
+same gesture as the island under the player pill and the system popup under the
+status pill. A launcher you have to remember a key for is one you use when you
+already
 know what you want to run; a grid of everything installed is what you use when you
 do not, and the pointer is already on the bar. `osd.lua` has a commented
 `SUPER + A` bind if you want a key for it as well.
@@ -729,21 +730,30 @@ placed by its alignment alone. It has no key of its own: it follows GTK's
 animations switch (`gtk-enable-animations`), the accessibility switch for
 motion.
 
-The middle is the player, the one pill that is not about this machine: the cover
-art (from `mpris:artUrl`, decoded from a file or fetched with `curl` through
+The middle is the player, the one pill that is not about this machine - and the
+island popup's handle: hover it and the panel unfolds below it. It carries the
+cover art (from `mpris:artUrl`, decoded from a file or fetched with `curl` through
 `core::art`; the player's own mark stands in while it loads and when the player
-publishes none), the track and its artist — click to play/pause, right-click for
-the next track, middle-click for the previous one, wheel to seek.
+publishes none), the track and its artist, and a small play/pause mark - click to
+play/pause, right-click for the next track, middle-click for the previous one,
+wheel to seek. A finger's tap opens the island instead, where the transport is
+sized for it.
 
-Right: the **system info pill** — CPU load, memory in use, package temperature and
-the number of pending updates, with the same amber/red thresholds the old bar used
-(CPU 60/85 %, memory 70/90 %, temperature 75/90 °C) — then the tray and the windows
-put away, the **combined status pill** (the link, the sound and the battery, and
-the handle that unfolds the system popup: hover or click it, right-click to toggle
-the wireless radio, middle-click to mute the microphone, wheel to step the volume
-*through the volume element*), the power button (which opens the session card) and,
-last, the clock: the time over the date, and the handle the island popup unfolds
-from. Every pill has a tooltip with the whole story behind it.
+Right: the tray and the windows put away, the **combined status pill** (the link,
+the sound and the battery, and the handle that unfolds the system popup: hover or
+click it, right-click to toggle the wireless radio, middle-click to mute the
+microphone, wheel to step the volume *through the volume element*), the power
+button (which opens the session card) and, last, the clock: the time over the
+date. Every pill has a tooltip with the whole story behind it.
+
+The left and right parts are one *tab* each, and the player is the third - three
+pills with the wallpaper showing between them. **The bar paints nothing behind
+them**: its surface is transparent, `bar.conf`'s `margin_top` and `margin_x` are
+0, and so each outer tab is welded into a screen corner - square where it meets
+the top and side borders, a deep 22px curve only on the corner facing the
+desktop, with a warm gradient pouring down from the edge. The strip the surface
+still occupies is what the compositor reserves, so tiled windows start below the
+tabs rather than under them.
 
 The tray at the right end carries two kinds of icon. The **application
 indicators** (Steam, the Nextcloud client, nm-applet …) come from the
@@ -763,19 +773,19 @@ are on). A put-away window is on `special:minimized`, one workspace name rather
 than a mechanism of the bar's own, which is why the switcher and the overview
 leave it out: they offer the windows you can actually switch to.
 
-**`hypr-osd-island` — the clock's popup**
+**`hypr-osd-island` — the player's popup**
 
 ```sh
-hypr-osd-island open    # what hovering the bar's clock runs
+hypr-osd-island open    # what hovering the bar's player pill runs
 hypr-osd-island close   # take it away
 hypr-osd-island toggle  # close it if it is up, otherwise show it
 hypr-osd-island show    # put it up and keep it there (no pointer tracking)
 hypr-osd-island status  # what the panel would show, without showing it
 ```
 
-Hovering the clock in the bar unfolds a panel below it: the time and date, the
-player below, the notification hub, and a calendar you can page through by month,
-with today in the accent colour.
+Hovering the player pill in the bar unfolds a panel below it: the time and date,
+the player below, the notification hub, and a calendar you can page through by
+month, with today in the accent colour.
 
 **The player** is everything MPRIS offers except the queue. The cover comes from
 `mpris:artUrl` (a `file://` URL decoded, an `http(s)://` one fetched with `curl`,
@@ -824,7 +834,7 @@ and the buttons still work.
 The island is a program of its own because a GTK widget can never paint outside
 its own window: an "expansion" of a 40-pixel pill is necessarily a second
 layer-shell surface. It also does the hover logic itself — the bar only says
-"the pointer is on the clock" (`open`), and the panel then samples the pointer to
+"the pointer is on the player pill" (`open`), and the panel then samples the pointer to
 decide when to appear and when to go away, because *leaving* means moving onto
 the panel, somewhere the bar cannot see. Nothing is sampled while the panel is
 closed, so an island that nobody is hovering costs nothing at all.
@@ -1207,7 +1217,7 @@ keyboard, and nothing else. On a laptop the script is just the locker.
 | right click on the media pill | long press | next track |
 | middle click on the status pill | — | microphone mute lives in the system popup's sound row on a touchscreen |
 | wheel on the status pill | two-finger swipe up/down | the volume, one step per gesture |
-| hover the clock / status pill / grid button | tap | the island / system popup / applications panel, pinned with a tap catcher |
+| hover the player pill / status pill / grid button | tap | the island / system popup / applications panel, pinned with a tap catcher |
 
 The bar's pills keep their pointer behaviour unchanged, including the wheel and
 the right and middle buttons; the touchscreen is an *addition*, not a
@@ -1307,11 +1317,11 @@ documented in [Touch](#touchconf).
 | Key | Default | |
 | --- | --- | --- |
 | `height` | `40` | the bar's height in pixels |
-| `margin_top` | `8` | how far below the top edge it floats |
-| `margin_x` | `12` | the inset at each side |
+| `margin_top` | `0` | how far below the top edge it floats - 0 is what welds its pills to the edge |
+| `margin_x` | `0` | the inset at each side - 0 welds the outer tabs to the left and right screen edges |
 | `exclusive` | `true` | reserve the strip with the compositor, so windows start below it |
 | `output` | *(empty)* | the connector to put the bar on, and *only* that one; empty = a bar on every monitor |
-| `show_apps`, `show_workspaces`, `show_title`, `show_clock`, `show_media`, `show_stats`, `show_status`, `show_tray`, `show_minimised`, `show_power` | all `true` | **what is on the bar**, one switch each in the settings window's Bar page: a part switched off is not built, not read and not drawn. The two handles go with their pills — hiding the clock takes the island popup's trigger with it, hiding the status pill takes the system popup's (and with `show_tray = false` the bar does not claim the tray's D-Bus names at all) |
+| `show_apps`, `show_workspaces`, `show_title`, `show_clock`, `show_media`, `show_status`, `show_tray`, `show_minimised`, `show_power` | all `true` | **what is on the bar**, one switch each in the settings window's Bar page: a part switched off is not built, not read and not drawn. The two handles go with their pills — hiding the player takes the island popup's trigger with it, hiding the status pill takes the system popup's (and with `show_tray = false` the bar does not claim the tray's D-Bus names at all) |
 | `workspaces` | `5` | how many numbered workspaces the row keeps room for |
 | `title_width` | `320` | how much room the window title may take before it is ellipsised |
 | `media_width` | `340` | the same for the player in the middle of the bar |
@@ -1321,18 +1331,14 @@ documented in [Touch](#touchconf).
 | `network_interface` | `wlan0` | the wireless interface to read through `iw` |
 | `tray_icon_size` | `18` | tray icon size in pixels (the application indicators and the put-away windows alike) |
 | `tick_ms` | `1000` | the heartbeat; the clock's resolution |
-| `volume_every_ms`, `network_every_ms`, `battery_every_ms` | `1000`, `5000`, `30000` | how often the slow pills are re-read |
-| `stats_every_ms` | `1000` | how often CPU, memory and temperature are read |
-| `updates_every_ms` | `1800000` | how often a stale update count is refreshed (half an hour) |
-| `updates_command` | `checkupdates` | what prints the pending-update list; empty turns the count off |
+| `volume_every_ms`, `network_every_ms`, `battery_every_ms` | `1000`, `5000`, `30000` | how often the slow parts of the status pill are re-read |
 | `resync_every_ms` | `5000` | how often Hyprland and MPRIS are re-read even with no event |
 | `volume_command` | `hypr-osd-volume` | what the volume pill's click and wheel run |
 | `session_command` | `hypr-osd-session` | what the power button runs |
-| `island_command` | `hypr-osd-island` | what the clock's hover runs |
+| `island_command` | `hypr-osd-island` | what the player's hover runs |
 | `stats_command` | `hypr-osd-stats` | what the status pill's hover and click run |
 | `apps_command` | `hypr-osd-apps` | what the grid button at the bar's **left** end runs (the pointer arriving on it asks the panel to `open`) |
 | `notifications_command` | `swaync-client` | what the clock's clicks run |
-| `terminal_command` | `kitty` | the terminal the network pill opens `nmtui` in |
 
 The bar is event driven: Hyprland's own event socket drives the workspace row and
 the title, and `playerctl --follow` drives the media pill. The `*_every_ms` keys
@@ -1344,23 +1350,23 @@ net for an event socket that quietly died.
 
 | Key | Default | |
 | --- | --- | --- |
-| `bar_height`, `bar_margin_top` | `40`, `8` | where the bar is — these have to match `bar.conf` |
+| `bar_height`, `bar_margin_top` | `40`, `0` | where the bar is — these have to match `bar.conf` |
 | `gap` | `6` | the distance between the bar's bottom edge and the panel |
-| `hot_width` | `120` | how wide the hover zone at the bar's **right** end is: the clock, the power button beside it and the margins between them |
+| `hot_width` | `280` | the fallback hover strip in the bar's middle, for an `open` typed by hand without the pill's rectangle |
 | `left_width`, `right_width` | `252`, `178` | the panel's two columns |
-| `open_delay_ms` | `120` | how long the pointer has to rest on the clock before the panel opens |
+| `open_delay_ms` | `120` | how long the pointer has to rest on the player before the panel opens |
 | `close_delay_ms` | `300` | how long it may be away before the panel closes |
 | `poll_ms` | `50` | how often the pointer is sampled, while the panel matters |
 | `tick_ms` | `1000` | the clock's resolution |
 | `media_every_ms` | `700` | how often the progress bar is refreshed while the panel is up |
 | `notifications_command` | `swaync-client` | what the hub's buttons run |
 
-The panel is told nothing by the bar: it works the bar's geometry out from
-`bar_height`, `bar_margin_top` and `gap`, which is why those three have to agree
-with `bar.conf`. The hover zone is derived rather than measured, because the
-clock is the bar's last child and therefore always at its right end - and the
-panel lines its own right edge up with the bar's, the same rule the system popup
-follows (`Placement::TopRight`).
+The panel is told where the bar is through `bar_height`, `bar_margin_top` and
+`gap`, which is why those three have to agree with `bar.conf`. The pill's hot zone
+is not derived: the player is as wide as its track, so the bar measures the pill
+and sends the rectangle with `open` (`hot_width` is only the fallback for a
+hand-typed one). The panel centres itself on the bar (`Placement::TopCard`), the
+same way the player is centred in it.
 
 **`volume.conf`**
 
@@ -1457,7 +1463,7 @@ stand-in the switcher uses.
 | `icon_size` | `40` | application icon size in pixels |
 | `tile_gap` | `6` | space between tiles, and between rows of them |
 | `gap` | `6` | the distance between the bar's bottom edge and the panel's top edge |
-| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `8`, `12` | where the bar is — these have to match `bar.conf` |
+| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `0`, `0` | where the bar is — these have to match `bar.conf` |
 | `hot_width` | `60` | the fallback hover strip at the bar's left end, for an `open` typed by hand without the button's rectangle |
 | `open_delay_ms`, `close_delay_ms` | `120`, `300` | how long the pointer rests on the button before the panel opens, and how long it may be away before it closes |
 | `poll_ms` | `50` | how often the pointer is sampled, while the panel matters |
@@ -1500,7 +1506,7 @@ tile can never disagree about what a device is doing.
 | Key | Default | |
 | --- | --- | --- |
 | `left_width`, `right_width` | `260`, `240` | the panel's two columns: the load on the left, the controls on the right. Both are *floors* — a widget the theme will not let be narrower (a slider's trough, a progress bar) wins over them |
-| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `8`, `12` | where the bar is — these have to match `bar.conf` |
+| `bar_height`, `bar_margin_top`, `bar_margin_x` | `40`, `0`, `0` | where the bar is — these have to match `bar.conf` |
 | `gap` | `6` | the distance between the bar's bottom edge and the panel |
 | `hot_width` | `240` | the fallback hover strip at the bar's right end, for an `open` typed by hand without the pill's rectangle |
 | `open_delay_ms`, `close_delay_ms` | `120`, `300` | how long the pointer rests before it opens, and how long it may be away before it closes |
@@ -2046,8 +2052,8 @@ Debugging:
 | A right click on a tray icon does nothing | The item has no `ContextMenu` of its own, and the bar does not draw `dbusmenu` menus — see [How it works](#how-it-works). The left click is the one that works everywhere. |
 | A put-away window is missing from `ALT + TAB` | That is what putting it away means: the switcher and the overview offer the windows you can switch to, and the tray is where a put-away window is offered instead. `hypr-osd-bar minimised` names them. |
 | A put-away window came back to the wrong workspace | It is on the workspace you were on, because the bar was restarted or replaced in between and the workspace it came from went with the old process: the icon's tooltip said so before you clicked it. Click it on the workspace it belongs on, or move it there. |
-| The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Is `island.conf`'s `hot_width` wide enough for the clock pill (it is the strip at the bar's right end), and do `bar_height`/`bar_margin_top` match `bar.conf`? `hypr-osd-island status` prints the geometry it works with. |
-| The island opens or closes too eagerly | `open_delay_ms` and `close_delay_ms` in `island.conf`: the first is how long the pointer has to rest on the clock, the second how long it may be away before the panel closes. |
+| The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Does `bar_height`/`bar_margin_top` match `bar.conf` (the panel's hot zone is the pill the bar measured and sent, so `hot_width` is only the fallback for a hand-typed `open`)? `hypr-osd-island status` prints the geometry it works with. |
+| The island opens or closes too eagerly | `open_delay_ms` and `close_delay_ms` in `island.conf`: the first is how long the pointer has to rest on the player pill, the second how long it may be away before the panel closes. |
 | The clock pill stays lit with no panel behind it | A stale “panel is open” flag — the island writes it on show/hide, so a `kill` leaves it behind. It is cleared at start-up: `pkill -f hypr-osd-island; hypr-osd-island &`. |
 | The bar's clock says the wrong time | It ticks once a second by default; `tick_ms` in `bar.conf` is the resolution (and the clock's `strftime` format is `clock_format`). |
 | No card, but the volume changes | The daemon died — check its stderr, and `pgrep -x hypr-osd-volume`. On a session without `gtk4-layer-shell` it cannot create the surface at all. |

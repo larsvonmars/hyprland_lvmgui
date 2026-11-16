@@ -1,9 +1,9 @@
-//! `hypr-osd-island` - the panel that unfolds from the bar's clock.
+//! `hypr-osd-island` - the panel that unfolds from the bar's player pill.
 //!
-//! The bar's clock pill is the handle; this is what comes out of it. Hovering the
-//! clock asks this program to open (`hypr-osd-island open`), and from then on the
-//! panel looks after itself: it samples the pointer until either the dwell is up
-//! (open) or the pointer has been away long enough (close), because *leaving*
+//! The bar's player pill is the handle; this is what comes out of it. Hovering
+//! the pill asks this program to open (`hypr-osd-island open`), and from then on
+//! the panel looks after itself: it samples the pointer until either the dwell is
+//! up (open) or the pointer has been away long enough (close), because *leaving*
 //! means moving onto the panel itself - somewhere the bar cannot see.
 //!
 //! It is a separate program from the bar on purpose. A GTK widget can never paint
@@ -15,12 +15,17 @@
 //! Verbs (`hypr-osd-island <verb>`):
 //!
 //! ```text
-//!   open [connector]     start watching: the panel appears if the pointer stays.
+//!   open [connector] [x y w h]
+//!                        start watching: the panel appears if the pointer stays.
 //!                        The connector is the monitor the bar is on, which is
 //!                        what the hot zone is measured against (the bar is
 //!                        pinned to the output it started on, and that is not
-//!                        always the focused one).
-//!   tap [connector]      a finger tapped the clock: open *now*, pinned, with a
+//!                        always the focused one). The four numbers are the
+//!                        player pill's rectangle inside the bar's card - the
+//!                        bar measures it, because the pill is as wide as its
+//!                        track.
+//!   tap [connector] [x y w h]
+//!                        a finger tapped the player: open *now*, pinned, with a
 //!                        tap catcher around the card - a second tap (or one
 //!                        anywhere outside the card) takes it away. Same
 //!                        arguments as `open`, because it is the same request
@@ -34,12 +39,12 @@
 //! ```
 //!
 //! A **finger** never uses the hover machine at all: it has no pointer to rest
-//! on the clock and none to move away afterwards, and GDK turns its tap into an
+//! on the player and none to move away afterwards, and GDK turns its tap into an
 //! emulated pointer that stays where the finger lifted. So the bar sends `tap`
 //! instead of `open`, and this panel opens pinned with a *tap catcher* around
 //! its card (see `Osd::tap_catcher`) - a dimmed surface whose four bands turn a
 //! tap anywhere else into "close". Any other way out (a `close`, a `toggle`, the
-//! bar's clock tapped again) takes the catcher down with it; `Osd::hide` would
+//! bar's player tapped again) takes the catcher down with it; `Osd::hide` would
 //! hide it as a backstop, but a card can be shut while its dim is still up, so
 //! the close paths say so explicitly.
 
@@ -71,19 +76,17 @@ const NAMESPACE: &str = "hypr-osd";
 const ELEMENT: &str = "island";
 
 // Defaults. The geometry ones mirror the bar's own defaults, because this panel
-// has to know where the bar is without being told: it derives the pill's position
-// from the bar's right end, and hangs itself below the bar's bottom edge.
+// has to know where the bar is without being told: it hangs itself below the
+// bar's bottom edge, and its hot zone is the rectangle the bar sends.
 const DEFAULT_BAR_HEIGHT: i32 = 40;
-const DEFAULT_BAR_MARGIN_TOP: i32 = 8;
-const DEFAULT_BAR_MARGIN_X: i32 = 12;
+const DEFAULT_BAR_MARGIN_TOP: i32 = 0;
+const DEFAULT_BAR_MARGIN_X: i32 = 0;
 const DEFAULT_GAP: i32 = 6;
-/// How much of the bar's right end counts as "the pointer is still on the
-/// clock". The clock is the bar's last child (the power button sits just to its
-/// left), so the zone is measured from the bar's right edge - and this number is
-/// the clock, the power button and the margins between them, no more: a wider
-/// zone would reach the status pill and hold this panel open while the system
-/// popup was being used.
-const DEFAULT_HOT_WIDTH: i32 = 120;
+/// Only used for an `open` that arrives without a rectangle (a hand-typed one,
+/// or a bar too old to send one): the width of the strip in the middle of the
+/// bar that counts as "over the player pill". The bar normally measures the
+/// pill and sends it, because the player is as wide as its track.
+const DEFAULT_HOT_WIDTH: i32 = 280;
 const DEFAULT_LEFT_WIDTH: i32 = 252;
 const DEFAULT_RIGHT_WIDTH: i32 = 178;
 const DEFAULT_OPEN_DELAY_MS: u64 = 120;
@@ -127,7 +130,8 @@ const DEFAULT_NOTIFICATION_ROWS: i32 = 3;
 struct Settings {
     /// How the bar sits, in the pixels this panel is placed in.
     bar: BarGeometry,
-    /// The width of the pill's hot zone, at the bar's right end.
+    /// The width of the pill's hot zone, for an `open` that arrived without a
+    /// rectangle: a strip in the middle of the bar.
     hot_width: f64,
     left_width: i32,
     right_width: i32,
@@ -220,14 +224,6 @@ impl Settings {
         let bar = self.bar(tablet);
         bar.margin_top as i32 + bar.height as i32 + bar.gap as i32 + SHADOW_PAD
     }
-
-    /// How far in from the right edge the panel sits: the bar's own `margin_x`,
-    /// so the panel's right edge lines up with the bar's - the same rule the
-    /// system popup follows, and what makes the clock and the panel read as one
-    /// object.
-    fn margin_right(&self) -> i32 {
-        self.bar.margin_x as i32
-    }
 }
 
 /// The panel's state: what the hover machine says, and what is on the card.
@@ -236,9 +232,14 @@ struct Panel {
     node: Rc<IslandView>,
     /// The connector the bar is on, when the bar said so with `open`. The bar is
     /// pinned to the output it started on, which is not necessarily the focused
-    /// one - so the clock's hot zone (the bar's right end) has to be measured on
-    /// *that* screen, and the surface drawn there.
+    /// one - so the player's hot zone has to be measured on *that* screen, and
+    /// the surface drawn there.
     monitor: RefCell<Option<String>>,
+    /// The player pill's rectangle inside the bar's card, as the bar measured it
+    /// with `open`. `None` for a hand-typed `open`, which then falls back to the
+    /// derived centre strip - the pill is as wide as its track, so guessing it
+    /// is the one thing this panel cannot do itself.
+    pill: RefCell<Option<hover::Rect>>,
     notifications: RefCell<Notifications>,
     /// What the notifications *say*, read off the bus - the other half of the hub
     /// (see `notify`). The state above arrives without it; this fills the rows in.
@@ -275,13 +276,12 @@ fn main() -> glib::ExitCode {
         app_id: APP_ID.to_string(),
         css: css::stylesheet(include_str!("island.css")),
         namespace: NAMESPACE.to_string(),
-        // A content-sized card hanging under the top edge of the bar's *right*
-        // end: the shell knows how to place one (see `Placement::TopRight`),
-        // which is what lines the panel up with the bar and the clock it unfolds
-        // from without this program measuring anything.
-        placement: Placement::TopRight {
+        // A content-sized card hanging under the top edge of the bar's middle:
+        // the shell knows how to place one (see `Placement::TopCard`), which is
+        // what centres the panel on the player pill it unfolds from without this
+        // program measuring anything.
+        placement: Placement::TopCard {
             margin_top: settings.margin_top(tablet),
-            margin_right: settings.margin_right(),
         },
         width: settings.width(tablet),
         ..Opts::default()
@@ -297,13 +297,14 @@ fn main() -> glib::ExitCode {
             node.render_clock();
             // A fresh process has no panel up, whatever the flag says. Without
             // this, an island that was killed while the panel was open would
-            // leave the bar's clock lit up for the rest of the session - the flag
-            // is written on show/hide, and a `kill` never reaches either.
+            // leave the bar's player pill lit up for the rest of the session - the
+            // flag is written on show/hide, and a `kill` never reaches either.
             state::write(&state::island_panel(), false);
             let panel_state = Rc::new(RefCell::new(Panel {
                 machine: Machine::default(),
                 node: node.clone(),
                 monitor: RefCell::new(None),
+                pill: RefCell::new(None),
                 notifications: RefCell::new(Notifications::default()),
                 history: RefCell::new(notify::History::new()),
                 tablet: Cell::new(tablet),
@@ -328,9 +329,8 @@ fn main() -> glib::ExitCode {
                     let Some(osd) = shell.upgrade() else {
                         return;
                     };
-                    osd.set_placement(Placement::TopRight {
+                    osd.set_placement(Placement::TopCard {
                         margin_top: settings.margin_top(tablet),
-                        margin_right: settings.margin_right(),
                     });
                     osd.set_width(settings.width(tablet));
                     // Rebuilding a card's surface makes a *new*, hidden one (a
@@ -451,33 +451,22 @@ fn main() -> glib::ExitCode {
                     return Ok(String::new());
                 };
                 match verb {
-                    // What the bar's clock runs when the pointer arrives. It only
-                    // *arms* the panel: the dwell, and the decision to open, are
-                    // the panel's own (see `hover`).
+                    // What the bar's player pill runs when the pointer arrives.
+                    // It only *arms* the panel: the dwell, and the decision to
+                    // open, are the panel's own (see `hover`).
                     "open" => {
-                        // The bar may name the connector it is on; without one the
-                        // panel falls back to the focused output, which is right
-                        // on a single-monitor desktop.
-                        let connector = args.get(1).filter(|arg| !arg.is_empty()).cloned();
-                        if let Some(connector) = connector {
-                            osd.pin_output(Some(&connector));
-                            *panel.borrow().monitor.borrow_mut() = Some(connector);
-                        }
+                        aim(panel, osd, &args[1..]);
                         panel.borrow_mut().machine.arm(Instant::now());
                         Ok(String::new())
                     }
-                    // A finger tapped the bar's clock. It is the same request as
-                    // `open` - the same connector, the same panel - from a
-                    // gesture that cannot hover: the panel opens at once, stays
-                    // up (pinned), and a tap catcher around its card is the way
-                    // back out. A second tap on the clock closes it, because the
-                    // panel will not leave on its own any more.
+                    // A finger tapped the bar's player. It is the same request as
+                    // `open` - the same connector, the same pill - from a gesture
+                    // that cannot hover: the panel opens at once, stays up
+                    // (pinned), and a tap catcher around its card is the way back
+                    // out. A second tap on the pill closes it, because the panel
+                    // will not leave on its own any more.
                     "tap" => {
-                        let connector = args.get(1).filter(|arg| !arg.is_empty()).cloned();
-                        if let Some(connector) = connector {
-                            osd.pin_output(Some(&connector));
-                            *panel.borrow().monitor.borrow_mut() = Some(connector);
-                        }
+                        aim(panel, osd, &args[1..]);
                         if panel.borrow().machine.is_open() {
                             let action = panel.borrow_mut().machine.dismiss();
                             act(panel, osd, action);
@@ -527,9 +516,26 @@ fn main() -> glib::ExitCode {
     run(opts, build, handle)
 }
 
+/// Remember which bar this panel belongs to, and where its pill is.
+///
+/// The bar sends both with `open`/`tap`: the connector (the panel is drawn on
+/// that screen) and the pill's rectangle inside the bar's card (that is the hot
+/// zone, because the player pill is as wide as its track and cannot be derived
+/// from the bar's edges). A hand-typed `open` may send neither, and then the
+/// panel keeps its own fallbacks - the focused monitor and the derived strip.
+fn aim(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, args: &[String]) {
+    let (connector, rect) = hover::parse_open(args);
+    let state = panel.borrow();
+    if let Some(connector) = connector {
+        osd.pin_output(Some(&connector));
+        *state.monitor.borrow_mut() = Some(connector);
+    }
+    *state.pill.borrow_mut() = rect;
+}
+
 /// Show or hide the surface, and say so in the state flag while doing it.
 ///
-/// The flag is what the bar's clock pill reads to light up. It is written here
+/// The flag is what the bar's player pill reads to light up. It is written here
 /// and nowhere else, so the two programs cannot disagree about whether the panel
 /// is up.
 fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
@@ -643,7 +649,7 @@ fn card_size(panel: &Panel, settings: &Settings) -> (f64, f64) {
 /// coordinates - the arithmetic of [`panel_hole`], split out so it can be tested
 /// without a compositor.
 fn hole(monitor: hover::Rect, bar: BarGeometry, size: (f64, f64)) -> Hole {
-    let rect = hover::panel_rect(monitor, bar, Side::Right, size);
+    let rect = hover::panel_rect(monitor, bar, Side::Centre, size);
     Hole {
         x: (rect.x - monitor.x).round() as i32,
         y: (rect.y - monitor.y).round() as i32,
@@ -656,7 +662,7 @@ fn hole(monitor: hover::Rect, bar: BarGeometry, size: (f64, f64)) -> Hole {
 /// over the panel, and let the machine decide what to do about it.
 fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
     // The monitor the *bar* is on, not the focused one: the panel unfolds from
-    // the bar, and the clock it unfolds from is at that bar's right end.
+    // the bar, and the player it unfolds from is in that bar's middle.
     let monitor = panel
         .borrow()
         .monitor
@@ -674,13 +680,24 @@ fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
         return Action::None;
     };
     let (width, height) = card_size(&panel.borrow(), settings);
-    // The clock is the bar's last child, so the pill's hot zone is the bar's
-    // right end and needs no rectangle from the bar. The bar is taller while the
-    // machine is a tablet, so the geometry is the same one its own surface was
-    // placed with (see `Panel::tablet`).
+    // The pill's hot zone is the rectangle the bar measured and sent with
+    // `open`: the player is as wide as its track, so it cannot be derived. A
+    // hand-typed `open` falls back to a strip in the middle of the bar, where
+    // the player is. The bar is taller while the machine is a tablet, so the
+    // geometry is the same one its own surface was placed with (see
+    // `Panel::tablet`).
     let bar = settings.bar(panel.borrow().tablet.get());
-    let pill = hover::pill_rect(monitor, bar, settings.hot_width, Side::Right);
-    let panel_rect = hover::panel_rect(monitor, bar, Side::Right, (width, height));
+    let pill = panel
+        .borrow()
+        .pill
+        .borrow()
+        .map(|rect| hover::Rect {
+            x: monitor.x + bar.margin_x + rect.x,
+            y: monitor.y + bar.margin_top + rect.y,
+            ..rect
+        })
+        .unwrap_or_else(|| hover::pill_rect(monitor, bar, settings.hot_width, Side::Centre));
+    let panel_rect = hover::panel_rect(monitor, bar, Side::Centre, (width, height));
     panel.borrow_mut().machine.sample(
         pill.contains(cursor, 0.0),
         panel_rect.contains(cursor, 8.0),
@@ -861,10 +878,9 @@ mod tests {
         // The card's own size is what the element measured.
         assert_eq!(hole.width, 476);
         assert_eq!(hole.height, 300);
-        // Right-aligned with the bar, measured from *its* top-left corner - a
-        // hole in the layout's coordinates would be dim over the whole card.
-        assert_eq!(hole.x, (1368 - 12) - 476);
-        // And its top edge is past the tablet bar, the gap and the shadow ring.
+        // Centred on the monitor, measured from *its* top-left corner - a hole
+        // in the layout's coordinates would be dim over the whole card.
+        assert_eq!(hole.x, (1368 - 476) / 2); // And its top edge is past the tablet bar, the gap and the shadow ring.
         assert_eq!(hole.y, 8 + 52 + 6 + 18);
     }
 

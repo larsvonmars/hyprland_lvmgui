@@ -45,41 +45,53 @@
 
 /* ---- the surface: a transparent frame around exactly one card ----------- */
 /* `osd` is the class every element's layer surface carries; without this rule
- * the window would paint Adwaita's opaque background behind the card. */
+ * the window would paint Adwaita's opaque background behind the card.
+ *
+ * `border-radius: 0` is not cosmetic. GTK 4.16+ rounds a window's *contents* to
+ * the window node's CSS corner radius (Adwaita's is 12px), which quietly clipped
+ * the bar's tabs where they are welded into the screen's corners - the pills
+ * looked capsule-ended although their own `border-radius` said square. A layer
+ * surface has no frame to round, so the radius is switched off for every
+ * element here; each card carries its own radius on `box.card`. */
 window.osd {
     background-color: transparent;
+    border-radius: 0;
 }
 
-/* ---- the card: a bar surface grown into a card -------------------------- */
-/* theme.py's `.card`: the solid pill fill (card_top -> card_bottom, i.e. what
- * a pill in the bar looks like, fully opaque so text stays crisp over any
- * window behind it), @border, the card radius and the bar's card shadow. */
+/* ---- the card: a floating surface with no chrome ------------------------ */
+/* The palette's two browns and the card radius, and nothing else: no outline and
+ * no drop shadow. A border draws a window around the card, and a shadow paints a
+ * dark halo on the wallpaper behind it - both say "this is a box lying on top".
+ * The cards are meant to read like the bar's tabs: a piece of the same material
+ * cut out of the desktop, so the fill alone separates them from what is behind.
+ *
+ * The transparent frame the shell still keeps around a card (`SHADOW_PAD`) is
+ * therefore only breathing room now, not room for a shadow. */
 box.card {
     background-image: linear-gradient(180deg, @card_top, @card_bottom);
-    border: 1px solid @border;
+    border: none;
     border-radius: 18px;
     color: @fg;
-    box-shadow: 0 10px 28px @shadow, inset 0 1px 0 @hairline;
+    box-shadow: none;
 }
 
-/* ---- the bar: the card recipe grown across the screen -------------------- */
-/* The top bar is the same surface as a card, stretched: one row from the left
- * edge of the screen to the right, floating a few pixels below the top with
- * hairline margins at the sides. Everything inside it - the workspace pills, the
- * clock, the tray - is a `.module` (see the bar's own bar.css).
+/* ---- the bar: an invisible row of tabs ---------------------------------- */
+/* The bar paints **nothing**. It is the strip of screen its pills hang in: three
+ * tabs welded to the top edge (see the bar's own `bar.css`), with the wallpaper
+ * showing between them. The shell still gives the surface its height, and that
+ * height is what the compositor reserves - so tiled windows start below the tabs
+ * rather than under them.
  *
- * It is deliberately *not* translucent the way a wallpaper-hugging bar can be:
- * card_top -> card_bottom is an opaque fill, so a window scrolled underneath can
- * never show through the clock. */
+ * No fill, no border and no shadow here on purpose. A frame around this row
+ * would draw a seam across each tab's top edge, which is exactly the connection
+ * the shape is making; and a translucent fill would tint the empty stretch of
+ * screen the tabs are supposed to float on. The tabs carry their own surface. */
 box.bar {
-    background-image: linear-gradient(180deg, @bg_gradient, rgba(0, 0, 0, 0.18));
-    background-color: @bg;
-    border: 1px solid @hairline_soft;
-    border-radius: 18px;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
     color: @fg;
-    box-shadow:
-        0 8px 24px @shadow,
-        inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 /* ---- the pieces elements are built from --------------------------------- */
