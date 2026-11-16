@@ -59,9 +59,9 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Side};
+use hypr_osd_core::island::{Island, Origin};
 use hypr_osd_core::{
-    css, run, state, touch, Config, Content, Hole, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y,
-    SHADOW_PAD,
+    css, run, state, touch, Config, Content, Opts, Osd, Placement, CARD_PAD_X, SHADOW_PAD,
 };
 
 use notify::Notifications;
@@ -183,12 +183,12 @@ impl Settings {
     }
 
     /// The panel's width: the two columns, their gap, the padding this panel's
-    /// own stylesheet adds, and the padding the shell puts around the content.
-    /// Getting this right is what makes the derived hover zone line up with the
-    /// panel that is actually on screen.
+    /// own stylesheet adds, and the padding the island's body puts around the
+    /// content. It is what `status` compares the measured card against - the
+    /// shape itself is measured, not planned.
     /// The card's width for a machine in `tablet` state: the two columns and the
-    /// shell's padding, plus the room the touch-sized header and transport row
-    /// need (see [`TOUCH_WIDTH_EXTRA`]).
+    /// padding, plus the room the touch-sized header and transport row need (see
+    /// [`TOUCH_WIDTH_EXTRA`]).
     fn width(&self, tablet: bool) -> i32 {
         self.left_width
             + self.right_width
@@ -216,20 +216,16 @@ impl Settings {
             ..self.bar
         }
     }
-
-    /// How far below the top edge of the screen the panel hangs, for a machine
-    /// in `tablet` state: past the bar, its gap, and the transparent frame the
-    /// shell keeps around a card so its shadow is not clipped.
-    fn margin_top(&self, tablet: bool) -> i32 {
-        let bar = self.bar(tablet);
-        bar.margin_top as i32 + bar.height as i32 + bar.gap as i32 + SHADOW_PAD
-    }
 }
 
 /// The panel's state: what the hover machine says, and what is on the card.
 struct Panel {
     machine: Machine,
     node: Rc<IslandView>,
+    /// The shape the panel unfolds from, and the card it becomes (see
+    /// `core::island`). The card's widgets live inside it; the surface is a
+    /// transparent canvas the size of the screen.
+    island: Rc<Island>,
     /// The connector the bar is on, when the bar said so with `open`. The bar is
     /// pinned to the output it started on, which is not necessarily the focused
     /// one - so the player's hot zone has to be measured on *that* screen, and
@@ -276,14 +272,11 @@ fn main() -> glib::ExitCode {
         app_id: APP_ID.to_string(),
         css: css::stylesheet(include_str!("island.css")),
         namespace: NAMESPACE.to_string(),
-        // A content-sized card hanging under the top edge of the bar's middle:
-        // the shell knows how to place one (see `Placement::TopCard`), which is
-        // what centres the panel on the player pill it unfolds from without this
-        // program measuring anything.
-        placement: Placement::TopCard {
-            margin_top: settings.margin_top(tablet),
-        },
-        width: settings.width(tablet),
+        // A transparent canvas the size of the screen: the panel does not hang
+        // under the top edge from here, it **unfolds out of the player pill** -
+        // the shape's own rectangle comes from `core::island`, the bar geometry
+        // and the pill the bar sends (see `Placement::Canvas`).
+        placement: Placement::Canvas,
         ..Opts::default()
     };
 
@@ -295,6 +288,15 @@ fn main() -> glib::ExitCode {
         Box::new(move |osd: &Rc<Osd>| {
             let node = IslandView::new(&settings);
             node.render_clock();
+            // The card's widgets live inside the island for the whole session:
+            // the shape is what the surface draws, and every repaint below goes on
+            // changing these same widgets.
+            let island = Island::new(&node.root);
+            // The card's floor: what `Opts::width` used to be. A tablet's
+            // touch-sized rows need more room than the same rows on a laptop, and
+            // a card measured from its content would only be as wide as the
+            // content asks.
+            island.set_min_width(settings.width(tablet) - 2 * CARD_PAD_X);
             // A fresh process has no panel up, whatever the flag says. Without
             // this, an island that was killed while the panel was open would
             // leave the bar's player pill lit up for the rest of the session - the
@@ -303,6 +305,7 @@ fn main() -> glib::ExitCode {
             let panel_state = Rc::new(RefCell::new(Panel {
                 machine: Machine::default(),
                 node: node.clone(),
+                island: island.clone(),
                 monitor: RefCell::new(None),
                 pill: RefCell::new(None),
                 notifications: RefCell::new(Notifications::default()),
@@ -329,16 +332,16 @@ fn main() -> glib::ExitCode {
                     let Some(osd) = shell.upgrade() else {
                         return;
                     };
-                    osd.set_placement(Placement::TopCard {
-                        margin_top: settings.margin_top(tablet),
-                    });
-                    osd.set_width(settings.width(tablet));
-                    // Rebuilding a card's surface makes a *new*, hidden one (a
-                    // bar's is up as soon as it exists, a card's is not), so a
-                    // panel that was up when the machine folded has to be shown
-                    // again - it is still the panel the user opened.
+                    // The bar just got taller (or shorter), so the shape it
+                    // unfolds from moved: re-place a panel that is up on the new
+                    // geometry - there is no surface to rebuild any more, the
+                    // canvas is the screen either way.
+                    panel
+                        .borrow()
+                        .island
+                        .set_min_width(settings.width(tablet) - 2 * CARD_PAD_X);
                     if panel.borrow().machine.is_open() {
-                        osd.show();
+                        reshape(&panel, &settings);
                     }
                     // The card just moved; a catcher around it has to leave its
                     // hole where the card now is, or the dim would cover part of
@@ -401,11 +404,13 @@ fn main() -> glib::ExitCode {
                             // slower interval of its own.
                             poll_media(&panel, every(count, settings.players_every, settings.tick));
                         }
-                        // A notification or a track arriving while a *finger*-opened
-                        // panel is up can make the card taller, and the tap catcher's
-                        // hole is the card's rectangle: re-fit it rather than leave a
-                        // band of dim over the newest rows (where their buttons now
-                        // are). Cheap - four boxes are moved, once a second.
+                        // A notification or a track arriving while the panel is up
+                        // can make the card taller: the island is the screen, so it
+                        // has to be told - the surface grew with its content by
+                        // itself before this shape existed.
+                        reshape(&panel, &settings);
+                        // The tap catcher's hole is the card's rectangle, so it
+                        // follows the same growth (see `catch_taps`).
                         if panel.borrow().catcher.get() {
                             catch_taps(&panel, &osd, &settings);
                         }
@@ -424,7 +429,7 @@ fn main() -> glib::ExitCode {
                 glib::timeout_add_local(settings.poll, move || {
                     if panel.borrow().machine.is_watching() {
                         let action = sample(&panel, &settings);
-                        act(&panel, &osd, action);
+                        act(&panel, &osd, &settings, action);
                     }
                     glib::ControlFlow::Continue
                 });
@@ -435,7 +440,7 @@ fn main() -> glib::ExitCode {
                 history_follower.stop();
             });
 
-            Content::Single(node.root.clone().upcast::<gtk::Widget>())
+            Content::Single(island.canvas().clone().upcast::<gtk::Widget>())
         })
     };
 
@@ -469,10 +474,10 @@ fn main() -> glib::ExitCode {
                         aim(panel, osd, &args[1..]);
                         if panel.borrow().machine.is_open() {
                             let action = panel.borrow_mut().machine.dismiss();
-                            act(panel, osd, action);
+                            act(panel, osd, &settings, action);
                         } else {
                             panel.borrow_mut().machine.pin();
-                            act(panel, osd, Action::Show);
+                            act(panel, osd, &settings, Action::Show);
                             // After the show: the card's size is only known once
                             // it has been laid out (see `card_size`), and a hole
                             // in the dim is worth nothing if it is not over the
@@ -483,7 +488,7 @@ fn main() -> glib::ExitCode {
                     }
                     "close" => {
                         let action = panel.borrow_mut().machine.dismiss();
-                        act(panel, osd, action);
+                        act(panel, osd, &settings, action);
                         Ok(String::new())
                     }
                     "toggle" => {
@@ -496,12 +501,12 @@ fn main() -> glib::ExitCode {
                                 Action::Show
                             }
                         };
-                        act(panel, osd, action);
+                        act(panel, osd, &settings, action);
                         Ok(String::new())
                     }
                     "show" => {
                         panel.borrow_mut().machine.pin();
-                        act(panel, osd, Action::Show);
+                        act(panel, osd, &settings, Action::Show);
                         Ok(String::new())
                     }
                     "status" => Ok(status(&panel.borrow(), &settings)),
@@ -538,7 +543,7 @@ fn aim(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, args: &[String]) {
 /// The flag is what the bar's player pill reads to light up. It is written here
 /// and nowhere else, so the two programs cannot disagree about whether the panel
 /// is up.
-fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
+fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, settings: &Settings, action: Action) {
     match action {
         Action::None => {}
         Action::Show => {
@@ -546,6 +551,12 @@ fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
             // opens with the track on it rather than with "Nothing playing" for
             // as long as the round trip takes.
             poll_media(panel, true);
+            // The shape starts as the player pill the pointer came from, and the
+            // surface comes up already holding it: a panel that appeared at its
+            // full size for one frame and then grew would flash.
+            if let Some(origin) = origin_of(&panel.borrow(), settings) {
+                panel.borrow().island.unfold(&origin, settings.hot_width);
+            }
             osd.show();
             state::write(&state::island_panel(), true);
         }
@@ -555,9 +566,43 @@ fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
             // but the tap catcher is the element's, so the element says it here -
             // and every close path goes through this function.
             clear_catcher(panel, osd);
-            osd.hide();
+            // The flag goes out first so the bar starts retracting its pills
+            // while the shape is still shrinking: they are one movement.
             state::write(&state::island_panel(), false);
+            let osd = osd.clone();
+            panel.borrow().island.fold(move || osd.hide());
         }
+    }
+}
+
+/// Where this panel unfolds from, resolved the way every zone here is: against
+/// the monitor the *bar* is on, not the focused one.
+///
+/// A hand-typed `open` may name neither, and then the focused output and the
+/// derived centre strip are the fallbacks - the player pill is as wide as its
+/// track, so how wide it is cannot be guessed.
+fn origin_of(panel: &Panel, settings: &Settings) -> Option<Origin> {
+    let monitor = panel
+        .monitor
+        .borrow()
+        .as_deref()
+        .and_then(hover::monitor_of)
+        .or_else(hover::focused_monitor)?;
+    Some(Origin {
+        side: Side::Centre,
+        bar: settings.bar(panel.tablet.get()),
+        monitor,
+        pill: *panel.pill.borrow(),
+    })
+}
+
+/// Put the shape where the bar's geometry now says it belongs, without animating
+/// it: what a fold (or an unfolding) needs, because the bar just grew taller and
+/// the shape moved with it.
+fn reshape(panel: &Rc<RefCell<Panel>>, settings: &Settings) {
+    let state = panel.borrow();
+    if let Some(origin) = origin_of(&state, settings) {
+        state.island.refresh(&origin);
     }
 }
 
@@ -570,17 +615,19 @@ fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, action: Action) {
 /// by a fold (the card moves down), and taken down by [`clear_catcher`] on every
 /// close path.
 fn catch_taps(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, settings: &Rc<Settings>) {
-    let Some(hole) = panel_hole(&panel.borrow(), settings) else {
+    let Some(origin) = origin_of(&panel.borrow(), settings) else {
         return;
     };
+    let hole = panel.borrow().island.hole(&origin);
     let shell = Rc::downgrade(osd);
     let close_panel = panel.clone();
+    let settings = settings.clone();
     osd.tap_catcher(Some(hole), move || {
         let Some(osd) = shell.upgrade() else {
             return;
         };
         let action = close_panel.borrow_mut().machine.dismiss();
-        act(&close_panel, &osd, action);
+        act(&close_panel, &osd, &settings, action);
     });
     panel.borrow().catcher.set(true);
 }
@@ -596,81 +643,10 @@ fn clear_catcher(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>) {
     }
 }
 
-/// The card's rectangle on its monitor, as the hole the tap catcher leaves.
-///
-/// Both halves are measured the same way the hover's zones are: the monitor is
-/// the bar's own (the connector it named with `tap`/`open`), and the size is the
-/// card the shell draws - the content widget plus the padding the shell puts
-/// around it (`CARD_PAD_*`). It is then placed exactly as the surface places it
-/// (`hover::panel_rect`) and made monitor-relative, which is the space a layer
-/// surface on that monitor is drawn in. `None` when the compositor cannot say
-/// which monitor and the content has not been laid out yet - an empty hole would
-/// be worse than no catcher.
-fn panel_hole(panel: &Panel, settings: &Settings) -> Option<Hole> {
-    let monitor = panel
-        .monitor
-        .borrow()
-        .as_deref()
-        .and_then(hover::monitor_of)
-        .or_else(hover::focused_monitor)?;
-    Some(hole(
-        monitor,
-        settings.bar(panel.tablet.get()),
-        card_size(panel, settings),
-    ))
-}
-
-/// The card's size on screen: the content widget plus the shell's padding,
-/// measured rather than assumed.
-///
-/// The width is what the panel asked the shell for (`Opts::width`), so before
-/// the card has ever been laid out it can be taken from the settings; the height
-/// is the content's own and has to be measured, which works on a widget that is
-/// not allocated yet (`measure`) as well as on one that is (`width`/`height`).
-fn card_size(panel: &Panel, settings: &Settings) -> (f64, f64) {
-    let root = &panel.node.root;
-    let width = if root.width() > 0 {
-        root.width()
-    } else {
-        (settings.width(panel.tablet.get()) - 2 * CARD_PAD_X).max(1)
-    };
-    let height = if root.height() > 0 {
-        root.height()
-    } else {
-        root.measure(gtk::Orientation::Vertical, width).1
-    };
-    (
-        f64::from(width + 2 * CARD_PAD_X),
-        f64::from(height + 2 * CARD_PAD_Y),
-    )
-}
-
-/// The hole a card of `size` leaves in the catcher, in the monitor's own
-/// coordinates - the arithmetic of [`panel_hole`], split out so it can be tested
-/// without a compositor.
-fn hole(monitor: hover::Rect, bar: BarGeometry, size: (f64, f64)) -> Hole {
-    let rect = hover::panel_rect(monitor, bar, Side::Centre, size);
-    Hole {
-        x: (rect.x - monitor.x).round() as i32,
-        y: (rect.y - monitor.y).round() as i32,
-        width: rect.width.round() as i32,
-        height: rect.height.round() as i32,
-    }
-}
-
 /// One pointer sample: read the cursor, work out whether it is over the pill or
 /// over the panel, and let the machine decide what to do about it.
 fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
-    // The monitor the *bar* is on, not the focused one: the panel unfolds from
-    // the bar, and the player it unfolds from is in that bar's middle.
-    let monitor = panel
-        .borrow()
-        .monitor
-        .borrow()
-        .as_deref()
-        .and_then(hover::monitor_of)
-        .or_else(hover::focused_monitor);
-    let Some(monitor) = monitor else {
+    let Some(origin) = origin_of(&panel.borrow(), settings) else {
         return Action::None;
     };
     let Some(cursor) = hover::cursor() else {
@@ -679,28 +655,15 @@ fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
         // than one that stayed up a moment too long.
         return Action::None;
     };
-    let (width, height) = card_size(&panel.borrow(), settings);
     // The pill's hot zone is the rectangle the bar measured and sent with
     // `open`: the player is as wide as its track, so it cannot be derived. A
     // hand-typed `open` falls back to a strip in the middle of the bar, where
-    // the player is. The bar is taller while the machine is a tablet, so the
-    // geometry is the same one its own surface was placed with (see
-    // `Panel::tablet`).
-    let bar = settings.bar(panel.borrow().tablet.get());
-    let pill = panel
-        .borrow()
-        .pill
-        .borrow()
-        .map(|rect| hover::Rect {
-            x: monitor.x + bar.margin_x + rect.x,
-            y: monitor.y + bar.margin_top + rect.y,
-            ..rect
-        })
-        .unwrap_or_else(|| hover::pill_rect(monitor, bar, settings.hot_width, Side::Centre));
-    let panel_rect = hover::panel_rect(monitor, bar, Side::Centre, (width, height));
+    // the player is. The island is the whole shape - the neck between the bar and
+    // the card is material now, so a pointer on it belongs to the panel.
+    let (pill, island) = panel.borrow().island.zones(&origin, settings.hot_width);
     panel.borrow_mut().machine.sample(
         pill.contains(cursor, 0.0),
-        panel_rect.contains(cursor, 8.0),
+        island.contains(cursor, 8.0),
         Instant::now(),
         settings.delays,
     )
@@ -779,11 +742,16 @@ fn status(panel: &Panel, settings: &Settings) -> String {
             .join("\n           ")
     };
     [
-        format!(
-            "panel      {}px wide, {}px below the top",
-            settings.width(panel.tablet.get()),
-            settings.margin_top(panel.tablet.get())
-        ),
+        match origin_of(panel, settings) {
+            Some(origin) => {
+                let (_, island) = panel.island.zones(&origin, settings.hot_width);
+                format!(
+                    "panel      {:.0},{:.0} {:.0}x{:.0} - one shape, from the bar's top edge",
+                    island.x, island.y, island.width, island.height
+                )
+            }
+            None => "panel      no shape - the compositor did not answer hyprctl".to_string(),
+        },
         format!(
             "state      {}",
             if panel.machine.is_open() {
@@ -872,15 +840,26 @@ mod tests {
         }
     }
 
+    /// The origin this panel would unfold from on that bar.
+    fn place(height: f64) -> Origin {
+        Origin {
+            side: Side::Centre,
+            bar: bar(height),
+            monitor: monitor(),
+            pill: None,
+        }
+    }
+
     #[test]
     fn the_tap_catcher_leaves_the_card_open_in_monitor_coordinates() {
-        let hole = hole(monitor(), bar(52.0), (476.0, 300.0));
+        let hole = place(52.0).hole((476.0, 300.0));
         // The card's own size is what the element measured.
         assert_eq!(hole.width, 476);
         assert_eq!(hole.height, 300);
         // Centred on the monitor, measured from *its* top-left corner - a hole
         // in the layout's coordinates would be dim over the whole card.
-        assert_eq!(hole.x, (1368 - 476) / 2); // And its top edge is past the tablet bar, the gap and the shadow ring.
+        assert_eq!(hole.x, (1368 - 476) / 2);
+        // And its top edge is past the tablet bar, the gap and the shadow ring.
         assert_eq!(hole.y, 8 + 52 + 6 + 18);
     }
 
@@ -888,12 +867,8 @@ mod tests {
     fn a_fold_moves_the_hole_down_with_the_bar() {
         // The same panel at the laptop's 40px bar and at the tablet's taller one:
         // the panel hangs lower, and so does the hole that must stay over it.
-        let laptop = hole(monitor(), bar(40.0), (476.0, 300.0));
-        let folded = hole(
-            monitor(),
-            bar(40.0 + f64::from(TOUCH_HEIGHT_EXTRA)),
-            (476.0, 300.0),
-        );
+        let laptop = place(40.0).hole((476.0, 300.0));
+        let folded = place(40.0 + f64::from(TOUCH_HEIGHT_EXTRA)).hole((476.0, 300.0));
         assert_eq!(folded.y - laptop.y, TOUCH_HEIGHT_EXTRA);
         assert_eq!(folded.height, laptop.height);
     }

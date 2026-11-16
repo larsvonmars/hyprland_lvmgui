@@ -54,6 +54,11 @@ box.section.edge-right {
     border-radius: 0 0 0 22px;
 }
 
+box.section.collapsed {
+    padding-left: 0;
+    padding-right: 0;
+}
+
 /* ---- a pill ---------------------------------------------------------------- */
 /* A GTK button arrives wearing a theme background, a border, its own padding and
  * a shadow. A pill is a quiet surface until you touch it, so all of that is

@@ -75,6 +75,24 @@ box.card {
     box-shadow: none;
 }
 
+box.card.island-shape {
+    border-radius: 0 0 22px 22px;
+}
+
+box.card.island-shape.from-left {
+    border-radius: 0 0 22px 0;
+}
+
+box.card.island-shape.from-right {
+    border-radius: 0 0 0 22px;
+}
+
+fixed.island-canvas,
+box.canvas {
+    background-color: transparent;
+    background-image: none;
+}
+
 /* ---- the bar: an invisible row of tabs ---------------------------------- */
 /* The bar paints **nothing**. It is the strip of screen its pills hang in: three
  * tabs welded to the top edge (see the bar's own `bar.css`), with the wallpaper

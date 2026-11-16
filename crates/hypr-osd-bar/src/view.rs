@@ -33,7 +33,7 @@
 //! centred on the *bar*, not on the space left over between the two sides, which
 //! is what an ordinary box with three children would give.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -42,6 +42,7 @@ use gtk::prelude::*;
 
 use hypr_osd_core::art;
 use hypr_osd_core::hardware::{self as sources, Battery, Charging, Network, Volume};
+use hypr_osd_core::hover::Side;
 use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::Track;
 use hypr_osd_core::text;
@@ -296,6 +297,111 @@ impl Pill {
 
     fn set_visible(&self, visible: bool) {
         self.button.set_visible(visible);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pills that step aside
+// ---------------------------------------------------------------------------
+
+/// How long a pill takes to retract (and to come back). Short enough to read as
+/// the same movement as the island unfolding (240 ms, see `core::island`), long
+/// enough to see: the capsule recoiling is half of the effect.
+const ASIDE: u32 = 190;
+
+/// One pill that steps aside while a panel unfolds from another.
+///
+/// The island a popup grows into is as wide as its card and hangs from the bar's
+/// top edge, so it lands *over* the bar's pills - and its material is
+/// translucent, which means their ink would show through it. They retract
+/// instead: the capsule shrinks to the pill the panel came out of, the empty
+/// space is what the shape grows into, and a bar that lost every other reading
+/// for the duration reads as "this is what you are looking at".
+///
+/// A `GtkRevealer` rather than a size of our own, because it is the one thing in
+/// GTK that animates a widget's *allocation*: `reveal_child` runs the transition
+/// (and does nothing at all when the user switched GTK's animations off).
+struct Aside {
+    revealer: gtk::Revealer,
+    /// Which way this one already is, so the flag-driven caller can say "retract"
+    /// on every tick without restarting a transition that is still running.
+    retracted: Cell<bool>,
+}
+
+impl Aside {
+    /// Wrap `child` in a revealer that takes it away towards `towards`.
+    fn new(child: &impl IsA<gtk::Widget>, towards: gtk::RevealerTransitionType) -> Self {
+        let revealer = gtk::Revealer::new();
+        revealer.set_transition_type(towards);
+        revealer.set_transition_duration(ASIDE);
+        // The transition is a *movement*, not a fade: the child slides out of its
+        // own allocation, which shrinks to nothing - and it must not paint over
+        // the pill that stays.
+        revealer.set_overflow(gtk::Overflow::Hidden);
+        revealer.set_reveal_child(true);
+        revealer.set_child(Some(child));
+        Aside {
+            revealer,
+            retracted: Cell::new(false),
+        }
+    }
+
+    /// Take the pill away (`true`) or bring it back.
+    fn retract(&self, retracted: bool) {
+        if self.retracted.replace(retracted) == retracted {
+            return;
+        }
+        self.revealer.set_reveal_child(!retracted);
+    }
+}
+
+/// The three groups a pill can belong to, and which of them steps aside.
+///
+/// The bar is three capsules with a player between them, so "make room" means
+/// different things depending on which pill a panel came out of:
+///
+/// * the applications panel unfolds from the **left** end - its card is wide, so
+///   it covers the left capsule and the middle of the bar;
+/// * the system popup unfolds from the **right** end - its card covers the right
+///   capsule and the middle;
+/// * the island popup unfolds from the **player itself**, and both outer groups
+///   retract to leave the player alone in the middle.
+///
+/// The player is retracted by *both* side panels: it sits between them, and a
+/// 760px card from the left end reaches it on any screen this bar is built for.
+/// The capsule the panel came from keeps its opening pill - the island covers it.
+struct Asides {
+    apps: Aside,
+    left: Vec<Aside>,
+    status: Aside,
+    right: Vec<Aside>,
+    media: Aside,
+    left_section: gtk::Box,
+    right_section: gtk::Box,
+}
+
+impl Asides {
+    fn retract(&self, from: Option<Side>) {
+        let open = from.is_some();
+        self.apps.retract(open && from != Some(Side::Left));
+        self.status.retract(open && from != Some(Side::Right));
+        self.media.retract(open && from != Some(Side::Centre));
+        for aside in &self.left {
+            aside.retract(open);
+        }
+        for aside in &self.right {
+            aside.retract(open);
+        }
+        set_class(
+            &self.left_section,
+            "collapsed",
+            open && from != Some(Side::Left),
+        );
+        set_class(
+            &self.right_section,
+            "collapsed",
+            open && from != Some(Side::Right),
+        );
     }
 }
 
@@ -1178,6 +1284,8 @@ pub struct BarView {
     /// The windows the bar has put away, drawn at the left of the tray's row.
     minimised: gtk::Box,
     power: Pill,
+    /// The pills that step aside while a panel is unfolded (see [`Aside`]).
+    asides: Asides,
     /// The three readings behind the status pill, kept together because the pill
     /// is drawn from all of them at once (see [`Status`]).
     readings: RefCell<Status>,
@@ -1281,9 +1389,18 @@ impl BarView {
         // the corners of the screen, so their outer corners are square and only
         // the one facing the bar is rounded (see `edge-left` in bar.css).
         left.add_css_class("edge-left");
-        left.append(&apps.button);
-        left.append(&workspaces.root);
-        left.append(&title);
+        let apps_aside = Aside::new(&apps.button, gtk::RevealerTransitionType::SlideLeft);
+        left.append(&apps_aside.revealer);
+        // The workspaces and the title retract into the corner while a panel
+        // unfolds from the apps button or from the right-hand capsule (see
+        // `Aside`): the island lands over them, and its material is translucent.
+        let left_asides = vec![
+            Aside::new(&workspaces.root, gtk::RevealerTransitionType::SlideLeft),
+            Aside::new(&title, gtk::RevealerTransitionType::SlideLeft),
+        ];
+        for aside in &left_asides {
+            left.append(&aside.revealer);
+        }
 
         // --- centre: the player --------------------------------------------
         let media = MediaPill::new(icon, media_art, media_hint, settings.media_width);
@@ -1411,17 +1528,32 @@ impl BarView {
         let right = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         right.add_css_class("section");
         right.add_css_class("edge-right");
-        right.append(&minimised);
-        right.append(&tray);
+        // The same on the other side: the tray and the put-away windows retract
+        // to the right (towards the status pill), the power button and the clock
+        // to the left. The status pill is what a panel on this side unfolds
+        // from, so it is the one that stays.
+        let left_of_status = vec![
+            Aside::new(&minimised, gtk::RevealerTransitionType::SlideRight),
+            Aside::new(&tray, gtk::RevealerTransitionType::SlideRight),
+        ];
+        for aside in &left_of_status {
+            right.append(&aside.revealer);
+        }
         // The status pill sits to the right of the tray, where the rice puts its
         // network, sound and battery readings - and where the system popup's
         // own geometry already expects it (right-aligned with the bar).
-        right.append(&status.button);
+        let status_aside = Aside::new(&status.button, gtk::RevealerTransitionType::SlideRight);
+        right.append(&status_aside.revealer);
         // The power button sits between the status pill and the clock, which
         // keeps the dangerous button off the corner a pointer flies into while
         // leaving the clock as the last thing in the row.
-        right.append(&power.button);
-        right.append(&clock.button);
+        let right_of_status = vec![
+            Aside::new(&power.button, gtk::RevealerTransitionType::SlideLeft),
+            Aside::new(&clock.button, gtk::RevealerTransitionType::SlideLeft),
+        ];
+        for aside in &right_of_status {
+            right.append(&aside.revealer);
+        }
 
         // The three pills reach the surface's top edge: the bar paints nothing
         // behind them, so their shapes are all that is on screen - and a tab that
@@ -1437,7 +1569,10 @@ impl BarView {
         // --- the row -------------------------------------------------------
         let root = gtk::CenterBox::new();
         root.set_start_widget(Some(&left));
-        root.set_center_widget(Some(&media.button));
+        // The player collapses horizontally while another panel takes its place;
+        // when the island itself opens, this is the pill that stays.
+        let media_aside = Aside::new(&media.button, gtk::RevealerTransitionType::SlideLeft);
+        root.set_center_widget(Some(&media_aside.revealer));
         root.set_end_widget(Some(&right));
 
         // The player is the island popup's handle: the pointer arriving on it
@@ -1610,6 +1745,15 @@ impl BarView {
             tray,
             minimised,
             power,
+            asides: Asides {
+                apps: apps_aside,
+                left: left_asides,
+                status: status_aside,
+                right: left_of_status.into_iter().chain(right_of_status).collect(),
+                media: media_aside,
+                left_section: left,
+                right_section: right,
+            },
             readings: RefCell::new(Status::default()),
             last_minimised: RefCell::new(String::new()),
             icon_size: settings.tray_icon_size(tablet),
@@ -1754,6 +1898,17 @@ impl BarView {
     /// is up, so the two read as one object.
     pub fn set_apps_open(&self, open: bool) {
         set_class(&self.apps.button, "panel-open", open);
+    }
+
+    /// Make room for a panel unfolding from `from`: the pills the island lands
+    /// over step aside (see [`Asides`]).
+    ///
+    /// The three flags say *which* pill a panel came out of, and the panel is an
+    /// island from that pill - as wide as its card and welded to the bar's top
+    /// edge. Everything under it retracts, so the capsule shrinks to the pill and
+    /// the shape grows into the space.
+    pub fn set_panel(&self, from: Option<Side>) {
+        self.asides.retract(from);
     }
 
     /// The sound level. One of the three parts of the status pill, so it is

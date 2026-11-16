@@ -12,12 +12,10 @@
 //! is also the reason the two popups share [`hypr_osd_core::hover`] instead of
 //! each carrying a copy of the same state machine: same problem, one answer.
 //!
-//! Where the island is centred - the clock it unfolds from is the bar's centre
-//! child, so its hot zone can be *derived* from the middle of the screen - this
-//! one hangs off the bar's right end, where the tray and the power button sit to
-//! its right. So the bar hands the pill's rectangle over with `open`, and the
-//! panel uses exactly that (with a wide strip at the right end as the fallback,
-//! for an `open` that was typed by hand).
+//! The island is centred on the player it unfolds from; this one hangs off the
+//! bar's right end, where the tray and the power button sit beside the status
+//! pill. The bar hands the actual pill rectangle over with `open`, and each panel
+//! uses exactly that (with a fallback strip for an `open` typed by hand).
 //!
 //! `open` is the *only* verb the bar runs, for both of the pill's handles - the
 //! pointer arriving and a left click - so the panel is pointer-driven in every
@@ -70,11 +68,9 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::hover::{self, parse_open, Action, BarGeometry, Delays, Machine, Rect, Side};
+use hypr_osd_core::island::{Island, Origin};
 use hypr_osd_core::system;
-use hypr_osd_core::{
-    css, hardware, run, state, Config, Content, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y,
-    SHADOW_PAD,
-};
+use hypr_osd_core::{css, hardware, run, state, Config, Content, Opts, Osd, Placement, SHADOW_PAD};
 
 use view::StatsView;
 
@@ -183,6 +179,10 @@ struct Settings {
     /// writes the absolute one, because `~/.local/bin` is usually not on
     /// Hyprland's `PATH`.
     settings_command: String,
+    /// What the bluetooth tile's "Manage" chip runs: the collection's own
+    /// manager card (`hypr-osd-bluetooth`), the replacement for a terminal full
+    /// of `bluetoothctl`. Same convention as `settings_command`.
+    bluetooth_command: String,
     /// What prints the pending-update list (`checkupdates`). Empty turns the
     /// updates tile off: it then says nothing at all rather than "up to date".
     updates_command: String,
@@ -227,6 +227,7 @@ impl Settings {
             interface: config.string("network_interface", "wlan0"),
             terminal_command: config.string("terminal_command", "kitty"),
             settings_command: config.string("settings_command", "hypr-osd-settings"),
+            bluetooth_command: config.string("bluetooth_command", "hypr-osd-bluetooth"),
             updates_command: config.string("updates_command", "checkupdates"),
         }
     }
@@ -243,19 +244,6 @@ impl Settings {
     fn content_width(&self) -> i32 {
         self.left_width + self.right_width + 10 + 4
     }
-
-    /// The card's width: the content plus the padding the shell keeps between
-    /// that content and the card's edge. This is what `Opts::width` wants.
-    fn width(&self) -> i32 {
-        self.content_width() + 2 * CARD_PAD_X
-    }
-
-    /// How far below the top edge of the screen the panel hangs: past the bar and
-    /// its gap, plus the transparent frame the shell keeps around a card so its
-    /// shadow is not clipped.
-    fn margin_top(&self) -> i32 {
-        self.bar.margin_top as i32 + self.bar.height as i32 + self.bar.gap as i32 + SHADOW_PAD
-    }
 }
 
 /// The panel's state: what the hover machine says, what is on the card, and the
@@ -263,6 +251,10 @@ impl Settings {
 struct Panel {
     machine: Machine,
     node: Rc<StatsView>,
+    /// The shape the panel unfolds from, and the card it becomes (see
+    /// `core::island`). The card's widgets live inside it; the surface is a
+    /// transparent canvas the size of the screen.
+    island: Rc<Island>,
     /// The connector the bar is on, when the bar said so with `open`. The bar is
     /// pinned to the output it started on, which is not necessarily the focused
     /// one - so every coordinate this panel works with, and the surface it draws
@@ -296,14 +288,11 @@ fn main() -> glib::ExitCode {
         app_id: APP_ID.to_string(),
         css: css::stylesheet(include_str!("stats.css")),
         namespace: NAMESPACE.to_string(),
-        // A content-sized card hanging under the top edge, *right-aligned*: the
-        // shell knows how to place one, which is what lines the panel's right
-        // edge up with the bar's without this program measuring anything.
-        placement: Placement::TopRight {
-            margin_top: settings.margin_top(),
-            margin_right: settings.bar.margin_x as i32,
-        },
-        width: settings.width(),
+        // A transparent canvas the size of the screen: the card does not hang
+        // under the bar from here, it **unfolds out of the status pill** - the
+        // shape's own rectangle is worked out by `core::island`, from the bar
+        // geometry and the pill the bar sends with `open` (see `Placement::Canvas`).
+        placement: Placement::Canvas,
         ..Opts::default()
     };
 
@@ -314,6 +303,10 @@ fn main() -> glib::ExitCode {
         let settings = settings.clone();
         Box::new(move |osd: &Rc<Osd>| {
             let node = StatsView::new(&settings);
+            // The card is put into the island's body here and stays there: the
+            // island is what the surface draws, and every repaint below goes on
+            // changing these same widgets.
+            let island = Island::new(&node.root);
             node.on_refresh({
                 let panel = panel.clone();
                 let settings = settings.clone();
@@ -373,6 +366,7 @@ fn main() -> glib::ExitCode {
             let state = Rc::new(RefCell::new(Panel {
                 machine: Machine::default(),
                 node: node.clone(),
+                island: island.clone(),
                 monitor: RefCell::new(None),
                 pill: RefCell::new(None),
                 sampler: RefCell::new(system::Sampler::new()),
@@ -429,6 +423,13 @@ fn main() -> glib::ExitCode {
                             // what asks again once it goes stale.
                             ask_for_updates(&state, &settings);
                         }
+                        // The card can change size under the shape (a device
+                        // appears, a row wraps): the island is the screen, so it
+                        // has to be told, where the surface used to grow with
+                        // its content by itself.
+                        if let Some(origin) = origin_of(&state.borrow(), &settings) {
+                            state.borrow().island.refresh(&origin);
+                        }
                     }
                     glib::ControlFlow::Continue
                 });
@@ -457,7 +458,7 @@ fn main() -> glib::ExitCode {
                 move || state.borrow().node.release()
             });
 
-            Content::Single(node.root.clone().upcast::<gtk::Widget>())
+            Content::Single(island.canvas().clone().upcast::<gtk::Widget>())
         })
     };
 
@@ -631,13 +632,31 @@ fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, settings: &Rc<Settings>, actio
     match action {
         Action::None => {}
         Action::Show => {
+            // The surface comes up with the card already unfolded: a panel that
+            // appeared at its full size for one frame and *then* grew would flash.
+            // The shape starts as the pill the pointer came from, so the first
+            // frame is the pill the bar is drawing - the two surfaces hand over.
+            {
+                let state = panel.borrow();
+                if let Some(origin) = origin_of(&state, settings) {
+                    state.island.unfold(&origin, settings.hot_width);
+                }
+            }
             osd.show();
             state::write(&state::stats_panel(), true);
             refresh(panel, settings);
+            // The reads above can change the card's size (a device row appears
+            // before the first frame), and the island has to know.
+            if let Some(origin) = origin_of(&panel.borrow(), settings) {
+                panel.borrow().island.refresh(&origin);
+            }
         }
         Action::Hide => {
-            osd.hide();
+            // The flag goes out first so the bar starts retracting its pills
+            // while the shape is still shrinking: they are one movement.
             state::write(&state::stats_panel(), false);
+            let osd = osd.clone();
+            panel.borrow().island.fold(move || osd.hide());
         }
     }
 }
@@ -707,52 +726,39 @@ fn sample(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) -> Action {
     )
 }
 
-/// The two rectangles the machine reasons about, in the layout: the pill's hot
-/// zone at the right end of the bar, and where the panel itself is.
+/// Where this panel unfolds from, resolved the way every zone here is: against
+/// the monitor the *bar* is on, not the focused one.
 ///
-/// `None` when the compositor cannot say where the monitor is - which is also
-/// when nothing should open, because neither rectangle means anything without it.
-///
-/// The panel's own position needs no query: `TopRight` anchoring plus the known
-/// margins make it computable. The pill's is the rectangle the bar sent with
-/// `open`, translated out of the bar's card into the layout - the tray and the
-/// power button sit to its right, so it cannot be derived from the bar's edge,
-/// and the bar is the only program that can measure it.
-fn zones(panel: &Panel, settings: &Settings) -> Option<(Rect, Rect)> {
-    // The monitor the *bar* is on, not the focused one: the panel unfolds from
-    // the bar, so every zone it has is measured in the bar's coordinates. The
-    // focused output is the fallback for a hand-typed `open`, and for a bar too
-    // old to say where it is.
+/// The bar is pinned to the output it started on, which is not necessarily the
+/// focused one - so every coordinate this panel works with, and the surface it
+/// draws on, come from here. The focused output is the fallback for a hand-typed
+/// `open`, and for a bar too old to say where it is.
+fn origin_of(panel: &Panel, settings: &Settings) -> Option<Origin> {
     let monitor = panel
         .monitor
         .borrow()
         .as_deref()
         .and_then(hover::monitor_of)
         .or_else(hover::focused_monitor)?;
-    // The card is the content *plus* the padding the shell puts around it, which
-    // is what is really on screen.
-    let (width, height) = {
-        let root = panel.node.root.clone();
-        (
-            f64::from(root.width() + 2 * CARD_PAD_X),
-            f64::from(root.height() + 2 * CARD_PAD_Y),
-        )
-    };
-    // Without a rectangle from the bar, a wide strip at the right end: a
-    // hand-typed `open` should still open something.
-    let pill = panel
-        .pill
-        .borrow()
-        .map(|rect| Rect {
-            x: monitor.x + settings.bar.margin_x + rect.x,
-            y: monitor.y + settings.bar.margin_top + rect.y,
-            ..rect
-        })
-        .unwrap_or_else(|| {
-            hover::pill_rect(monitor, settings.bar, settings.hot_width, Side::Right)
-        });
-    let panel_rect = hover::panel_rect(monitor, settings.bar, Side::Right, (width, height));
-    Some((pill, panel_rect))
+    Some(Origin {
+        side: Side::Right,
+        bar: settings.bar,
+        monitor,
+        pill: *panel.pill.borrow(),
+    })
+}
+
+/// The two rectangles the machine reasons about, in the layout: the pill's hot
+/// zone at the right end of the bar, and the island the panel unfolds into.
+///
+/// `None` when the compositor cannot say where the monitor is - which is also
+/// when nothing should open, because neither rectangle means anything without it.
+/// Both come from `core::island`, so the zone the pointer is judged against is
+/// the shape that is really on screen (the neck between the bar and the card is
+/// part of it now).
+fn zones(panel: &Panel, settings: &Settings) -> Option<(Rect, Rect)> {
+    let origin = origin_of(panel, settings)?;
+    Some(panel.island.zones(&origin, settings.hot_width))
 }
 
 /// The two zones as one `status` line, or why there are none.
@@ -882,16 +888,17 @@ fn status(panel: &Panel, settings: &Settings) -> String {
     // what a status read does everywhere else in this program.
     let (bluetooth, devices) = sources::bluetooth_now(settings.max_devices);
     let mut lines = vec![
-        format!(
-            "panel      {}px wide, {}px below the top, right edge {}px in from the screen",
-            settings.width(),
-            settings.margin_top(),
-            settings.bar.margin_x as i32
-        ),
-        // The size the card *actually* came out at, against the width the hover
-        // zone is derived from: the two have to agree, because a widget that asks
-        // for more room than the columns were given grows the card and leaves the
-        // zone behind (see `zones`).
+        match zones(panel, settings) {
+            Some((_, island)) => format!(
+                "panel      {:.0},{:.0} {:.0}x{:.0} - one shape, from the bar's top edge",
+                island.x, island.y, island.width, island.height
+            ),
+            None => "panel      no shape - the compositor did not answer hyprctl".to_string(),
+        },
+        // The size the card *actually* came out at, against the width the two
+        // columns were given: the two have to agree, because a widget that asks
+        // for more room than the columns were given widens the card - and the
+        // island is measured from whatever the content really is.
         {
             let measured = panel.node.root.width();
             let planned = settings.content_width();

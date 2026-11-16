@@ -44,7 +44,7 @@ cd "$(dirname "$0")/.."
 
 # The elements this script installs. Add an element here (and to osd.lua) when
 # the collection grows. Order is only the order they are reported in.
-ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview hypr-osd-launcher hypr-osd-apps hypr-osd-settings hypr-osd-energy)
+ELEMENTS=(hypr-osd-bar hypr-osd-island hypr-osd-stats hypr-osd-bluetooth hypr-osd-volume hypr-osd-media hypr-osd-session hypr-osd-switcher hypr-osd-overview hypr-osd-launcher hypr-osd-apps hypr-osd-settings hypr-osd-energy)
 
 # The pids of `$1` if it is running, nothing otherwise. Every element is a
 # long-lived process (the bar and the card daemons sit in the background for the
@@ -520,7 +520,7 @@ updates_every_ms = 1800000
 updates_command = checkupdates
 
 # The wireless interface the network tile reports on (and disconnects), and where
-# the buttons that open something put it (btop, nmtui, bluetoothctl, pacman).
+# the buttons that open something put it (btop, nmtui, pacman).
 network_interface = wlan0
 terminal_command = kitty
 
@@ -529,6 +529,10 @@ terminal_command = kitty
 # writes the absolute path, because ~/.local/bin is usually not on Hyprland's
 # PATH; the bare name is the built-in default and works only when it is.
 settings_command = __BIN_DIR__/hypr-osd-settings
+
+# What the bluetooth tile's Manage chip runs: the collection's manager card
+# (hypr-osd-bluetooth), the replacement for a terminal full of bluetoothctl.
+bluetooth_command = __BIN_DIR__/hypr-osd-bluetooth
 EOF
   sed -i "s|__BIN_DIR__|$BIN_DIR|g" "$OSD_CONFIG_DIR/stats.conf"
   echo "   -> $OSD_CONFIG_DIR/stats.conf (new)"
@@ -550,6 +554,67 @@ if ! grep -qE '^[[:space:]]*settings_command' "$OSD_CONFIG_DIR/stats.conf"; then
 settings_command = $BIN_DIR/hypr-osd-settings
 EOF
   echo "   -> $OSD_CONFIG_DIR/stats.conf (settings_command added)"
+fi
+
+# The same repair for the bluetooth tile's Manage chip, which is newer than the
+# template and would otherwise fall back to the bare program name.
+if ! grep -qE '^[[:space:]]*bluetooth_command' "$OSD_CONFIG_DIR/stats.conf"; then
+  cat >> "$OSD_CONFIG_DIR/stats.conf" <<EOF
+
+# What the bluetooth tile's Manage chip runs: the manager card. (Added by the
+# installer; the built-in default is the bare name.)
+bluetooth_command = $BIN_DIR/hypr-osd-bluetooth
+EOF
+  echo "   -> $OSD_CONFIG_DIR/stats.conf (bluetooth_command added)"
+fi
+
+# hypr-osd-bluetooth - the bluetooth manager, opened by the system popup's
+# bluetooth tile. A card of its own because a list of devices needs room, a
+# filter and a way to sit still while a pairing handshake takes half a minute.
+if [ ! -f "$OSD_CONFIG_DIR/bluetooth.conf" ]; then
+  cat > "$OSD_CONFIG_DIR/bluetooth.conf" <<'EOF'
+# hypr-osd-bluetooth - settings for the bluetooth manager. Read once at start-up:
+#     pkill -f hypr-osd-bluetooth && ~/.local/bin/hypr-osd-bluetooth &
+#
+# The card opens from the system popup's bluetooth tile (its Manage chip, which
+# runs `bluetooth_command toggle`) and has no keybinding of its own. Everything
+# below has a built-in default; delete a line to fall back to it.
+#
+#     hypr-osd-bluetooth status    # the controller, the devices, the state
+#     hypr-osd-bluetooth show      # the card, without the popup
+#     hypr-osd-bluetooth scan      # look for devices nearby and open the card
+#     hypr-osd-bluetooth power off # the radio itself
+
+# The card's width. Every row is capped to fit it - a long device name cannot
+# widen the card.
+width = 640
+
+# The height of the scrolling device list, below the header and the filter. It
+# does not change with the number of devices, so a scan adding one cannot make
+# the card jump under the pointer.
+list_height = 380
+
+# How many devices details are read for (one `bluetoothctl info` each). Devices
+# past the limit are still listed, from the cheap answer.
+max_devices = 24
+
+# How often the controller and its devices are re-read while the card is open.
+# The list costs one bluetoothctl per device, so a closed card asks nothing at
+# all.
+devices_every_ms = 5000
+
+# How long the Scan button looks for devices. bluetoothctl exits by itself after
+# that, which is what ends the scan.
+scan_seconds = 12
+
+# Close the card after this long with no key press and no pointer movement
+# (0 never closes it). This is the safety net for having walked away or locked
+# the screen: a keyboard card behind a lock hears no Escape.
+idle_close_ms = 120000
+EOF
+  echo "   -> $OSD_CONFIG_DIR/bluetooth.conf (new)"
+else
+  echo "   -> $OSD_CONFIG_DIR/bluetooth.conf (left alone)"
 fi
 
 if [ ! -f "$OSD_CONFIG_DIR/volume.conf" ]; then
@@ -1106,6 +1171,7 @@ elif [ -d "$HYPR_DIR" ]; then
     sed -e "s|@BAR_OSD_BIN@|$BIN_DIR/hypr-osd-bar|g" \
       -e "s|@ISLAND_OSD_BIN@|$BIN_DIR/hypr-osd-island|g" \
       -e "s|@STATS_OSD_BIN@|$BIN_DIR/hypr-osd-stats|g" \
+      -e "s|@BLUETOOTH_OSD_BIN@|$BIN_DIR/hypr-osd-bluetooth|g" \
       -e "s|@VOLUME_OSD_BIN@|$BIN_DIR/hypr-osd-volume|g" \
       -e "s|@MEDIA_OSD_BIN@|$BIN_DIR/hypr-osd-media|g" \
       -e "s|@SESSION_OSD_BIN@|$BIN_DIR/hypr-osd-session|g" \
@@ -1442,6 +1508,7 @@ if [ "$hypr_installed" -eq 1 ]; then
   echo "   the grid button at the bar's left     # every application, in drawers"
   echo "   the gear in the system popup's header  # every element's settings"
   echo "   $BIN_DIR/hypr-osd-apps show           # ... the panel, without the button"
+  echo "   $BIN_DIR/hypr-osd-bluetooth show      # ... the bluetooth manager, too"
   echo "   $BIN_DIR/hypr-osd-settings show       # ... the settings window, too"
   echo "   $BIN_DIR/hypr-osd-energy status       # the power profile and the effects"
   echo "   SUPER + L                             # lock the screen (hyprlock)"

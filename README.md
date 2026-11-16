@@ -1365,8 +1365,10 @@ The panel is told where the bar is through `bar_height`, `bar_margin_top` and
 `gap`, which is why those three have to agree with `bar.conf`. The pill's hot zone
 is not derived: the player is as wide as its track, so the bar measures the pill
 and sends the rectangle with `open` (`hot_width` is only the fallback for a
-hand-typed one). The panel centres itself on the bar (`Placement::TopCard`), the
-same way the player is centred in it.
+hand-typed one). A transparent, monitor-sized canvas (`Placement::Canvas`) draws
+one rounded shape from that pill into the panel and back, while the bar retracts
+its other pills to make room. The same morph connects the applications and system
+popups to their own opening buttons.
 
 **`volume.conf`**
 

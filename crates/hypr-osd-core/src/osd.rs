@@ -116,6 +116,9 @@ pub enum Placement {
     /// out of the pill you pressed - and `margin_left` is the bar's `margin_x`
     /// for the same reason `margin_right` is on the other side.
     TopLeft { margin_top: i32, margin_left: i32 },
+    /// A transparent surface covering the monitor. A bar popup places and
+    /// animates its own shape on it, so the pill and panel can read as one object.
+    Canvas,
 }
 
 /// What the card does with the keyboard.
@@ -1118,7 +1121,7 @@ impl Osd {
                     window.set_exclusive_zone(height + margin_top);
                 }
             }
-            Placement::Fill => {
+            Placement::Fill | Placement::Canvas => {
                 for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
                     window.set_anchor(edge, true);
                 }
@@ -1192,6 +1195,9 @@ impl Osd {
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(margin_left);
                 card.set_margin_end(SHADOW_PAD);
+            }
+            Placement::Canvas => {
+                card.add_css_class("canvas");
             }
         }
         window.set_child(Some(&card));
@@ -1376,6 +1382,12 @@ fn put_content(card: &gtk::Box, content: &gtk::Widget, placement: &Placement) {
         Placement::Bar { .. } => {
             content.set_hexpand(true);
             content.set_halign(gtk::Align::Fill);
+        }
+        Placement::Canvas => {
+            content.set_hexpand(true);
+            content.set_vexpand(true);
+            content.set_halign(gtk::Align::Fill);
+            content.set_valign(gtk::Align::Fill);
         }
         // Every other surface is a card, and the card recipe deliberately has no
         // padding of its own.

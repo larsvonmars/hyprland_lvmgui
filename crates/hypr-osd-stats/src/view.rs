@@ -21,7 +21,7 @@
 //!  │ │ ▍○ Wlan@home     ▂▄▆·  [⧉]     │ └──────────────────────────────┘ │
 //!  │ └────────────────────────────────┘                                  │ │
 //!  │ ┌─ bluetooth ────────────────────┐                                  │ │
-//!  │ │           [⌕ Scan] [❯ btctl]   │                                  │ │
+//!  │ │           [⌕ Scan] [▣ Manage]  │                                  │ │
 //!  │ │ On · 1 connected          ◉ ◉  │                                  │ │
 //!  │ │ ▍◆ WH-1000XM4  ▂▄▆  82%   [⧗]  │                                  │ │
 //!  │ │ ▍⌨ K380        ▂▄  [⧉]  [✕]   │                                  │ │
@@ -47,7 +47,7 @@
 //!
 //! The two radio tiles are built the same way, one above the other: each is a
 //! *heading* that carries the tile's two tools ([Scan] and the tool that manages
-//! the rest of it - [nmtui], [bluetoothctl] - where the resources and updates
+//! the rest of it - [nmtui], [Manage] - where the resources and updates
 //! tiles keep btop and Install), then the controller's own row (a reading plus
 //! its switches), then a list with a fixed slot at the end for its rows' buttons,
 //! which is what lines the link meters, the batteries and the actions up from row
@@ -313,8 +313,8 @@ pub struct StatsView {
     /// What the network tile's Scan chip runs: a read that asks the card for a
     /// fresh scan (see `sources::refresh_wifi`'s `rescan`).
     on_wifi_scan: RefCell<Option<Rc<dyn Fn()>>>,
-    /// The terminal the buttons that need a TTY open (btop, nmtui,
-    /// bluetoothctl, pacman - and a join that has to be given a password).
+    /// The terminal the buttons that need a TTY open (btop, nmtui, pacman -
+    /// and a join that has to be given a password).
     terminal: String,
     /// The wireless interface, for the one action that names a device rather
     /// than a profile: letting go of the link.
@@ -465,11 +465,16 @@ impl StatsView {
             .child()
             .and_downcast::<gtk::Box>()
             .expect("a chip's child is its glyph-and-word row");
-        let bluetooth_open = glyph_chip(names::TERMINAL, "bluetoothctl", {
-            let terminal = settings.terminal_command.clone();
-            move || sources::spawn(&terminal, &["-e", "bluetoothctl"])
+        // The tile's "manage" tool: a card of this collection, not a terminal.
+        // It is the other half of this tile - every device, with room for its
+        // battery, its signal and the two things a row can do - and it replaces
+        // the `bluetoothctl` session that used to open here.
+        let bluetooth_open = glyph_chip(names::BLUETOOTH, "Manage", {
+            let command = settings.bluetooth_command.clone();
+            move || sources::spawn(&command, &["toggle"])
         });
-        bluetooth_open.set_tooltip_text(Some("Everything else bluetooth, in a terminal"));
+        bluetooth_open
+            .set_tooltip_text(Some("Every bluetooth device, in the collection's manager"));
         bluetooth_head.append(&stretch());
         bluetooth_head.append(&scan);
         bluetooth_head.append(&bluetooth_open);
@@ -1041,9 +1046,10 @@ impl StatsView {
             self.device_more.set_visible(hidden > 0);
             if hidden > 0 {
                 // The count, not the names: the list is a list, and the rest of
-                // it belongs to `bluetoothctl` (one button away, below).
-                self.device_more
-                    .set_text(&format!("+{hidden} more - see all in bluetoothctl"));
+                // it belongs to the bluetooth manager (one button away, above).
+                self.device_more.set_text(&format!(
+                    "+{hidden} more - see all in the bluetooth manager"
+                ));
             }
         } else {
             self.device_more.set_visible(false);
@@ -1258,11 +1264,11 @@ impl StatsView {
         }
         if !paired {
             // The panel pairs with a `NoInputNoOutput` agent, so the usual reason
-            // is a device that will not pair without a passkey - which only the
-            // interactive `bluetoothctl` can ask for.
+            // is a device that will not pair without a passkey. The manager card
+            // uses the same agent, so this is where the limit is named.
             self.note(
                 &self.device_note,
-                "Could not pair - the device may want a passkey (try bluetoothctl)",
+                "Could not pair - the device may want a passkey (bluetoothctl can ask for one)",
             );
         }
         self.rebuild_devices();

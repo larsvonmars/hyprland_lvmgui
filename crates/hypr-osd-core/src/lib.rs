@@ -72,6 +72,7 @@ pub mod hover;
 pub mod hyprctl;
 pub mod hypripc;
 pub mod icons;
+pub mod island;
 pub mod keymap;
 pub mod lock;
 pub mod login;

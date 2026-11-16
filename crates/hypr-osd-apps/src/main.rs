@@ -77,10 +77,10 @@ use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::apps::{self, App};
 use hypr_osd_core::hover::{self, parse_open, Action, BarGeometry, Delays, Machine, Rect, Side};
+use hypr_osd_core::island::{Island, Origin};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
     css, icons, run, state, text, touch, Config, Content, Hole, Keyboard, Opts, Osd, Placement,
-    CARD_PAD_X, CARD_PAD_Y,
 };
 
 use view::{AppsView, Row, Tile};
@@ -209,12 +209,6 @@ impl Settings {
     fn columns(&self) -> i32 {
         ((self.grid_width() + self.tile_gap) / (self.tile_width + self.tile_gap)).clamp(1, 10)
     }
-
-    /// Where the card hangs: one gap below the bar, its left edge lined up with
-    /// the bar's own margin.
-    fn margin_top(&self) -> i32 {
-        self.bar.margin_top as i32 + self.bar.height as i32 + self.bar.gap as i32
-    }
 }
 
 /// A drawer in the sidebar: the two that are always there, and one per category
@@ -249,6 +243,10 @@ impl Drawer {
 struct Panel {
     osd: Rc<Osd>,
     view: Rc<AppsView>,
+    /// The shape the panel unfolds from, and the card it becomes (see
+    /// `core::island`). The grid's widgets live inside it; the surface is a
+    /// transparent canvas the size of the screen.
+    island: Rc<Island>,
     settings: Rc<Settings>,
     /// The hover's state machine (see `core::hover`): the bar's button only
     /// *asks*, and this decides when the panel has been dwelt on long enough to
@@ -295,10 +293,16 @@ struct Panel {
 }
 
 impl Panel {
-    fn new(osd: &Rc<Osd>, view: Rc<AppsView>, settings: Rc<Settings>) -> Rc<Self> {
+    fn new(
+        osd: &Rc<Osd>,
+        view: Rc<AppsView>,
+        island: Rc<Island>,
+        settings: Rc<Settings>,
+    ) -> Rc<Self> {
         Rc::new(Panel {
             osd: osd.clone(),
             view,
+            island,
             settings,
             machine: RefCell::new(Machine::default()),
             monitor: RefCell::new(None),
@@ -417,10 +421,11 @@ impl Panel {
                 me.last_hole.set(None);
                 return glib::ControlFlow::Break;
             }
-            let Some(hole) = catcher_hole(&me.settings, &me.view.root) else {
-                // Not laid out yet: the next pass measures again.
+            let Some(origin) = me.origin() else {
+                // Not measurable yet: the next pass asks again.
                 return glib::ControlFlow::Continue;
             };
+            let hole = me.island.hole(&origin);
             if me.last_hole.get() != Some(hole) {
                 me.last_hole.set(Some(hole));
                 let close = Rc::clone(&me);
@@ -470,7 +475,6 @@ impl Panel {
         self.selected.set(0);
         self.rebuild_drawers();
 
-        self.osd.set_content(&self.view.root);
         *self.query.borrow_mut() = query.to_string();
         // `set_query` fires the change handler, which is what paints the grid;
         // the explicit call covers the case where the field already held this
@@ -488,6 +492,13 @@ impl Panel {
         match action {
             Action::None => {}
             Action::Show => {
+                // The shape starts as the bar's own button and grows into the
+                // card, so the surface comes up already holding it - a panel that
+                // appeared at its full size for one frame and then grew would
+                // flash (see `core::island`).
+                if let Some(origin) = self.origin() {
+                    self.island.unfold(&origin, self.settings.hot_width);
+                }
                 self.osd.show();
                 state::write(&state::apps_panel(), true);
                 self.view.focus_entry();
@@ -510,9 +521,36 @@ impl Panel {
                 // screen: `Osd::hide` takes the catcher down as a backstop, and
                 // this makes sure the flags agree with what is on screen.
                 self.clear_catcher();
+                // The flag goes out first so the bar starts retracting its pills
+                // while the shape is still shrinking: they are one movement.
                 state::write(&state::apps_panel(), false);
-                self.osd.hide();
+                let osd = self.osd.clone();
+                self.island.fold(move || osd.hide());
             }
+        }
+    }
+
+    /// Where this panel unfolds from: the bar's own screen, and the button the
+    /// bar measured for it.
+    fn origin(&self) -> Option<Origin> {
+        let monitor = self
+            .monitor
+            .borrow()
+            .as_deref()
+            .and_then(hover::monitor_of)
+            .or_else(hover::focused_monitor)?;
+        Some(Origin {
+            side: Side::Left,
+            bar: self.settings.bar,
+            monitor,
+            pill: *self.pill.borrow(),
+        })
+    }
+
+    /// Re-fit the shape to the card after the grid changed under it.
+    fn reshape(self: &Rc<Self>) {
+        if let Some(origin) = self.origin() {
+            self.island.refresh(&origin);
         }
     }
 
@@ -530,6 +568,9 @@ impl Panel {
         *self.query.borrow_mut() = query.to_string();
         self.selected.set(0);
         self.recompute();
+        // The grid can change height with the filter (a drawer's rows are
+        // reserved, but the island still has to be told what the card is now).
+        self.reshape();
         self.arm_idle();
     }
 
@@ -882,65 +923,8 @@ fn zones(panel: &Panel, settings: &Settings) -> Option<(Rect, Rect)> {
     // the bar, so every zone it has is measured in the bar's coordinates. The
     // focused output is the fallback for a hand-typed `open`, and for a bar too
     // old to say where it is.
-    let monitor = panel
-        .monitor
-        .borrow()
-        .as_deref()
-        .and_then(hover::monitor_of)
-        .or_else(hover::focused_monitor)?;
-    // The card is the content *plus* the padding the shell puts around it, which
-    // is what is really on screen.
-    let (width, height) = {
-        let root = &panel.view.root;
-        (
-            f64::from(root.width() + 2 * CARD_PAD_X),
-            f64::from(root.height() + 2 * CARD_PAD_Y),
-        )
-    };
-    let pill = panel
-        .pill
-        .borrow()
-        .map(|rect| Rect {
-            x: monitor.x + settings.bar.margin_x + rect.x,
-            y: monitor.y + settings.bar.margin_top + rect.y,
-            ..rect
-        })
-        .unwrap_or_else(|| hover::pill_rect(monitor, settings.bar, settings.hot_width, Side::Left));
-    let panel_rect = hover::panel_rect(monitor, settings.bar, Side::Left, (width, height));
-    Some((pill, panel_rect))
-}
-
-/// The card's rectangle on its monitor - the hole the tap catcher leaves open.
-///
-/// Measured rather than planned: the shell wraps the element's content in
-/// `CARD_PAD_*`, and a `TopLeft` card's visible corner is exactly its own
-/// margins (its shadow inset is only below and to the right), so the rectangle
-/// follows from the content's allocation and the bar's margins. Both are already
-/// monitor-relative, which is the space [`Hole`] is in - no monitor position has
-/// to be asked for, which also means the catcher works when `hyprctl` does not
-/// answer.
-fn catcher_hole(settings: &Settings, root: &gtk::Box) -> Option<Hole> {
-    let (width, height) = (root.width(), root.height());
-    // A card that has never been allocated has no rectangle to leave open; the
-    // caller's frame callback measures again on the next frame.
-    (width > 0 && height > 0).then(|| {
-        hole_at(
-            settings.bar.margin_x as i32,
-            settings.margin_top(),
-            (width + 2 * CARD_PAD_X, height + 2 * CARD_PAD_Y),
-        )
-    })
-}
-
-/// The arithmetic of [`catcher_hole`], split out so the rectangle can be tested
-/// without a display.
-fn hole_at(margin_x: i32, margin_top: i32, size: (i32, i32)) -> Hole {
-    Hole {
-        x: margin_x,
-        y: margin_top,
-        width: size.0,
-        height: size.1,
-    }
+    let origin = panel.origin()?;
+    Some(panel.island.zones(&origin, settings.hot_width))
 }
 
 /// Say once, on stderr, that this tablet is being typed into with no on-screen
@@ -1063,12 +1047,11 @@ fn main() -> glib::ExitCode {
         css: css::stylesheet(include_str!("apps.css")),
         namespace: NAMESPACE.to_string(),
         width: settings.width,
-        // Under the bar's left end, where the button that opens it is: the panel
-        // is what came out of that button, not a card in the middle of the screen.
-        placement: Placement::TopLeft {
-            margin_top: settings.margin_top(),
-            margin_left: settings.bar.margin_x as i32,
-        },
+        // A transparent canvas the size of the screen: the panel does not sit
+        // under the bar from here, it **unfolds out of the button at its left
+        // end** - the shape's own rectangle comes from `core::island`, the bar
+        // geometry and the button the bar measures (see `Placement::Canvas`).
+        placement: Placement::Canvas,
         // It has to be typed into - see the module comment.
         keyboard: Keyboard::Exclusive,
         // Unused by a panel hanging off the bar, kept at the shell's default.
@@ -1088,7 +1071,14 @@ fn main() -> glib::ExitCode {
         let settings = settings.clone();
         Box::new(move |osd: &Rc<Osd>| {
             let view = Rc::new(AppsView::new(&settings));
-            let panel = Panel::new(osd, view.clone(), settings.clone());
+            // The grid's widgets live inside the island for the whole session:
+            // the shape is what the surface draws, and every repaint below goes on
+            // changing these same widgets.
+            let island = Island::new(&view.root);
+            // The card's floor: what `Opts::width` used to be, so the panel comes
+            // out at the width its grid was worked out for.
+            island.set_min_width(settings.content_width());
+            let panel = Panel::new(osd, view.clone(), island.clone(), settings.clone());
 
             // The scan is the one slow-ish thing here (a few hundred small files),
             // and it happens once, while nobody is waiting: at start-up, so the
@@ -1161,9 +1151,8 @@ fn main() -> glib::ExitCode {
             }
 
             install_keys(osd, panel.clone());
-            let root = view.root.clone().upcast::<gtk::Widget>();
             state_cell.set(panel).ok();
-            Content::Single(root)
+            Content::Single(island.canvas().clone().upcast::<gtk::Widget>())
         })
     };
 
@@ -1279,8 +1268,6 @@ mod tests {
         assert_eq!(settings.grid_width(), 728 - 168 - view::BODY_GAP);
         // 550 of pane fits five 100px tiles and four 6px gaps.
         assert_eq!(settings.columns(), 5);
-        // The panel hangs one gap below the bar's bottom edge.
-        assert_eq!(settings.margin_top(), 40 + 8 + 6);
     }
 
     /// The bar sends `open <connector> <x> <y> <w> <h>`; the arguments are
@@ -1318,13 +1305,31 @@ mod tests {
 
     /// The tap catcher's hole is the *card* as it is drawn: its top-left corner
     /// is the bar's own left margin and the panel's gap below the bar, and the
-    /// size is the content the shell pads. Getting this wrong leaves a finger of
+    /// size is the content the island pads. Getting this wrong leaves a finger of
     /// the card either dimmed by its own catcher or a strip of screen that
     /// swallows taps beside it.
     #[test]
     fn the_catcher_hole_is_the_card_at_the_bars_left_end() {
+        let origin = Origin {
+            side: Side::Left,
+            bar: BarGeometry {
+                height: 40.0,
+                margin_top: 8.0,
+                margin_x: 12.0,
+                gap: 6.0,
+                shadow_pad: 0.0,
+            },
+            monitor: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1368.0,
+                height: 912.0,
+            },
+            pill: None,
+        };
+        // `margin_top` (8) + the bar's height (40) + the gap (6) = 54.
         assert_eq!(
-            hole_at(12, 54, (728, 460)),
+            origin.hole((728.0, 460.0)),
             Hole {
                 x: 12,
                 y: 54,

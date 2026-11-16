@@ -98,6 +98,7 @@ use gtk::prelude::*;
 // keeps the call sites reading as they always did: these are the *sources* the
 // bar's pills are drawn from.
 use hypr_osd_core::hardware::{self as sources, Battery, Network, Volume};
+use hypr_osd_core::hover::Side;
 use hypr_osd_core::mpris::{self, Track};
 use hypr_osd_core::{css, monitors, run, state, touch, Config, Content, Opts, Osd, Placement};
 
@@ -150,6 +151,16 @@ const DEFAULT_CLOCK_FORMAT: &str = "%H:%M";
 /// clock.
 const DEFAULT_DATE_FORMAT: &str = "%a, %b %d";
 const DEFAULT_TICK_MS: u64 = 1000;
+
+/// How often the three panel flags are read, while the bar is up.
+///
+/// Not the heartbeat: a popup is opened by a *separate process* that writes
+/// `1` into `$XDG_RUNTIME_DIR` as it starts to unfold, and the bar's pills then
+/// retract while the island grows into the space. A whole second of delay would
+/// show the shape landing on top of a bar that only starts to move afterwards.
+/// Three small files in the runtime directory, twelve times a second - and a
+/// repaint only when one of them changed.
+const PANEL_POLL: Duration = Duration::from_millis(60);
 const DEFAULT_VOLUME_EVERY_MS: u64 = 1000;
 const DEFAULT_NETWORK_EVERY_MS: u64 = 5000;
 const DEFAULT_BATTERY_EVERY_MS: u64 = 30000;
@@ -468,6 +479,25 @@ fn main() -> glib::ExitCode {
                 let bars = bars.clone();
                 glib::timeout_add_local(settings.tick, move || {
                     bars.tick();
+                    glib::ControlFlow::Continue
+                });
+            }
+
+            // 5. The panel flags, on their own faster clock. The three popups are
+            //    separate processes that write "open" into $XDG_RUNTIME_DIR as
+            //    they unfold, and the bar's answer is *part of that movement* - the
+            //    pills retract while the island grows into the space they leave.
+            //    A heartbeat of a second would show the island landing on top of a
+            //    bar that only then starts to move. Three small files, twelve
+            //    times a second, and a repaint only when one of them changed.
+            {
+                let bars = bars.clone();
+                glib::timeout_add_local(PANEL_POLL, move || {
+                    bars.watch_panels(
+                        state::read(&state::island_panel()),
+                        state::read(&state::stats_panel()),
+                        state::read(&state::apps_panel()),
+                    );
                     glib::ControlFlow::Continue
                 });
             }
@@ -885,6 +915,28 @@ impl Bars {
     fn edit(&self, change: impl FnOnce(&mut Paint)) {
         change(&mut self.paint.borrow_mut());
         self.repaint();
+    }
+
+    /// Take the three panel flags, and repaint only if one of them moved.
+    ///
+    /// The flags are files because each panel is a separate process (see
+    /// `state`), and this is their fast clock: the bar has to answer within a few
+    /// frames of the island starting to unfold. Everything else about the panels
+    /// - the accent on the pill that opened one - rides the heartbeat with the
+    /// rest (see [`Bars::tick`]).
+    fn watch_panels(&self, island: bool, status: bool, apps: bool) {
+        {
+            let paint = self.paint.borrow();
+            if paint.island_open == island && paint.status_open == status && paint.apps_open == apps
+            {
+                return;
+            }
+        }
+        self.edit(|paint| {
+            paint.island_open = island;
+            paint.status_open = status;
+            paint.apps_open = apps;
+        });
     }
 
     /// Paint one bar from the cached values.
@@ -1359,6 +1411,7 @@ fn apply(view: &BarView, paint: &Paint) {
     view.set_island_open(paint.island_open);
     view.set_status_open(paint.status_open);
     view.set_apps_open(paint.apps_open);
+    view.set_panel(panel_from(paint));
     view.render_media(paint.media.as_ref(), paint.playing);
     view.set_volume(paint.volume);
     if let Some(network) = paint.network.clone() {
@@ -1367,13 +1420,30 @@ fn apply(view: &BarView, paint: &Paint) {
     view.set_battery(paint.battery);
 }
 
+/// Which pill a panel is unfolding from, as far as the bar can tell.
+///
+/// One at a time in practice: the panels are opened by different pills and each
+/// closes when the pointer leaves it. If two flags were ever set, the left one
+/// wins - it is the answer that retracts the most, so no pill is left sitting
+/// under an island.
+fn panel_from(paint: &Paint) -> Option<Side> {
+    if paint.apps_open {
+        Some(Side::Left)
+    } else if paint.status_open {
+        Some(Side::Right)
+    } else if paint.island_open {
+        Some(Side::Centre)
+    } else {
+        None
+    }
+}
+
 /// Whether this tick is the one for an interval.
 fn every(count: u64, interval_ms: u64, tick: Duration) -> bool {
     let tick_ms = tick.as_millis().max(1) as u64;
     let ticks = (interval_ms / tick_ms).max(1);
     count.is_multiple_of(ticks)
 }
-
 /// The current local time in a `strftime` format, through glib - the same C
 /// library `strftime` the rest of the desktop's configs assume, and a date
 /// library this program does not need to link.
