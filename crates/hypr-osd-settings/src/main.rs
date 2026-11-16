@@ -29,6 +29,16 @@
 //!   trigger, in the same way the bar's grid button opens the applications panel:
 //!   this element has no keybinding of its own.
 //!
+//! On the Surface it is a tablet as often as it is a laptop, so the window is
+//! built to be worked by a finger too: `settings.css` grows every control while
+//! the shell has the window marked `touch` (see `hypr_osd_core::touch`), every
+//! text field raises the on-screen keyboard through that module, the pane
+//! scroller flick-scrolls, and a tap, a scroll or a drag is *activity* - the
+//! idle-close watchdog below is re-armed by all of them, not by pointer motion
+//! alone. A hardware keyboard changes none of that: the OSK only appears while
+//! the machine is a tablet, and the window's own focus, Tab and Escape handling
+//! is what it always was.
+//!
 //! Verbs (`hypr-osd-settings <verb>`):
 //!
 //! ```text
@@ -56,7 +66,7 @@ mod arrange;
 mod view;
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -67,8 +77,8 @@ use hypr_osd_core::icons::names;
 use hypr_osd_core::settings::{self as catalogue, Applies, Kind, MonitorList, Section};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
-    config, css, desktop, energy, hardware, hyprctl, keymap, lock, monitors, run, state, Config,
-    Content, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
+    config, css, desktop, energy, hardware, hyprctl, keymap, lock, login, monitors, run, state,
+    wallpaper, Config, Content, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
 };
 
 use view::{Field, Heading, PageAction, SectionRow, SettingsView, TabRow};
@@ -92,9 +102,17 @@ const DEFAULT_IDLE_CLOSE_MS: u64 = 120_000;
 /// an absolute path.
 const DEFAULT_BIN_DIR: &str = "~/.local/bin";
 
+/// What a button that needs a terminal opens (the Login screen page's Install,
+/// which has to run `sudo`). Overridable as `terminal_command` - the same key the
+/// bar, the system popup and the island use, so the whole desktop agrees.
+const DEFAULT_TERMINAL: &str = "kitty";
+
 /// How often a restart tries to start an element that came up as a mere
 /// forwarder of the process that was still going away (see [`Panel::restart`]).
 const RESTART_ATTEMPTS: i32 = 5;
+
+/// The height of a page's picture banner (the Wallpaper and Login screen pages).
+const PREVIEW_HEIGHT: i32 = 150;
 
 /// What the config file resolved to.
 struct Settings {
@@ -108,6 +126,8 @@ struct Settings {
     bin_dir: PathBuf,
     /// The daemon the System tab's buttons run.
     energy_command: String,
+    /// The terminal the Login screen page's Install opens.
+    terminal: String,
 }
 
 impl Settings {
@@ -122,6 +142,7 @@ impl Settings {
             idle_close: if idle.is_zero() { None } else { Some(idle) },
             bin_dir: expand(&config.string("bin_dir", DEFAULT_BIN_DIR)),
             // Empty means "the energy element on `bin_dir`" - resolved at click
+            terminal: config.string("terminal_command", DEFAULT_TERMINAL),
             // time the same way the Restart chip resolves an element's binary.
             energy_command: config.string("energy_command", ""),
         }
@@ -155,9 +176,19 @@ struct Panel {
     tab: Cell<usize>,
     /// The page being shown within that tab.
     section: Cell<usize>,
+    /// The page each tab was last on. A tab button is a place, not a reset: coming
+    /// back to the Hyprland tab should land on the page you were reading, not on
+    /// Display for the tenth time.
+    last: RefCell<Vec<usize>>,
     /// What the last `apply` did, for `status` - the one thing here that goes
     /// through another program and can therefore be refused.
     applied: RefCell<String>,
+    /// The last answer of hyprlock's parser about the generated lock config. It is
+    /// only refreshed by the page's **Check** button: the parser aborts when it
+    /// cannot reach the display it was pointed at (that is how it is made to read
+    /// the file without locking anything), and doing that on every page render
+    /// would fill the journal with crash entries.
+    lock_check: RefCell<String>,
     /// The Display page's arrangement editor, kept across re-renders: a drop or
     /// a popover write re-fits it in place ([`Arranger::update`]) rather than
     /// rebuilding the canvas and asking `hyprctl` again. `None` on every other
@@ -169,6 +200,56 @@ struct Panel {
     idle: Rc<Timer>,
 }
 
+/// The still picture a path stands for: a file as itself, a slideshow directory as
+/// its first picture - what the lock screen and the greeter can actually draw.
+fn still_picture(path: &str) -> String {
+    match preview_picture(FsPath::new(path)) {
+        Some((first, true)) => first.to_string_lossy().into_owned(),
+        _ => path.to_string(),
+    }
+}
+
+/// The picture a banner should draw, and whether it stands for a slideshow: a
+/// directory gets its first image in name order, which is what hyprpaper does with
+/// no `order = random`.
+fn preview_picture(path: &FsPath) -> Option<(PathBuf, bool)> {
+    if path.is_dir() {
+        let mut pictures: Vec<PathBuf> = std::fs::read_dir(path)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|entry| entry.is_file() && is_picture(entry))
+            .collect();
+        pictures.sort();
+        pictures.into_iter().next().map(|first| (first, true))
+    } else {
+        (path.is_file() && is_picture(path)).then(|| (path.to_path_buf(), false))
+    }
+}
+
+fn is_picture(path: &FsPath) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("jpg" | "jpeg" | "png" | "webp" | "jxl" | "bmp" | "avif")
+    )
+}
+
+/// How many pictures a slideshow directory holds, for the banner's caption.
+fn slideshow_count(path: &FsPath) -> usize {
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|entry| entry.is_file() && is_picture(entry))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 impl Panel {
     fn new(osd: &Rc<Osd>, view: Rc<SettingsView>, settings: Rc<Settings>) -> Rc<Self> {
         Rc::new(Panel {
@@ -177,7 +258,9 @@ impl Panel {
             settings,
             tab: Cell::new(0),
             section: Cell::new(0),
+            last: RefCell::new(vec![0; catalogue::TABS.len()]),
             applied: RefCell::new("not applied yet".to_string()),
+            lock_check: RefCell::new("not checked yet".to_string()),
             arranger: RefCell::new(None),
             arrange_popover: RefCell::new(None),
             idle: Rc::new(Timer::new()),
@@ -213,8 +296,11 @@ impl Panel {
     fn open(self: &Rc<Self>, tab: Option<usize>, page: Option<usize>) {
         self.osd.set_content(&self.view.root);
         if let Some(tab) = tab {
-            self.tab.set(tab.min(catalogue::TABS.len() - 1));
-            self.section.set(0);
+            let tab = tab.min(catalogue::TABS.len() - 1);
+            self.tab.set(tab);
+            // With no page named, a tab opens where it was left - see `last`.
+            self.section
+                .set(self.last.borrow().get(tab).copied().unwrap_or(0));
         }
         self.show_section(page.unwrap_or(self.section.get()));
         self.osd.show();
@@ -230,11 +316,20 @@ impl Panel {
         self.osd.hide();
     }
 
-    /// Switch to a tab and show its first page - what a tab button does.
+    /// Switch to a tab and show the page it was last on - what a tab button does.
     fn open_tab(self: &Rc<Self>, index: usize) {
-        self.tab.set(index.min(catalogue::TABS.len() - 1));
-        self.section.set(0);
-        self.show_section(0);
+        let index = index.min(catalogue::TABS.len() - 1);
+        let page = self.last.borrow().get(index).copied().unwrap_or(0);
+        self.tab.set(index);
+        self.show_section(page);
+    }
+
+    /// Step through the tabs, wrapping at either end - what Ctrl+Tab and
+    /// Ctrl+Shift+Tab do.
+    fn step_tab(self: &Rc<Self>, delta: isize) {
+        let count = catalogue::TABS.len() as isize;
+        let index = (self.tab.get() as isize + delta).rem_euclid(count) as usize;
+        self.open_tab(index);
     }
 
     /// Draw one tab: the tab row, the sidebar, and the rows of the page as the
@@ -243,6 +338,9 @@ impl Panel {
         let pages = self.pages();
         let index = index.min(pages.len() - 1);
         self.section.set(index);
+        if let Some(slot) = self.last.borrow_mut().get_mut(self.tab.get()) {
+            *slot = index;
+        }
         let section = &pages[index];
         let config = Config::load(section.file);
 
@@ -280,6 +378,31 @@ impl Panel {
         match section.applies {
             Applies::Displays => fields.extend(display_fields(&config, &displays)),
             Applies::Shortcuts => {}
+            // The three Appearance pages carry their own buttons as well as their
+            // rows: "use this picture for the lock screen" is not a key, it is an
+            // action on another page's file, and the same for the login screen and
+            // for the daemon restart a splash change needs. They sit at the top
+            // (or right under the picture, on the Wallpaper page) so they are
+            // above the fold - a page of eighty rows hides anything at its end.
+            Applies::Wallpaper => {
+                fields.extend(fields_of(&config, section, live));
+                let action_at = fields.len().min(1);
+                fields.insert(action_at, wallpaper_actions());
+                let state_at = (action_at + 1).min(fields.len());
+                fields.insert(state_at, wallpaper_state());
+            }
+            Applies::Lock => {
+                fields.extend(fields_of(&config, section, live));
+                fields.insert(0, lock_actions());
+                fields.insert(1, self.lock_state());
+            }
+            Applies::Login => {
+                fields.extend(fields_of(&config, section, live));
+                fields.insert(0, login_actions());
+                for (position, field) in login_state().into_iter().enumerate() {
+                    fields.insert(1 + position, field);
+                }
+            }
             _ => fields.extend(fields_of(&config, section, live)),
         }
 
@@ -292,29 +415,50 @@ impl Panel {
             match section.applies {
                 Applies::Element | Applies::Energy => PageAction::Restart,
                 Applies::Compositor | Applies::Displays => PageAction::Apply,
-                // The lock screen is *generated*: there is no element to restart
-                // and no compositor to hand a document to, so the chip rewrites
-                // the variables (which is what a change does too - it is there
-                // for a `theme.css` that was edited by hand).
-                Applies::Lock => PageAction::Regenerate,
+                // The lock screen and the two other faces are *generated*: there
+                // is no element to restart and no compositor to hand a document
+                // to, so the chip writes the file again (which is what a change
+                // does too - it is there for a file or the theme edited by hand).
+                Applies::Lock | Applies::Wallpaper | Applies::Login => PageAction::Write,
+                // The touch page has no generated file and no single element to
+                // restart: every element reads `touch.conf` at its own start-up,
+                // so the page says that instead of offering a chip that would
+                // speak for only one of them.
+                Applies::Touch => PageAction::None,
                 Applies::Shortcuts => PageAction::None,
             }
         };
 
         // The Display page opens with the outputs as a picture: a monitor's
         // position is a pair of numbers, and dragging one is the only way to
-        // choose it that does not require doing arithmetic in your head. On
-        // every other page the editor and its popover are put away - a popover
-        // hanging off a box that is no longer drawn has to go with it.
+        // choose it that does not require doing arithmetic in your head. The two
+        // picture pages open with the picture itself, which answers "is this the
+        // one I meant" before any row has to be read. On every other page the
+        // editor and its popover are put away - a popover hanging off a box that
+        // is no longer drawn has to go with it.
         let banner = if section.applies == Applies::Displays {
             self.arrangement(&displays)
         } else {
             self.clear_arrangement();
-            None
+            match section.applies {
+                Applies::Wallpaper => self.image_banner(Some(wallpaper::current_path(&config))),
+                Applies::Login => {
+                    let rendered = login::image_path();
+                    let path = if config.bool("render", login::DEFAULT_RENDER) && rendered.is_file()
+                    {
+                        rendered.to_string_lossy().into_owned()
+                    } else {
+                        login::source(&config).unwrap_or_default()
+                    };
+                    self.image_banner(Some(path))
+                }
+                _ => None,
+            }
         };
 
         self.view.render_tabs(&self.tab_rows());
         self.view.render_sections(&self.section_rows());
+        self.view.set_file_note(&file_note(section, &config));
         self.view
             .show_section(section, &fields, action, banner.as_ref());
     }
@@ -333,6 +477,10 @@ impl Panel {
     /// the page, and the widget that is redrawn away is the one whose drag
     /// gesture is still unwinding. Letting the gesture finish first is what keeps
     /// the write from pulling the ground out from under it.
+    ///
+    /// A drag is also *activity*: it is by far the longest a finger stays on the
+    /// window without a key or a scroll, and the watchdog must not close the
+    /// window in the middle of one.
     fn arrangement(self: &Rc<Self>, displays: &[monitors::Display]) -> Option<gtk::Widget> {
         if let Some(arranger) = self.arranger.borrow().as_ref() {
             arranger.update(displays);
@@ -353,6 +501,8 @@ impl Panel {
         let on_select = move |output: &str, item: &gtk::Widget| {
             me.open_arrange_popover(output, item);
         };
+        let me = Rc::clone(self);
+        let on_activity = move || me.arm_idle();
         // The pane, less the inset the rows keep from its edge.
         let width = (self.settings.pane_width() - 24).max(200);
         let arranger = arrange::Arranger::new(
@@ -361,6 +511,7 @@ impl Panel {
             arrange::Handlers {
                 on_move: Rc::new(on_move),
                 on_select: Rc::new(on_select),
+                on_activity: Rc::new(on_activity),
             },
         )?;
         let root = arranger.root().clone().upcast::<gtk::Widget>();
@@ -376,6 +527,83 @@ impl Panel {
             popover.popdown();
             popover.unparent();
         }
+    }
+
+    /// hyprlock's last answer about the generated file: zero errors is the whole
+    /// point, because a bad option is ignored rather than refused.
+    ///
+    /// The answer is asked for by the page's **Check** button, not made here:
+    /// hyprlock's parser aborts when it cannot reach the display it was pointed at
+    /// (that abort is how it is made to read the file without locking anything),
+    /// and the journal would collect one crash entry per page render.
+    fn lock_state(&self) -> Field {
+        info_field(
+            "Config check",
+            self.lock_check.borrow().clone(),
+            "Check asks hyprlock's parser to read the generated \
+             ~/.config/hypr/hyprlock.conf against a display that does not exist, so it \
+             cannot lock the session. It names any bad option with its line number - \
+             nothing else on this page can catch that.",
+        )
+    }
+
+    /// The picture at the top of the Wallpaper and Login screen pages: the file
+    /// itself, its name and its size. A settings page about a picture should show
+    /// it - "is this the wallpaper I meant" is not a question a path answers well.
+    ///
+    /// A directory is a slideshow to hyprpaper, so its first picture is what the
+    /// banner draws, captioned as a slideshow rather than with one picture's size.
+    ///
+    /// `GtkPicture` is given the pane's width and a fixed height with
+    /// `can_shrink`, so a 4K file is cropped to the banner rather than widening
+    /// the card or making the page a screen tall.
+    fn image_banner(&self, path: Option<String>) -> Option<gtk::Widget> {
+        let path = path.filter(|path| !path.trim().is_empty() && path != "screenshot")?;
+        // A wallpaper can be a *directory* (hyprpaper walks it as a slideshow), so
+        // the banner shows the first picture it would draw rather than nothing.
+        let (picture_path, slideshow) = match preview_picture(FsPath::new(&path)) {
+            Some((file, slideshow)) => (file, slideshow),
+            None => return None,
+        };
+        let texture = gdk::Texture::from_filename(&picture_path).ok()?;
+        let width = (self.settings.pane_width() - 24).max(200);
+
+        let picture = gtk::Picture::for_paintable(&texture);
+        picture.add_css_class("preview");
+        picture.set_content_fit(gtk::ContentFit::Cover);
+        picture.set_can_shrink(true);
+        picture.set_size_request(width, PREVIEW_HEIGHT);
+        picture.set_hexpand(false);
+        picture.set_valign(gtk::Align::Start);
+        picture.set_overflow(gtk::Overflow::Hidden);
+
+        let name = FsPath::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&path);
+        let caption = if slideshow {
+            format!(
+                "{name}  \u{b7}  slideshow  \u{b7}  {} pictures",
+                slideshow_count(FsPath::new(&path))
+            )
+        } else {
+            format!(
+                "{name}  \u{b7}  {} \u{d7} {}",
+                texture.width(),
+                texture.height()
+            )
+        };
+        let caption = gtk::Label::new(Some(&caption));
+        caption.add_css_class("preview-caption");
+        caption.set_xalign(0.0);
+        caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+        let banner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        banner.add_css_class("preview-box");
+        banner.set_valign(gtk::Align::Start);
+        banner.append(&picture);
+        banner.append(&caption);
+        Some(banner.upcast())
     }
 
     /// After a Display write: re-read the compositor, re-fit the editor's
@@ -461,7 +689,11 @@ impl Panel {
                 let me = Rc::clone(self);
                 let key = field.key.clone();
                 switch.connect_state_set(move |_, active| {
-                    me.changed(desktop::FILE, &key, Some(if active { "false" } else { "true" }));
+                    me.changed(
+                        desktop::FILE,
+                        &key,
+                        Some(if active { "false" } else { "true" }),
+                    );
                     glib::Propagation::Proceed
                 });
                 row.append(&switch);
@@ -532,6 +764,7 @@ impl Panel {
         if let Err(error) = config::edit_value(&path, key, value) {
             // Writing is the one thing this element does that can fail, and a
             // silent failure would look like a switch that does not stick.
+            self.note(format!("cannot write {}: {error}", path.display()), true);
             eprintln!(
                 "hypr-osd-settings: cannot write {}: {error}",
                 path.display()
@@ -545,6 +778,7 @@ impl Panel {
         // same - it is applied to the compositor through the same document.
         if matches!(self.page().applies, Applies::Compositor | Applies::Displays) {
             if let Err(error) = self.apply() {
+                self.note(format!("failed: {error}"), true);
                 eprintln!("hypr-osd-settings: {error}");
             }
         }
@@ -552,9 +786,46 @@ impl Panel {
         // The lock screen has no daemon to restart either: the variables are
         // rewritten as the value is written, and hyprlock reads them at the next
         // lock - which is why that page needs no chip to make a change take
-        // effect.
+        // effect. The wallpaper and the login screen are generated the same way;
+        // the wallpaper is also handed to the running hyprpaper at once.
         if self.page().applies == Applies::Lock && self.page().file == file {
             self.regenerate();
+        }
+        if self.page().applies == Applies::Wallpaper && self.page().file == file {
+            if let Err(error) = self.apply_wallpaper() {
+                eprintln!("hypr-osd-settings: {error}");
+            }
+            // A new picture is the whole point of this page: draw it again so the
+            // banner above the rows is the one just chosen.
+            if key == "path" {
+                let me = Rc::clone(self);
+                glib::timeout_add_local_once(Duration::ZERO, move || {
+                    me.show_section(me.section.get());
+                });
+            }
+        }
+        if self.page().applies == Applies::Login && self.page().file == file {
+            self.write_login();
+            // The rendering is a `magick` child, not a wait; give it a moment
+            // before asking the page to show the file it is writing. A spinner
+            // click that changes the blur is the same story.
+            if matches!(
+                key,
+                "background"
+                    | "render"
+                    | "blur"
+                    | "dim"
+                    | "saturation"
+                    | "render_width"
+                    | "render_height"
+            ) {
+                let me = Rc::clone(self);
+                glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+                    if me.page().applies == Applies::Login {
+                        me.show_section(me.section.get());
+                    }
+                });
+            }
         }
 
         if self.page().applies == Applies::Displays && self.page().file == file {
@@ -565,26 +836,41 @@ impl Panel {
     }
 
     /// What the page's chip does - see [`view::PageAction`].
-    fn act(&self) {
+    fn act(self: &Rc<Self>) {
         let page = self.page();
         match page.applies {
             Applies::Compositor | Applies::Displays => {
                 if let Err(error) = self.apply() {
+                    self.note(format!("failed: {error}"), true);
                     eprintln!("hypr-osd-settings: {error}");
                 }
             }
-            // Regenerating the lock screen's variables is the whole job: it reads
-            // the theme and the file and writes what hyprlock will read.
-            Applies::Lock => self.regenerate(),
+            // Regenerating is the whole job: it reads the theme and the file and
+            // writes what hyprlock will read. The page is drawn again so the
+            // config check reads the file that was just written.
+            Applies::Lock => {
+                self.regenerate();
+                self.show_section(self.section.get());
+            }
+            // The wallpaper's file and the login screen's theme are generated the
+            // same way, and the wallpaper is handed to hyprpaper's IPC as well.
+            Applies::Wallpaper => {
+                if let Err(error) = self.apply_wallpaper() {
+                    eprintln!("hypr-osd-settings: {error}");
+                }
+            }
+            Applies::Login => self.write_login(),
             // The window's own page has no chip at all (see `show_section`).
             Applies::Element | Applies::Energy if page.file != ELEMENT => self.restart(page.file),
             // Nothing to restart and nothing to re-apply: a list of keys.
-            Applies::Element | Applies::Energy | Applies::Shortcuts => {}
+            // Nothing to restart and nothing to re-apply: a list of keys, and the
+            // machine's touch page (whose file every element reads by itself).
+            Applies::Element | Applies::Energy | Applies::Touch | Applies::Shortcuts => {}
         }
     }
 
-    /// Rewrite `~/.config/hypr/hyprlock-vars.conf` - the palette and the knobs the
-    /// hand-written `hyprlock.conf` is written in terms of (see [`lock`]).
+    /// Rewrite `~/.config/hypr/hyprlock.conf` - the whole lock screen, palette and
+    /// knobs (see [`lock`]).
     ///
     /// Writing it *is* making the change take effect, because hyprlock reads its
     /// config at every lock: there is nothing to restart, and no document to hand
@@ -592,24 +878,274 @@ impl Panel {
     /// Hyprland tab reports through, so `status` can say whether the last write
     /// worked.
     fn regenerate(&self) {
-        match lock::write_vars() {
-            Ok(path) => *self.applied.borrow_mut() = format!("wrote {}", path.display()),
+        // A new file is an unchecked file: the reading row says so until the
+        // page's Check button asks the parser again.
+        *self.lock_check.borrow_mut() = "not checked yet".to_string();
+        match lock::write() {
+            Ok(path) => self.note(format!("wrote {}", path.display()), false),
             Err(error) => {
-                *self.applied.borrow_mut() = format!("failed: {error}");
+                self.note(format!("failed: {error}"), true);
                 eprintln!("hypr-osd-settings: {error}");
             }
         }
     }
 
-    /// One of a page's own buttons ([`catalogue::ENERGY_ACTIONS`]): the System
-    /// tab asks the energy daemon to save or restore *now*, rather than waiting
-    /// for the next profile poll.
+    /// Write hyprpaper's config and hand the picture to the running daemon.
     ///
-    /// `hardware::launch`, never `run`: the daemon is already up (it is
-    /// autostarted) and this is a verb sent to it, so waiting for an exit would
-    /// park this window's main loop - the exact mistake the bar's status pill
-    /// made.
-    fn command(&self, id: &str) {
+    /// The write makes the file right for the next start; the IPC makes the
+    /// screen right now. `splash` and `ipc` are read once at start-up, which is
+    /// what the page's own **Restart** button is for.
+    fn apply_wallpaper(&self) -> Result<(), String> {
+        let path = wallpaper::write()?;
+        let cfg = Config::load(wallpaper::FILE);
+        if let Some(argument) = wallpaper::ipc_argument(&cfg) {
+            if !hardware::run("hyprctl", &["hyprpaper", "wallpaper", &argument]) {
+                self.note(
+                    format!(
+                        "wrote {}; hyprpaper did not answer the IPC request",
+                        path.display()
+                    ),
+                    true,
+                );
+                return Ok(());
+            }
+        }
+        self.note(
+            format!("wrote {} and set the wallpaper", path.display()),
+            false,
+        );
+        Ok(())
+    }
+
+    /// Stop hyprpaper and start it again, so the settings read at start-up -
+    /// `splash` and `ipc` - take effect.
+    fn restart_wallpaper(&self) {
+        // `-x` matches the exact name; the sleep lets the name and the output
+        // device go before the replacement asks for them (starting a second
+        // hyprpaper while the first still runs leaves two daemons, not a
+        // replacement).
+        hardware::launch(
+            "sh",
+            &[
+                "-c",
+                "pkill -x hyprpaper >/dev/null 2>&1; sleep 0.3; \
+                 setsid hyprpaper >/dev/null 2>&1 &",
+            ],
+        );
+        self.note("restarting hyprpaper", false);
+    }
+
+    /// Write the login screen's `theme.conf` and render its background.
+    ///
+    /// The rendering is `hardware::launch`, never a wait: a 4K blur takes a
+    /// moment, and this window must not park on it. The greeter keeps drawing the
+    /// previous image until the new one lands, which is exactly the behaviour to
+    /// want at a login screen.
+    fn write_login(&self) {
+        match login::write() {
+            Ok((path, note)) => {
+                if let Some((program, args)) = login::render_command(&Config::load(login::FILE)) {
+                    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    hardware::launch(&program, &refs);
+                }
+                self.note(format!("wrote {} - {note}", path.display()), false);
+            }
+            Err(error) => {
+                self.note(format!("failed: {error}"), true);
+                eprintln!("hypr-osd-settings: {error}");
+            }
+        }
+    }
+
+    /// Copy the login screen's files into SDDM, which needs root.
+    ///
+    /// The installer is handed to a terminal rather than run here: something has
+    /// to ask for the password, and the only thing that can is `sudo` on a TTY
+    /// this layer surface does not have. It goes through `hardware::launch`,
+    /// never `run`: the terminal, the password prompt and the installation all
+    /// outlive the click. The shell keeps the window open afterwards, because a
+    /// refused password or a missing `magick` would otherwise close the terminal
+    /// before the reason could be read.
+    fn install_login(self: &Rc<Self>) {
+        let script = login::install_script();
+        if !script.is_file() {
+            self.note(format!("no installer at {}", script.display()), true);
+            return;
+        }
+        if !hardware::installed(&self.settings.terminal) {
+            self.note(
+                format!(
+                    "no terminal named `{}` - set Terminal on the Settings page",
+                    self.settings.terminal
+                ),
+                true,
+            );
+            return;
+        }
+        self.note(
+            format!(
+                "installing the login screen - type your password in the {} window",
+                self.settings.terminal
+            ),
+            false,
+        );
+        hardware::launch(
+            &self.settings.terminal,
+            &[
+                "-e",
+                "sh",
+                "-c",
+                // `$1` is the script, so a space in the theme's path needs no
+                // quoting here; the installer asks for the password itself.
+                "sudo \"$1\"; printf '\\npress Enter to close\\n'; read -r _",
+                "sh",
+                &script.to_string_lossy(),
+            ],
+        );
+    }
+
+    /// Point another face at the wallpaper this page shows: the lock screen's
+    /// `wallpaper` key, the login screen's `background` key, or both.
+    fn use_image(self: &Rc<Self>, lock_screen: bool, login_screen: bool) {
+        let picture = wallpaper::current_path(&Config::load(wallpaper::FILE));
+        if picture.trim().is_empty() {
+            self.note("no picture to share: choose one first", true);
+            return;
+        }
+        // The lock screen and the greeter both draw a *still*: a slideshow
+        // directory is shared as its first picture, not as a path neither program
+        // can read.
+        let still = still_picture(&picture);
+        let mut wrote = Vec::new();
+        if lock_screen {
+            let path = Config::load(lock::FILE).path;
+            match config::edit_value(&path, "wallpaper", Some(&still)) {
+                Ok(()) => {
+                    self.regenerate();
+                    wrote.push("lock screen");
+                }
+                Err(error) => eprintln!(
+                    "hypr-osd-settings: cannot write {}: {error}",
+                    path.display()
+                ),
+            }
+        }
+        if login_screen {
+            let path = Config::load(login::FILE).path;
+            match config::edit_value(&path, "background", Some(&still)) {
+                Ok(()) => {
+                    self.write_login();
+                    wrote.push("login screen");
+                }
+                Err(error) => eprintln!(
+                    "hypr-osd-settings: cannot write {}: {error}",
+                    path.display()
+                ),
+            }
+        }
+        if !wrote.is_empty() {
+            self.note(
+                format!("{still} is now behind the {}", wrote.join(" and ")),
+                false,
+            );
+        }
+        // Deferred by one turn of the loop: this runs inside the button's own
+        // click handler, and the button is about to be removed by the redraw.
+        let me = Rc::clone(self);
+        glib::timeout_add_local_once(Duration::ZERO, move || {
+            me.show_section(me.section.get());
+        });
+    }
+
+    /// Let the lock screen follow hyprpaper again: the `wallpaper` row goes back
+    /// to unset, which is what "the picture hyprpaper draws" means.
+    fn follow_wallpaper(self: &Rc<Self>) {
+        let path = Config::load(lock::FILE).path;
+        match config::edit_value(&path, "wallpaper", None) {
+            Ok(()) => {
+                self.regenerate();
+                self.note("the lock screen follows hyprpaper again", false);
+            }
+            Err(error) => {
+                self.note(format!("failed: {error}"), true);
+                eprintln!(
+                    "hypr-osd-settings: cannot write {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        let me = Rc::clone(self);
+        glib::timeout_add_local_once(Duration::ZERO, move || {
+            me.show_section(me.section.get());
+        });
+    }
+
+    /// Let the login screen follow the desktop wallpaper again: the `background`
+    /// row goes back to unset and the theme is rendered from hyprpaper's picture.
+    fn follow_wallpaper_login(self: &Rc<Self>) {
+        let path = Config::load(login::FILE).path;
+        match config::edit_value(&path, "background", None) {
+            Ok(()) => {
+                self.write_login();
+                self.note("the login screen follows hyprpaper again", false);
+            }
+            Err(error) => {
+                self.note(format!("failed: {error}"), true);
+                eprintln!(
+                    "hypr-osd-settings: cannot write {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        let me = Rc::clone(self);
+        glib::timeout_add_local_once(Duration::ZERO, move || {
+            me.show_section(me.section.get());
+        });
+    }
+
+    /// One of a page's own buttons: the Appearance pages' actions, or one of the
+    /// energy daemon's verbs ([`catalogue::ENERGY_ACTIONS`]).
+    ///
+    /// The energy verbs go through `hardware::launch`, never `run`: the daemon is
+    /// already up (it is autostarted) and this is a verb sent to it, so waiting
+    /// for an exit would park this window's main loop - the exact mistake the
+    /// bar's status pill made.
+    fn command(self: &Rc<Self>, id: &str) {
+        match id {
+            "use-lock" | "lock-use-wallpaper" => return self.use_image(true, false),
+            "use-login" => return self.use_image(false, true),
+            "use-everywhere" => return self.use_image(true, true),
+            "follow-wallpaper" => return self.follow_wallpaper(),
+            "check-lock" => {
+                *self.lock_check.borrow_mut() = lock::check();
+                let me = Rc::clone(self);
+                glib::timeout_add_local_once(Duration::ZERO, move || {
+                    me.show_section(me.section.get());
+                });
+                return;
+            }
+            "restart-wallpaper" => return self.restart_wallpaper(),
+            "apply-wallpaper" => {
+                if let Err(error) = self.apply_wallpaper() {
+                    self.note(format!("failed: {error}"), true);
+                    eprintln!("hypr-osd-settings: {error}");
+                }
+                return;
+            }
+            "render-login" => return self.write_login(),
+            "install-login" => return self.install_login(),
+            "login-follow-wallpaper" => return self.follow_wallpaper_login(),
+            "preview-login" => {
+                let theme = login::theme_dir();
+                hardware::launch(
+                    "sddm-greeter",
+                    &["--test-mode", "--theme", &theme.to_string_lossy()],
+                );
+                self.note("previewing the login screen", false);
+                return;
+            }
+            _ => {}
+        }
         // The element on `bin_dir`, unless a command of its own was configured -
         // the same resolution the Restart chip does, because a session started by
         // a display manager has no `~/.local/bin` on its PATH.
@@ -618,6 +1154,7 @@ impl Panel {
         } else {
             self.settings.energy_command.clone()
         };
+        self.note(format!("sent `{id}` to the energy daemon"), false);
         hardware::launch(&program, &[id]);
     }
 
@@ -677,17 +1214,20 @@ impl Panel {
         let expression = format!("dofile(\"{}\")", path.display());
         match hyprctl::eval(&expression) {
             Ok(said) => {
-                *self.applied.borrow_mut() = if said.is_empty() {
-                    format!("applied {}", path.display())
-                } else {
-                    format!("applied {said}")
-                };
+                self.note(
+                    if said.is_empty() {
+                        format!("applied {}", path.display())
+                    } else {
+                        format!("applied {said}")
+                    },
+                    false,
+                );
                 Ok(())
             }
             // Hyprland names the option it did not like, which is the whole value
             // of reading its answer rather than its exit status.
             Err(why) => {
-                *self.applied.borrow_mut() = format!("failed: {why}");
+                self.note(format!("failed: {why}"), true);
                 Err(format!("Hyprland refused the settings: {why}"))
             }
         }
@@ -726,7 +1266,7 @@ impl Panel {
     /// `sh` holds the replacement as its own child and exits without waiting for
     /// it, so the new daemon outlives the script that started it, and the shell
     /// itself is reaped by the shell's own child watch (see `hardware::launch`).
-    fn restart(&self, element: &str) {
+    fn restart(self: &Rc<Self>, element: &str) {
         if element.is_empty() || element == ELEMENT {
             return;
         }
@@ -746,7 +1286,38 @@ impl Panel {
              exit 1",
             attempts = RESTART_ATTEMPTS,
         );
-        hardware::launch("sh", &["-c", &script]);
+        self.note(format!("restarting hypr-osd-{element}"), false);
+        // Spawned here rather than through `hardware::launch` so the exit can be
+        // read: the script's exit status is the answer to "did it come back", and
+        // the window can say so instead of leaving the user to guess. The child is
+        // reaped by the GLib watch, not waited for, so the main loop never parks.
+        match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                let pid = glib::Pid(child.id() as i32);
+                let me = Rc::clone(self);
+                let element = element.to_string();
+                glib::child_watch_add_local(pid, move |_, status| {
+                    if status == 0 {
+                        me.note(format!("restarted hypr-osd-{element}"), false);
+                    } else {
+                        me.note(format!("hypr-osd-{element} did not come back"), true);
+                    }
+                });
+            }
+            Err(error) => {
+                self.note(
+                    format!("could not restart hypr-osd-{element}: {error}"),
+                    true,
+                );
+            }
+        }
     }
 
     /// Where an element's binary is: the configured `bin_dir`, or the bare name
@@ -761,13 +1332,41 @@ impl Panel {
         }
     }
 
+    /// A file chooser is opening (`true`) or has closed (`false`).
+    ///
+    /// The chooser is a normal window (GTK shows it through the desktop portal),
+    /// and this window is a layer surface on the **overlay** layer - so the card
+    /// would sit on top of the chooser and it would look as if the button did
+    /// nothing. Taking the card away for the duration is what makes the chooser
+    /// visible; it comes back when the chooser closes, whatever the answer was.
+    fn picking(self: &Rc<Self>, opening: bool) {
+        if opening {
+            self.idle.cancel();
+            self.osd.hide();
+        } else {
+            self.osd.show();
+            self.arm_idle();
+        }
+    }
+
+    /// Record what just happened: the same sentence `status` prints, and the line
+    /// above the footer in the window. One place, so the two cannot disagree - and
+    /// so a refused write or a refused document is visible where the click was,
+    /// rather than only in `status` or on the terminal.
+    fn note(&self, text: impl Into<String>, error: bool) {
+        let text = text.into();
+        *self.applied.borrow_mut() = text.clone();
+        self.view.set_status(Some(&text), error);
+    }
+
     /// Close the window if nothing happens for a while.
     ///
     /// Escape and the close button are how it normally ends, but neither works
     /// after the screen has been locked - a session lock takes the keyboard from
     /// every other surface, this one included, so a window that was up when the
-    /// screen locked hears nothing. After `idle_close_ms` of no keys and no
-    /// pointer movement it takes itself away; every interaction re-arms it.
+    /// screen locked hears nothing. After `idle_close_ms` of no keys, taps,
+    /// scrolls, drags or pointer movement it takes itself away; every
+    /// interaction re-arms it (see [`SettingsView::on_activity`]).
     fn arm_idle(self: &Rc<Self>) {
         let Some(duration) = self.settings.idle_close else {
             return;
@@ -802,9 +1401,14 @@ impl Panel {
             self.apply()?;
         }
         // A lock screen value is live too, by the same mechanism: write the file,
-        // rewrite the variables that are generated from it.
-        if page.applies == Applies::Lock {
-            self.regenerate();
+        // regenerate what is written from it. The wallpaper and the login screen
+        // are generated the same way, and the wallpaper is applied through
+        // hyprpaper's IPC at once.
+        match page.applies {
+            Applies::Lock => self.regenerate(),
+            Applies::Wallpaper => self.apply_wallpaper()?,
+            Applies::Login => self.write_login(),
+            _ => {}
         }
         if self.page().file == page.file {
             self.show_section(self.section.get());
@@ -954,6 +1558,18 @@ impl Panel {
                             }
                         ));
                     }
+                } else if let Some(current) = inherited_path(
+                    section,
+                    &config,
+                    setting.key,
+                    set.unwrap_or(setting.default),
+                )
+                .filter(|current| current.as_str() != set.unwrap_or(setting.default))
+                {
+                    // An empty picture or colour is following something else
+                    // (hyprpaper, the wallpaper, theme.css): the state line says
+                    // what that is, the same way the page does.
+                    out.push_str(&format!("      now {current}\n"));
                 }
             }
         }
@@ -1048,9 +1664,15 @@ fn group(section: &Section) -> &str {
         // The lock screen is grouped by its own name too: `lock`, which is both
         // the page's file and what the verbs call it.
         Applies::Lock => section.file,
+        // The two other faces are the same shape: the file name is what `keys`,
+        // `set` and `choices` call them.
+        Applies::Wallpaper => section.file,
+        Applies::Login => section.file,
         // A list of keys has no file of ours; its own name is what the verbs call
-        // it (`keys shortcuts`).
+        // it (`keys shortcuts`). The touch page's file is its own name too
+        // (`touch.conf`, `keys touch`).
         Applies::Shortcuts => section.file,
+        Applies::Touch => section.file,
         Applies::Displays => "display",
         Applies::Compositor => section
             .settings
@@ -1177,6 +1799,206 @@ fn energy_actions() -> Field {
         keycap: None,
     }
 }
+
+/// A reading the element makes up while the page is drawn: no key, no control,
+/// just what the machine says right now (see [`Kind::Info`]).
+fn info_field(label: &str, value: String, help: &str) -> Field {
+    Field {
+        key: label.to_lowercase(),
+        key_label: None,
+        heading: None,
+        label: label.to_string(),
+        help: help.to_string(),
+        default: None,
+        kind: Kind::Info,
+        value,
+        is_default: false,
+        current: None,
+        choices: Vec::new(),
+        keycap: None,
+    }
+}
+
+/// Whether the wallpaper daemon is there and answering, which is the first thing
+/// to know when a picture change seems to do nothing.
+fn wallpaper_state() -> Field {
+    let (value, help) = if wallpaper::running() {
+        (
+            "running".to_string(),
+            "hyprpaper is up: a picture change is applied through its IPC at once.",
+        )
+    } else if wallpaper::installed() {
+        (
+            "installed, not running".to_string(),
+            "hyprpaper is installed but no daemon is up. Start it (`hyprpaper`), or use \
+             Restart - a picture change writes a config nobody is reading until then.",
+        )
+    } else {
+        (
+            "not installed".to_string(),
+            "hyprpaper is not on this machine (`sudo pacman -S hyprpaper`), so there is \
+             nothing to draw the wallpaper.",
+        )
+    };
+    info_field("hyprpaper", value, help)
+}
+
+/// The login screen's two readings: whether the installed theme still carries what
+/// this page writes, and what the rendered background came out as.
+fn login_state() -> Vec<Field> {
+    vec![
+        info_field(
+            "Installed theme",
+            login::installed_state(),
+            "The greeter reads /usr/share/sddm/themes/hypr-osd/, which belongs to root. \
+             The page writes the source and the picture; the Install button runs the \
+             theme's installer in a terminal, where sudo asks for the password.",
+        ),
+        info_field(
+            "Background image",
+            login::image_state(),
+            &format!(
+                "The picture rendered from the wallpaper with magick, at {}. The greeter \
+                 has no compositor and no blur of its own, so the blur and the dimming \
+                 happen here.",
+                login::image_path().display()
+            ),
+        ),
+    ]
+}
+
+/// The Wallpaper page's own buttons: the one place the three faces are pointed at
+/// the same picture from.
+///
+/// They are actions rather than settings because none of them is a value in *this*
+/// page's file: "use this picture for the lock screen" writes `lock.conf`, and
+/// "use it for the login screen" writes `login.conf` - which is exactly why the
+/// page cannot express it as a switch.
+fn wallpaper_actions() -> Field {
+    Field {
+        key: "actions".to_string(),
+        key_label: None,
+        heading: None,
+        label: "Use for".to_string(),
+        help: "Point another face of the desktop at the picture above - the lock screen, the \
+               login screen, or both. `Follow wallpaper` on the Lock screen page undoes it."
+            .to_string(),
+        default: None,
+        kind: Kind::Actions(&WALLPAPER_ACTIONS),
+        value: String::new(),
+        is_default: false,
+        current: None,
+        choices: Vec::new(),
+        keycap: None,
+    }
+}
+
+const WALLPAPER_ACTIONS: [catalogue::Command; 4] = [
+    catalogue::Command {
+        id: "use-lock",
+        label: "Lock",
+        icon: names::LOCK,
+    },
+    catalogue::Command {
+        id: "use-login",
+        label: "Login",
+        icon: names::MONITOR,
+    },
+    catalogue::Command {
+        id: "use-everywhere",
+        label: "Everywhere",
+        icon: names::LINK,
+    },
+    catalogue::Command {
+        id: "restart-wallpaper",
+        label: "Restart",
+        icon: names::ROTATE_CW,
+    },
+];
+
+/// The Lock screen page's buttons: the two ways to relate it to the wallpaper.
+fn lock_actions() -> Field {
+    Field {
+        key: "actions".to_string(),
+        key_label: None,
+        heading: None,
+        label: "The picture".to_string(),
+        help: "The Wallpaper row above can name a picture of its own for the lock screen. \
+               These two point it at the desktop's wallpaper, or hand it back to hyprpaper."
+            .to_string(),
+        default: None,
+        kind: Kind::Actions(&LOCK_ACTIONS),
+        value: String::new(),
+        is_default: false,
+        current: None,
+        choices: Vec::new(),
+        keycap: None,
+    }
+}
+
+const LOCK_ACTIONS: [catalogue::Command; 3] = [
+    catalogue::Command {
+        id: "lock-use-wallpaper",
+        label: "Use wallpaper",
+        icon: names::LINK,
+    },
+    catalogue::Command {
+        id: "follow-wallpaper",
+        label: "Follow wallpaper",
+        icon: names::DISPLAY,
+    },
+    catalogue::Command {
+        id: "check-lock",
+        label: "Check",
+        icon: names::CONTROLS,
+    },
+];
+
+/// The Login screen page's buttons: render the theme and its background, open the
+/// greeter in test mode, or install the theme into SDDM.
+fn login_actions() -> Field {
+    Field {
+        key: "actions".to_string(),
+        key_label: None,
+        heading: None,
+        label: "Theme".to_string(),
+        help: "Render writes theme.conf and the background image now; Preview opens the \
+               greeter in test mode on this session; Install copies both into \
+               /usr/share/sddm and writes SDDM's drop-in - it needs root, so it runs \
+               `sudo` in a terminal where the password is typed."
+            .to_string(),
+        default: None,
+        kind: Kind::Actions(&LOGIN_ACTIONS),
+        value: String::new(),
+        is_default: false,
+        current: None,
+        choices: Vec::new(),
+        keycap: None,
+    }
+}
+
+const LOGIN_ACTIONS: [catalogue::Command; 4] = [
+    catalogue::Command {
+        id: "render-login",
+        label: "Render",
+        icon: names::ROTATE_CW,
+    },
+    catalogue::Command {
+        id: "install-login",
+        label: "Install",
+        icon: names::UPDATES,
+    },
+    catalogue::Command {
+        id: "preview-login",
+        label: "Preview",
+        icon: names::MONITOR,
+    },
+    catalogue::Command {
+        id: "login-follow-wallpaper",
+        label: "Follow",
+        icon: names::DISPLAY,
+    },
+];
 
 /// The Display page's first row: which output the collection's notification cards
 /// appear on.
@@ -1534,6 +2356,15 @@ fn fields_of(config: &Config, section: &Section, live: bool) -> Vec<Field> {
                 };
                 choices.insert(0, keymap::Entry::described(value.clone(), note));
             }
+            let current = if live {
+                hyprctl::option(setting.key).map(|reading| reading.value)
+            } else {
+                // "now …" is only worth saying when it differs from what the row
+                // already shows: a palette token equal to the built-in default
+                // would just repeat the default.
+                inherited_path(section, config, setting.key, &value)
+                    .filter(|current| current != &value)
+            };
             Field {
                 key: setting.key.to_string(),
                 key_label: None,
@@ -1544,16 +2375,22 @@ fn fields_of(config: &Config, section: &Section, live: bool) -> Vec<Field> {
                 kind: setting.kind,
                 value,
                 is_default: set.is_none(),
-                current: if live {
-                    hyprctl::option(setting.key).map(|reading| reading.value)
-                } else {
-                    None
-                },
+                current,
                 choices,
                 keycap: None,
             }
         })
         .collect();
+
+    // The lock screen is a page of eighty rows: grouping it is what makes it
+    // readable rather than a wall of switches. The headings are the composition's
+    // own parts - background, glass, clock, field - not arbitrary slices of the
+    // list.
+    if section.applies == Applies::Lock {
+        for field in &mut fields {
+            field.heading = lock_heading(&field.key);
+        }
+    }
 
     for (key, value) in config.entries() {
         if section.settings.iter().any(|setting| setting.key == key) {
@@ -1590,6 +2427,130 @@ fn fields_of(config: &Config, section: &Section, live: bool) -> Vec<Field> {
         });
     }
     fields
+}
+
+/// The quiet line under a page's blurb: where its values live and how many of them
+/// are written down.
+///
+/// The count is of *set* keys, not of the catalogue's rows: an untouched page says
+/// `0 keys set`, which is what "every value is the built-in default" looks like in
+/// this file format. A hand-edited extra key counts too, because it is in the file
+/// whether the window knows it or not.
+fn file_note(section: &Section, config: &Config) -> String {
+    if section.applies == Applies::Shortcuts {
+        return "a list to read, not a file \u{b7} the bound keys live in ~/.config/hypr/osd.lua"
+            .to_string();
+    }
+    let set = config.entries().len();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = home
+        .as_deref()
+        .and_then(|home| config.path.strip_prefix(home).ok())
+        .map(|rest| format!("~/{}", rest.display()))
+        .unwrap_or_else(|| config.path.display().to_string());
+    format!(
+        "{path} \u{b7} {set} key{} set{}",
+        if set == 1 { "" } else { "s" },
+        if config.path.is_file() {
+            ""
+        } else {
+            " \u{b7} no file yet"
+        }
+    )
+}
+
+/// What a Path row is really using when the file does not set it.
+///
+/// Three rows mean "follow something else" when empty: hyprpaper's picture can be
+/// left in place, the lock screen follows the wallpaper, and the login screen
+/// follows it too. Saying so on the state line (`· now /home/…`) is the difference
+/// between an empty value that looks broken and one that is doing its job.
+fn inherited_path(section: &Section, config: &Config, key: &str, value: &str) -> Option<String> {
+    // A login-screen colour is never "empty": its built-in default is a colour, so
+    // the file's own line is what decides whether the theme value is in force.
+    if section.file == login::FILE && login::PALETTE.contains(&key) {
+        let set = config
+            .get(key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        return if set.is_some() { None } else { css::token(key) };
+    }
+    if !value.trim().is_empty() {
+        return None;
+    }
+    match (section.file, key) {
+        (wallpaper::FILE, "path") => {
+            let path = wallpaper::current_path(config);
+            (!path.is_empty()).then_some(path)
+        }
+        (lock::FILE, "wallpaper") => lock::wallpaper(),
+        (login::FILE, "background") => login::source(config),
+        _ => None,
+    }
+}
+
+/// Which part of the lock screen a row belongs to, as the heading the page draws
+/// over it.
+///
+/// Every key of [`catalogue::LOCK`] lands in one of these; a hand-added key gets
+/// no heading and stays at the end, under the last group. The icons are the ones
+/// the parts wear elsewhere (`LOCK` for the mark, `CLOCK` for the clock,
+/// `KEYBOARD` for the field), so the page reads like the screen it describes.
+fn lock_heading(key: &str) -> Option<Heading> {
+    let (title, icon) = match key {
+        "wallpaper" | "monitor" | "blur_passes" | "blur_size" | "brightness" | "contrast"
+        | "vibrancy" | "vibrancy_darkness" | "noise" | "reload_time" | "crossfade_time" => {
+            ("Background", names::DISPLAY)
+        }
+        "hide_cursor" | "ignore_empty_input" | "immediate_render" | "text_trim"
+        | "fractional_scaling" | "screencopy_mode" | "fail_timeout" | "animations" => {
+            ("Behaviour", names::CONTROLS)
+        }
+        "pam_enabled"
+        | "pam_module"
+        | "fingerprint_enabled"
+        | "fingerprint_ready_message"
+        | "fingerprint_present_message"
+        | "fingerprint_retry_delay" => ("Authentication", names::LOCK),
+        key if key.starts_with("panel_") => ("Glass panel", names::GRID),
+        "clock_font" | "clock_size" | "clock_x" | "clock_y" | "clock_format"
+        | "clock_accent_colon" | "date_format" | "date_size" | "date_x" | "date_y"
+        | "date_uppercase" => ("Clock and date", names::CLOCK),
+        "show_rule" | "rule_width" | "rule_height" | "rule_y" | "rule_rounding"
+        | "rule_opacity" => ("Accent rule", names::PRESENTATION),
+        "show_lock_icon" | "lock_icon" | "lock_size" | "lock_y" => ("Lock mark", names::LOCK),
+        "field_font"
+        | "field_width"
+        | "field_height"
+        | "field_x"
+        | "field_y"
+        | "field_rounding"
+        | "field_tint"
+        | "field_outline"
+        | "field_outline_accent"
+        | "field_outline_accent2"
+        | "dots_size"
+        | "dots_spacing"
+        | "dots_center"
+        | "dots_rounding"
+        | "dots_text_format"
+        | "placeholder_text"
+        | "check_text"
+        | "fail_text"
+        | "fade_on_empty"
+        | "fade_timeout"
+        | "hide_input"
+        | "swap_font_color"
+        | "invert_numlock" => ("Password field", names::KEYBOARD),
+        "hint_text" | "hint_size" | "hint_x" | "hint_y" => ("Hint", names::FILE),
+        _ => return None,
+    };
+    Some(Heading {
+        icon,
+        title: title.to_string(),
+        detail: String::new(),
+        focused: false,
+    })
 }
 
 /// The list a dropdown is built from: the catalogue's own for a
@@ -1681,14 +2642,14 @@ fn page_index(name: &str, tab: usize) -> Option<(usize, usize)> {
 /// rebuilds the surface when the card moves to another monitor - a keyboard card
 /// that lost its keys after a monitor change would be a bug nobody could explain.
 ///
-/// The handler takes Escape and nothing else: every other key belongs to whichever
+/// The handler takes Escape and Ctrl+Tab; every other key belongs to whichever
 /// control has the focus (the fields are typed into, the spinners take the
 /// arrows), and swallowing them here would make the window unusable.
 fn install_keys(osd: &Rc<Osd>, panel: Rc<Panel>) {
     osd.on_keys(
         {
             let panel = panel.clone();
-            move |key, _state| {
+            move |key, state| {
                 if !panel.osd.is_visible() {
                     return glib::Propagation::Proceed;
                 }
@@ -1696,6 +2657,15 @@ fn install_keys(osd: &Rc<Osd>, panel: Rc<Panel>) {
                 panel.arm_idle();
                 if *key == gdk::Key::Escape {
                     panel.close();
+                    return glib::Propagation::Stop;
+                }
+                // Ctrl+Tab / Ctrl+Shift+Tab walk the tabs. Shift turns Tab into
+                // `ISO_Left_Tab` on XKB, so both spellings count.
+                let tab = matches!(*key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab);
+                if tab && state.contains(gdk::ModifierType::CONTROL_MASK) {
+                    let back = state.contains(gdk::ModifierType::SHIFT_MASK)
+                        || *key == gdk::Key::ISO_Left_Tab;
+                    panel.step_tab(if back { -1 } else { 1 });
                     return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
@@ -1746,6 +2716,9 @@ fn main() -> glib::ExitCode {
             // is reported in `status` rather than only on the terminal, and is not
             // fatal - the file that is already there still works.
             panel.regenerate();
+            // The startup write is not something the user did: keep it in
+            // `status`, but do not open the window with a message about it.
+            view.set_status(None, false);
 
             // A `kill`ed window leaves "open" behind, which would keep the gear
             // lit with nothing behind it - so the flag starts closed, exactly as
@@ -1773,13 +2746,19 @@ fn main() -> glib::ExitCode {
                 let panel = panel.clone();
                 move |id| panel.command(id)
             });
+            view.on_pick({
+                let panel = panel.clone();
+                move |opening| panel.picking(opening)
+            });
             view.on_close({
                 let panel = panel.clone();
                 move || panel.close()
             });
-            // Moving the pointer over the window is looking at it, and looking
-            // at it is not being idle.
-            view.on_motion({
+            // Something happening in the window - the pointer moving, a tap, a
+            // scroll, a drag - is the user being *here*, and being here is not
+            // being idle. A finger never moves a pointer on its way to a row, so
+            // this is not motion alone any more.
+            view.on_activity({
                 let panel = panel.clone();
                 move || panel.arm_idle()
             });
@@ -1826,7 +2805,8 @@ fn main() -> glib::ExitCode {
                         let name = args[1..].join(" ");
                         let index = tab_index(&name)
                             .ok_or_else(|| format!("no tab named `{name}` (try `sections`)"))?;
-                        panel.open(Some(index), Some(0));
+                        // A tab opens where it was left, exactly like its button.
+                        panel.open(Some(index), None);
                     }
                     "section" => {
                         let (tab, page) = named(args)?;
@@ -1927,26 +2907,71 @@ mod tests {
         assert!(!shell.ends_with(&pattern[..pattern.len() - 1]));
     }
 
+    /// Every lock screen row lands in a group: the page is eighty rows in a
+    /// 380px scroller, and a row with no heading would fall under the last group
+    /// as if it belonged to it.
+    #[test]
+    fn every_lock_screen_row_has_a_heading() {
+        for setting in catalogue::LOCK {
+            assert!(
+                lock_heading(setting.key).is_some(),
+                "`{}` has no group on the Lock screen page",
+                setting.key
+            );
+        }
+    }
+
+    /// A slideshow directory is previewed with its first picture, in name order -
+    /// the order hyprpaper uses when it is not told to shuffle.
+    #[test]
+    fn a_slideshow_banner_uses_the_first_picture() {
+        let dir =
+            std::env::temp_dir().join(format!("hypr-osd-preview-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.png"), b"").unwrap();
+        std::fs::write(dir.join("a.jpg"), b"").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+
+        let (first, slideshow) = preview_picture(&dir).unwrap();
+        assert_eq!(first, dir.join("a.jpg"));
+        assert!(slideshow);
+        assert_eq!(slideshow_count(&dir), 2);
+        assert!(preview_picture(&dir.join("notes.txt")).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn pages_are_named_by_group_title_or_number() {
         // An element's page, by its file or its title, in either case...
         assert_eq!(page_index("bar", 0), Some((0, 0)));
         assert_eq!(page_index("Bar", 0), Some((0, 0)));
         assert_eq!(page_index("system popup", 0), Some((0, 2)));
+        assert_eq!(page_index("bluetooth", 0), Some((0, 3)));
+        assert_eq!(page_index("Bluetooth manager", 0), Some((0, 3)));
         // ...a number inside the tab that is showing...
         assert_eq!(page_index("1", 0), Some((0, 0)));
         assert_eq!(page_index("11", 0), Some((0, 10)));
         assert_eq!(page_index("12", 0), Some((0, 11)));
         assert_eq!(page_index("13", 0), Some((0, 12)));
-        assert_eq!(page_index("14", 0), None);
+        assert_eq!(page_index("14", 0), Some((0, 13)));
+        assert_eq!(page_index("15", 0), None);
         assert_eq!(page_index("0", 0), None);
-        // The lock screen is a page with a config file but no binary of its own.
-        assert_eq!(page_index("lock", 0), Some((0, 6)));
-        assert_eq!(page_index("Lock screen", 0), Some((0, 6)));
-        // The list of keys is a page like any other, though it has no config file
+        // The Appearance tab is the desktop's three faces, in the order a session
+        // meets them.
+        assert_eq!(page_index("wallpaper", 0), Some((2, 0)));
+        assert_eq!(page_index("lock", 0), Some((2, 1)));
+        assert_eq!(page_index("Lock screen", 0), Some((2, 1)));
+        assert_eq!(page_index("login", 0), Some((2, 2)));
+        assert_eq!(page_index("Login screen", 0), Some((2, 2)));
+        // The machine's touch page is named by the file every element reads, and
+        // the list of keys is a page like any other though it has no config file
         // of its own.
-        assert_eq!(page_index("shortcuts", 0), Some((0, 12)));
-        assert_eq!(page_index("Shortcuts", 0), Some((0, 12)));
+        assert_eq!(page_index("touch", 0), Some((0, 12)));
+        assert_eq!(page_index("Touch", 0), Some((0, 12)));
+        assert_eq!(page_index("shortcuts", 0), Some((0, 13)));
+        assert_eq!(page_index("Shortcuts", 0), Some((0, 13)));
         // ...and a Hyprland page by its option group, its title, or the file all
         // of them share. The Display page comes first, and "desktop" names it
         // because it is the first page that shares that file.

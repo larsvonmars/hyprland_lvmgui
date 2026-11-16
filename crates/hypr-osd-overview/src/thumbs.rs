@@ -18,10 +18,12 @@
 //! * **JPEG, not PNG.** The capture is thrown away and taken again every time
 //!   the card opens, and a JPEG of a screen full of text is a third of the size
 //!   and three times faster to encode. At tile size the artefacts are invisible.
-//! * **Scaled down by grim itself** (`-s`), to a little more than the tile that
-//!   will hold it. Capturing at native size would be sharpest, but a texture
-//!   costs four bytes per pixel for as long as the card is up, and a dozen
-//!   full-size windows is a couple of hundred megabytes of them.
+//! * **Scaled down by grim itself** (`-s`), to the pixels the tile can show and
+//!   no more. Capturing at native size would be sharpest, but a texture costs
+//!   four bytes per pixel for as long as the card is up, and a dozen full-size
+//!   windows is a couple of hundred megabytes of them - while asking for twice
+//!   the tile (as the first version did) costs four times the decode and the
+//!   memory for a picture no screen would ever draw.
 //! * **`-s` is relative to the monitor's scale factor**, not to the window: grim
 //!   hands over the window's *buffer*, which on a 2x screen has twice the pixels
 //!   the window has layout pixels. The factor therefore has to be computed from
@@ -46,9 +48,11 @@ use hypr_osd_core::windows::Window;
 /// encode faster.
 const QUALITY: u32 = 85;
 
-/// Detail asked for, relative to the tile that will hold the picture: two device
-/// pixels per layout pixel, so a thumbnail stays crisp on a HiDPI screen.
-const DETAIL: f64 = 2.0;
+/// The most detail worth asking for, in device pixels per layout pixel. A tile
+/// is drawn on the screen the card is on, so it can show at most what that screen
+/// has; past two device pixels per layout pixel there is nothing left to see at
+/// tile size.
+const MAX_DETAIL: f64 = 2.0;
 
 /// Never ask grim to scale by less than this. It resamples with a filter of its
 /// own rather than by dropping pixels, but a factor this small is already four
@@ -105,8 +109,11 @@ fn decode(data: &[u8]) -> Option<gdk::Texture> {
 /// grim's factor multiplies the *monitor* scale factor, so what a window has
 /// naturally is its layout width times the screen's scale: 1324 layout pixels is
 /// a 2648 pixel buffer on a 2x screen, and a factor of 0.5 hands over exactly
-/// the logical size. The wanted width comes from the tile: a little more than it
-/// can show, so that scaling down to the tile stays sharp.
+/// the logical size. What the tile can show is its own layout width times that
+/// same scale - so the two cancel, and the factor is the fit between the window
+/// and its tile, whatever screen it is on. The one thing that does not cancel is
+/// a screen beyond 2x: there is no reason to hold four device pixels per layout
+/// pixel of a thumbnail.
 fn factor(window: &Window, scale: f64, tile_width: i32) -> f64 {
     let natural = f64::from(window.size.0) * scale;
     if natural <= 0.0 {
@@ -114,7 +121,7 @@ fn factor(window: &Window, scale: f64, tile_width: i32) -> f64 {
         // the window's own buffer and let the tile scale it.
         return MAX_FACTOR;
     }
-    let wanted = f64::from(tile_width) * DETAIL;
+    let wanted = f64::from(tile_width) * scale.clamp(1.0, MAX_DETAIL);
     (wanted / natural).clamp(MIN_FACTOR, MAX_FACTOR)
 }
 
@@ -157,5 +164,20 @@ mod tests {
         let small = factor(&window((800, 600)), 1.0, 200);
         let large = factor(&window((800, 600)), 1.0, 400);
         assert!(large > small, "{large} should ask for more than {small}");
+    }
+
+    #[test]
+    fn the_screen_s_scale_cancels_out_of_the_factor() {
+        // The tile is measured in the same layout pixels as the window, and
+        // grim's factor is relative to the screen - so the same window and the
+        // same tile ask for the same *fraction* on any 1x-or-2x screen. (The
+        // first version asked for twice the tile at every scale, which meant four
+        // times the pixels of a picture nothing would ever draw.)
+        let window = window((800, 600));
+        let one = factor(&window, 1.0, 320);
+        assert!((one - 0.4).abs() < 1e-9, "{one} should be 320 of 800");
+        assert_eq!(one, factor(&window, 2.0, 320));
+        // A screen past 2x does not get asked for its third device pixel.
+        assert!(factor(&window, 3.0, 320) < one);
     }
 }

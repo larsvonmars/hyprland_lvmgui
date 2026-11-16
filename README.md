@@ -19,15 +19,16 @@ Every other element owns exactly one **card**: a borderless layer-shell surface
 that appears when something happens (a volume key, a media key, the power key),
 shows the state, and gets out of the way again. A card draws above fullscreen
 windows and is styled from the same palette as the bar — see
-[Look and feel](#look-and-feel). It does not take the keyboard, with four
-deliberate exceptions: cards that are *driven* by keys have to own them while they
-are up (see [How it works](#how-it-works)).
+[Look and feel](#look-and-feel). It does not take the keyboard, with a
+deliberate few exceptions: cards that are *driven* by keys or typed into have to
+own it while they are up (see [How it works](#how-it-works)).
 
 | Element | Binary | What it does |
 | --- | --- | --- |
 | The bar | `hypr-osd-bar` | Workspaces, window title, media, tray (the application indicators **and** the windows you have put away), the system info pill, the combined status pill (link, sound, battery), clock and the power button, across the top of every screen — and **every one of those parts can be switched off** (the settings window's Bar page, or the `show_*` keys in `bar.conf`), so the bar can be anything from all of it to a clock and a status pill. Hovering the clock unfolds the island popup below it, hovering (or clicking) the status pill at the right end unfolds the system popup, and the same on the grid button at the left end unfolds the applications panel. `SUPER + H` puts the focused window away, `SUPER + SHIFT + H` brings the last one back. |
 | Island popup | `hypr-osd-island` | What is playing (cover, title, artist, progress with click-to-seek, shuffle/previous/play/next/repeat, the player's own volume and a chip per player), the notification hub, and a calendar — the panel that comes out of the bar's clock. |
-| System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. Its header's **gear** opens the settings window. |
+| System popup | `hypr-osd-stats` | CPU, memory and temperature as gauges, the pending updates, the bluetooth radios **with the devices they know** (power, visibility, connect, disconnect, pair, forget, scan, battery and signal readouts) and the switches: the wireless link, the sound, the power profile, presentation mode, brightness and the keyboard layout — the panel that comes out of the bar's status pill. Its header's **gear** opens the settings window, and the bluetooth tile's **Manage** chip opens the bluetooth manager. |
+| Bluetooth manager | `hypr-osd-bluetooth` | Every device BlueZ knows — paired and merely nearby — with its kind, battery and link quality, the one action that fits its state (connect, disconnect, pair, forget), a filter, a scan and the controller's power and visibility switches. The card the system popup's bluetooth tile opens instead of a terminal full of `bluetoothctl` — see [Bluetooth manager](#bluetooth-manager). |
 | Volume card | `hypr-osd-volume` | Speaker glyph, draggable slider and percentage for the default sink. Owns the volume step for `XF86Audio{RaiseVolume,LowerVolume,Mute}`. |
 | Media card | `hypr-osd-media` | Cover art, title and artist, with previous/next buttons. Appears when a new medium starts playing — no keybinding involved. |
 | Session card | `hypr-osd-session` | Lock, suspend, log out, reboot and shut down. `SUPER + SHIFT + L`, or the hardware power key. |
@@ -35,8 +36,14 @@ are up (see [How it works](#how-it-works)).
 | Workspace overview | `hypr-osd-overview` | The whole desktop as a picture of itself: every workspace as a chip, every window as a real thumbnail in its own shape, scaled to fit one screen. `SUPER + SHIFT + TAB`. |
 | Launcher | `hypr-osd-launcher` | A search card in the middle of the screen: it matches the applications installed on the machine (names, generic names, keywords, categories) and the files in your own directories, and opens the selected one. `SUPER + SPACE`. Replaces the Tauri/Next.js [`linux-launchpad`](../linux-launchpad) — see [Launcher](#launcher). |
 | Applications panel | `hypr-osd-apps` | Every application installed on the machine, as a grid of tiles with a drawer list down the side (and a **Pinned** one), searched through the same field the launcher has. The old launchpad's main window, rebuilt as a card and opened by hovering the **grid button at the bar's left end** (the pointer leaving it closes it again) — see [Applications panel](#applications-panel). |
-| Settings | `hypr-osd-settings` | Every setting this desktop has, in one window, under three tabs: **Hypr OSD** (a page per element of this collection), **Hyprland** (a page per area of the compositor itself — display, general, decoration, input, animations, misc) and **System** (the energy policy, with the machine's live power data). A control per key, the `.conf` file rewritten as you change it, and the Hyprland ones handed to the compositor at once. Opened by the **gear at the right end of the system popup's header** — see [Settings](#settings). |
+| Settings | `hypr-osd-settings` | Every setting this desktop has, in one window, under four tabs: **Hypr OSD** (a page per element of this collection, plus the Shortcuts list), **Hyprland** (a page per area of the compositor itself — display, general, decoration, input, animations, misc) and **Appearance** (the wallpaper, the lock screen and the login screen, with file choosers and a one-click "use this picture everywhere") and **System** (the energy policy, with the machine's live power data). A control per key, the `.conf` file rewritten as you change it, and the Hyprland ones handed to the compositor at once. Opened by the **gear at the right end of the system popup's header** — see [Settings](#settings). |
 | Energy saving | `hypr-osd-energy` | A headless daemon that drops the compositor's expensive effects — animations, blur, shadows, opacity, dimming, rounded corners — while the machine is in a saving power profile, and puts the machine's own values back when it is not. The policy is the settings window's **System** tab; the machine's live profile, CPU and battery are the data that page shows. |
+
+This desktop's own machine is a Surface Pro 7, so everything here is also built
+for a finger: a tap opens the panels a hover opens, a long press is the right
+click, the controls grow while the keyboard is folded away, and an on-screen
+keyboard appears when something asks to be typed into. That half of the design is
+in [Touch](#touch).
 
 Siblings of this repo, which share the design language:
 [`linux-launchpad`](../linux-launchpad) — whose spotlight overlay this collection
@@ -52,6 +59,8 @@ crates/
                        the two ways to run a command without blocking
   hypr-osd-bar/        the bar, and the StatusNotifier tray host it carries
   hypr-osd-island/     the popup that unfolds from the clock
+  hypr-osd-stats/      the system popup under the status pill
+  hypr-osd-bluetooth/ element #10: the bluetooth manager (the popup's Manage chip)
   hypr-osd-volume/     element #1: the volume card
   hypr-osd-media/      element #2: the media card
   hypr-osd-session/    element #3: the session card
@@ -69,9 +78,10 @@ scripts/
                        generated desktop settings)
 configs/
   theme.css            the palette: every colour of this desktop
-  hyprpaper.conf       the desktop wallpaper (the lock screen's, too)
-  hyprlock.conf        the lock screen: the structure, written in terms of
-                       variables that are generated (palette + knobs)
+  hyprpaper.conf       the wallpaper template (the file itself is generated by
+                       the Wallpaper page)
+  hyprlock.conf        the lock screen: a reference copy of the *generated*
+                       config, with the reasoning behind each number
   hypridle.conf        idle timers: lock, blank the panel, sleep
 ```
 
@@ -81,7 +91,8 @@ There is exactly one place to change a colour, and it is not in a program:
 
 1. **The palette is `~/.config/hypr-osd/theme.css`** — installed from
    [`configs/theme.css`](configs/theme.css), and the single source of truth for
-   the whole desktop: the bar, every card, the island popup and the lock screen.
+   the whole desktop: the bar, every card, the island popup, the lock screen and
+   the login screen.
    At start-up a process reads the `@define-color` block out of that file and
    pastes it into its own stylesheet, because GTK stylesheets are per process and
    a copy is the only way to share one; reading it at runtime is what keeps the
@@ -102,9 +113,9 @@ There is exactly one place to change a colour, and it is not in a program:
    `crates/hypr-osd-island/src/island.css`, the volume card's in
    `crates/hypr-osd-volume/src/volume.css`. They borrow from each other on
    purpose — the card's slider is the same progress recipe the island's playback
-   bar uses, the bar's workspace pills wear the accent fill the session card puts
-   on a row you are about to act on, and a muted sink is the same `@crit` red
-   everywhere.
+   bar uses, the bar's workspace capsule wears the accent fill the session card
+   puts on a row you are about to act on, and a muted sink is the same `@crit`
+   red everywhere.
 
 GTK CSS is a subset: no `var()` (colour tokens are `@define-color`/`@name`), no
 `transform`, and no CSS animations — the bar and the cards fade in through
@@ -142,9 +153,12 @@ What it does:
 | `~/.config/hypr/hyprland.lua` | one appended line: `require("osd")` (backup: `hyprland.lua.bak`), then `hyprctl reload` |
 | `~/.config/hypr/hyprland.lua` | waybar's autostart commented out, and waybar stopped (backup: `hyprland.lua.bak-waybar`) — see [Waybar](#waybar) |
 | `~/.config/hypr/hyprland.lua` | `require("launchpad")` commented out, and the old launcher daemon stopped, because `SUPER + SPACE` now belongs to `hypr-osd-launcher` (backup: `hyprland.lua.bak-launchpad`) — see [Launcher](#launcher) |
-| `~/.config/hypr/hyprpaper.conf` | the desktop wallpaper — only when hyprpaper is installed, and only if the file is missing |
-| `~/.config/hypr/hyprlock.conf` | the lock screen — only when `hyprlock` is installed: written when missing, and replaced once from the old hand-written palette (backup: `hyprlock.conf.bak-palette`) — see [Lock screen](#lock-screen) |
-| `~/.config/hypr/hyprlock-vars.conf` | **generated** by `hypr-osd-lock-vars` from `theme.css` and `~/.config/hypr-osd/lock.conf`: the palette and the numbers the lock screen above is written in terms of — see [Lock screen](#lock-screen) |
+| `~/.config/hypr-osd/wallpaper.conf` | the **Wallpaper** page's keys — hyprpaper's own options, as `key = value`, edited by the settings window (only created when you change something) |
+| `~/.config/hypr-osd/lock.conf` | the **Lock screen** page's keys: every knob hyprlock has for the screen, edited by the settings window (only created if missing) |
+| `~/.config/hypr-osd/login.conf` | the **Login screen** page's keys: SDDM's picture, rendering and palette, edited by the settings window (only created when you change something) |
+| `~/.config/hypr/hyprpaper.conf` | **generated** from `~/.config/hypr-osd/wallpaper.conf` by the Wallpaper page; the installer writes the template only when hyprpaper is installed and the file is missing |
+| `~/.config/hypr/hyprlock.conf` | **generated** by `hypr-osd-lock-vars` from `theme.css` and `~/.config/hypr-osd/lock.conf` — the whole lock screen, palette included. A hand-written file from before that is backed up once (`hyprlock.conf.bak-handwritten`). See [Lock screen](#lock-screen) |
+| `~/.config/hypr/sddm-theme/theme.conf` | **generated** from `~/.config/hypr-osd/login.conf` by the Login screen page, beside the rendered `images/background.jpg` — see [Login screen](#login-screen) |
 | `~/.config/hypr/hypridle.conf` | idle timers — only when `hypridle` is installed, and only if the file is missing |
 | a running element | stopped and started again, once the new binary and the config repairs are in place: every element reads its binary, its config and the palette exactly once, at start-up, so a re-install that left the process alone would keep the old code until the next login. Only the elements that were running are restarted |
 
@@ -311,6 +325,63 @@ never leave it stuck. It is also why the panel is autostarted with the others: i
 reads the installed applications once, while nobody is waiting, so the first
 hover paints at once.
 
+## Bluetooth manager
+
+The system popup's bluetooth tile is a *report*: the controller's state, its
+power and visibility switches, and the first few devices with their batteries and
+link meters. It is deliberately small, because it sits in a column of readings
+and a list longer than five rows would either scroll under the pointer (and close
+the popup) or push the controls out of shape. But "the first five devices" is not
+a manager, and the alternative used to be the **Manage** chip opening
+`bluetoothctl` in a terminal.
+
+This element is that other half: `hypr-osd-bluetooth` is a card of this
+collection, opened by the tile's **Manage** chip (or `hypr-osd-bluetooth show`),
+with every device BlueZ knows, a filter, a scan and the actions that go with
+them.
+
+| | |
+| --- | --- |
+| Open it | the **Manage** chip in the system popup's bluetooth tile, or `hypr-osd-bluetooth show` |
+| Filter | type into the field on a laptop (it is focused when the card opens), or tap it on a tablet |
+| Walk the rows | `Up`/`Down`, `Page Up`/`Page Down`, `Home`/`End`, or a click on a row |
+| Act on a row | its button, or `Enter` on the selected row (connect, disconnect or pair) |
+| Forget a device | the ✕ beside **Connect** on a paired, unconnected row |
+| Scan | the **Scan** chip in the card - `bluetoothctl --timeout` exits by itself, and the exit re-reads the list |
+| Controller | the ⏻ switch (the radio) and the eye (answer pairing requests) in the header |
+| Close | `Esc`, the ✕, the Manage chip again, or `idle_close_ms` (two minutes by default) |
+
+The two lists are **Paired** and **Nearby**: a device that has been paired before
+is always listed, and a device a scan has merely *seen* is the row that offers
+`Pair` (which pairs, trusts and connects it). The row is the same shape in both
+lists: the kind of device as a Lucide drawing in a rounded badge, the name over
+its address, the link quality as four blocks, the battery as a capsule, and the
+buttons in a fixed slot at the end - so a row with one button and a row with two
+keep their meters on the same edge. A connected device wears the accent bar at
+its left edge; the card's one saturated mark is the bluetooth badge in the
+header.
+
+Three things are worth knowing, and they are the same three the other keyboard
+cards follow:
+
+* **It takes the keyboard while it is up** — the filter is typed into, and
+  `Escape` is the way out. It lets go after `idle_close_ms` of silence, which is
+  what makes that safe across a session lock (a locked screen takes the keyboard
+  from every other surface, this card included).
+* **A pairing that fails says so.** Pairing runs with a `NoInputNoOutput` agent,
+  because the card has no passkey dialog: a device that insists on a passkey
+  cannot be paired here, and the note under the list says so instead of silently
+  going back to "Pair". `bluetoothctl` in a terminal can still ask for one.
+* **The card keeps its size.** The list lives in a scroller at `list_height`, so
+  a scan finding a dozen devices cannot make the card jump, and every name is
+  capped so it cannot widen the card either.
+
+The commands are the same ones the buttons run, so a script can do everything a
+finger can. `hypr-osd-bluetooth status` prints the controller and every device,
+with the addresses the verbs take; `power on|off`, `discoverable on|off`,
+`connect|disconnect|pair|remove <address>`, `scan`, `refresh`, `show [filter]`,
+`hide` and `toggle` are the rest.
+
 ## Settings
 
 Every element reads its own `.conf` once, at start-up, and every key is optional —
@@ -323,14 +394,12 @@ the bar's status pill and the popup is there), and the gear wears the accent whi
 the window is up. It has no keybinding of its own; `osd.lua` carries a commented
 `SUPER + SHIFT + S` if you want one.
 
-It has **three tabs**, because this desktop is three things at once: the elements,
-and the machine they run on.
+It has **four tabs**, because this desktop is four things at once: the elements,
+the compositor, the pictures behind them, and the machine they run on.
 
-* **Hypr OSD** — this collection. Twelve pages: one per element, with exactly the
-  keys and defaults its own binary reads, and the **Lock screen** — not one of our
-  binaries (hyprlock draws it), but its palette and its numbers are generated from
-  `theme.css` and `lock.conf` like everything else here. A thirteenth is not a form
-  at all: **Shortcuts**, every key the collection implements. See [The Shortcuts
+* **Hypr OSD** — this collection. Twelve element pages, with exactly the keys and
+  defaults its own binary reads, then a twelfth that is not a form at all:
+  **Shortcuts**, every key the collection implements. See [The Shortcuts
   page](#the-shortcuts-page).
 * **Hyprland** — the compositor itself: the **displays** (`display`, one row per
   connected output — resolution and refresh rate, position, scale, rotation,
@@ -339,6 +408,18 @@ and the machine they run on.
   (`animations`) and the switches nobody knows where to look for (`misc`). These
   are Hyprland's own options, so a change here is applied to the running session
   the moment you make it; see [The Hyprland tab](#the-hyprland-tab).
+* **Appearance** — the desktop's three faces, which are one picture seen three
+  times: the **Wallpaper** (hyprpaper — the picture, how it fills a screen, the
+  slideshow it can be), the **Lock screen** (hyprlock — every knob for the
+  background treatment, the glass, the clock, the date, the field and the hint,
+  grouped so eighty rows read as a screen rather than a wall) and the **Login
+  screen** (SDDM — the picture, the rendering that blurs it for the greeter, the
+  face and the palette). The two picture pages open with the picture itself and
+  its size, every background row carries a **file chooser** (plus a folder button
+  where a directory is meaningful), and the Wallpaper page's buttons point the
+  lock and login screens at the same picture in one click; see
+  [Wallpaper](#wallpaper), [Lock screen](#lock-screen) and
+  [Login screen](#login-screen).
 * **System** — the machine under all of it: the **energy policy**, which opens with
   live readings (the power profile and its driver, the CPU governor and frequency,
   the battery, and which managed effects are on right now) and then the switches
@@ -348,11 +429,11 @@ and the machine they run on.
 | | |
 | --- | --- |
 | Open it | the gear in the system popup's header, or `hypr-osd-settings toggle` |
-| Switch tabs | a click on `Hypr OSD` / `Hyprland`, or `hypr-osd-settings tab <name\|number>` |
+| Switch tabs | a click on `Hypr OSD` / `Hyprland` / `Appearance` / `System`, or `hypr-osd-settings tab <name\|number>` |
 | Pick a page | a click on the list down the left, or `hypr-osd-settings section <name\|number>` |
-| Change a value | the control on the row: a switch, a spinner, a text field (Enter or leaving it commits), or a dropdown for a value that is one of a list |
+| Change a value | the control on the row: a switch, a spinner, a text field (Enter or leaving it commits), a dropdown for a value that is one of a list, or a path with a folder button that opens the desktop's file chooser (the window steps aside while it is up, because a layer surface would otherwise sit on top of it) |
 | Reset one key | the ↺ beside a key that is set — the line is *removed*, so the built-in default applies again |
-| Apply it | the **Restart** chip on an element's page (that element stops and starts again), the **Apply** chip on a Hyprland one, the **Re-apply** chip on the lock screen's, or nothing at all: a Hyprland value and a lock screen value are applied as you change it |
+| Apply it | the **Restart** chip on an element's page (that element stops and starts again), the **Apply** chip on a Hyprland one, the **Write** chip on a Wallpaper, Lock screen or Login screen page, or nothing at all: a Hyprland value, a wallpaper, a lock screen and a login screen are all applied as you change them |
 | Close | `Escape`, the ✕, or `hypr-osd-settings hide` |
 
 Three things about it are worth knowing:
@@ -369,9 +450,11 @@ Three things about it are worth knowing:
   starts it again, waiting for the old one to let go of its D-Bus name (an element
   that starts too early would just forward its empty command line to the process
   that is going away and leave nothing running). The Hyprland tab is the opposite —
-  the compositor takes a change at once. The lock screen's page needs neither:
-  hyprlock reads its config at every lock, so a change rewrites the generated
-  variables and is live on the next lock, with nothing to restart.
+  the compositor takes a change at once. The **Appearance** tab needs neither:
+  hyprlock reads its config at every lock, hyprpaper and the greeter read theirs at
+  start-up, so a change regenerates the file and is live at the next lock or login,
+  with nothing to restart (the wallpaper is also handed to the running hyprpaper
+  through its IPC, which is why the picture changes on screen at once).
 * **It takes the keyboard while it is up**, because the text fields have to be
   typed into and a layer-shell surface has no other way. It ends with `Escape`, the
   ✕, or `idle_close_ms` (two minutes by default) if you walked away — and the card
@@ -384,8 +467,9 @@ A test holds every default against its own control type. The window itself is
 scriptable, which is also how it is tested:
 
 ```sh
-hypr-osd-settings sections              # the three tabs, and the pages of each
+hypr-osd-settings sections              # the four tabs, and the pages of each
 hypr-osd-settings tab hyprland          # ...and show one of them
+hypr-osd-settings tab appearance        # the wallpaper, the lock screen and the login screen
 hypr-osd-settings keys bar              # every catalogue key of one element, set or default
 hypr-osd-settings keys general          # a Hyprland page, plus what the compositor has each option at *now*
 hypr-osd-settings keys display          # every connected output, field by field
@@ -621,21 +705,45 @@ them — which answers "why does the volume pill say 0 %" without guessing. `res
 takes an optional argument in place of the last one: the number the icon has in
 `minimised` (counting from 1), or the window's `0x…` address.
 
-The bar's left half is the workspaces (click to focus one, wheel to walk to the
-next or previous) and the focused window's title. The workspace you are on wears
-its number in the accent capsule; the rest are dots - solid where a window lives,
-hollow where the workspace is empty, accent-tinted while it is up on another
-monitor - so the row reads at a glance without counting from a fixed edge.
-Right half: the media pill (click to play/pause, right-click for the next track,
-middle-click for the previous one, wheel to seek), the network pill (left click
-opens `nmtui` in a terminal, right click toggles the radio), the **system info
-pill** — CPU load, memory in use, package temperature and the number of pending
-updates, with the same amber/red thresholds the old bar used (CPU 60/85 %,
-memory 70/90 %, temperature 75/90 °C) — then the volume pill (click mutes, wheel
-steps the volume *through the volume element*, right-click opens `pavucontrol`,
-middle-click mutes the microphone), the battery, the tray, and the power button
-(which opens the session card). Every pill has a tooltip with the whole story
-behind it.
+The bar's left end is the grid button, then the workspaces (click to focus one,
+wheel to walk to the next or previous) and the focused window's title. The
+workspace you are on wears its number in a pale mint capsule; the rest are dots -
+solid where a window lives, hollow where the workspace is empty, mint-tinted while
+it is up on another monitor - so the row reads at a glance without counting from a
+fixed edge.
+
+The capsule is a widget of the row's own rather than the active pill's
+background, because a background cannot slide from pill to pill: the row rebuilds
+its pills only when the *set* of workspaces changes and restyles them in place on
+a switch, so the capsule always has a pill to leave from. Rather than jump to the
+new pill, the capsule glides from the one you were on over 180 ms on an
+ease-out-cubic curve — the same size of gesture as the pills' own colour
+transitions — with the number inside changing at the halfway point, where the
+movement hides the change; a switch that arrives mid-glide is retargeted from
+wherever the capsule has got to, and the first paint and a desktop with GTK's
+animations switched off both put it on the pill without gliding. It is drawn
+frame by frame from a tick callback rather than declared in CSS, because where it
+has to go is only known once the row has been laid out: the move starts and ends
+at two pills whose positions no stylesheet can ask for, and an overlay child is
+placed by its alignment alone. It has no key of its own: it follows GTK's
+animations switch (`gtk-enable-animations`), the accessibility switch for
+motion.
+
+The middle is the player, the one pill that is not about this machine: the cover
+art (from `mpris:artUrl`, decoded from a file or fetched with `curl` through
+`core::art`; the player's own mark stands in while it loads and when the player
+publishes none), the track and its artist — click to play/pause, right-click for
+the next track, middle-click for the previous one, wheel to seek.
+
+Right: the **system info pill** — CPU load, memory in use, package temperature and
+the number of pending updates, with the same amber/red thresholds the old bar used
+(CPU 60/85 %, memory 70/90 %, temperature 75/90 °C) — then the tray and the windows
+put away, the **combined status pill** (the link, the sound and the battery, and
+the handle that unfolds the system popup: hover or click it, right-click to toggle
+the wireless radio, middle-click to mute the microphone, wheel to step the volume
+*through the volume element*), the power button (which opens the session card) and,
+last, the clock: the time over the date, and the handle the island popup unfolds
+from. Every pill has a tooltip with the whole story behind it.
 
 The tray at the right end carries two kinds of icon. The **application
 indicators** (Steam, the Nextcloud client, nm-applet …) come from the
@@ -839,6 +947,8 @@ was listening.
 hypr-osd-overview toggle   # open it, or close it again (what SUPER+Shift+Tab runs)
 hypr-osd-overview show     # open it
 hypr-osd-overview close    # close it without switching anything
+hypr-osd-overview recapture  # take fresh pictures of every window (what R does)
+hypr-osd-overview move <window> <workspace>   # what dropping a tile does
 hypr-osd-overview status   # the workspaces and the windows, and no card
 ```
 
@@ -855,6 +965,15 @@ are on, `1`–`9` jump to that workspace, `R` takes the pictures again (for a wi
 that appeared while the card was up, or a capture that failed), and Escape — or a
 click on the card where there is no tile — closes it. `Shift + Tab` walks
 backwards.
+
+**A tile can be dragged onto a workspace chip** (or onto another tile, which means
+"wherever that one lives") to move that window there. The window goes, the desktop
+does not follow — the card is where workspaces are arranged, not where you go —
+and the card stays up, so several windows can be put away in one look. It is the
+same gesture with a fingertip, and `move <window> <workspace>` is what it does
+from a script: a drop goes through `hypr-osd-overview move`'s code, so that is how
+the gesture is checked on a machine where a pointer press cannot be scripted (the
+window is named by its address or by its position in the tile order).
 
 Like the switcher, this card takes the keyboard while it is up: Escape and the
 arrows have to be the card's own keys, or they would be fighting whatever is
@@ -925,11 +1044,263 @@ sends (it only *asks*, so the panel can close itself when the pointer leaves);
 `show` and `toggle` pin the panel, which is right for a script and wrong for the
 bar.
 
+**`hypr-osd-bluetooth` — the bluetooth manager** (see [Bluetooth manager](#bluetooth-manager))
+
+```sh
+hypr-osd-bluetooth toggle                 # what the popup's Manage chip runs
+hypr-osd-bluetooth show [filter]          # the card, with the filter pre-filled
+hypr-osd-bluetooth scan                   # look for devices nearby, and open the card
+hypr-osd-bluetooth refresh                # read the controller and the devices again
+hypr-osd-bluetooth power on|off           # the radio itself
+hypr-osd-bluetooth discoverable on|off    # answer pairing requests, or stop
+hypr-osd-bluetooth connect <address>      # pick a paired device up
+hypr-osd-bluetooth disconnect <address>   # let a connected device go
+hypr-osd-bluetooth pair <address>         # pair, trust and connect a scanned device
+hypr-osd-bluetooth remove <address>       # forget a paired device
+hypr-osd-bluetooth status                 # the controller, every device, the state
+```
+
+The addresses are the ones `status` prints. The card's own buttons never go
+through the verbs - they *are* the element - but every verb is the same path a
+button takes, so a script can reproduce a click exactly. `hypr-osd-stats
+bluetooth on|off|scan|connect|disconnect|pair|remove <address>` still works for
+the popup's compact tile, because both elements share `hypr-osd-core`'s bluetooth
+module.
+
+## Touch
+
+This desktop runs on a Surface Pro 7, so the bar and every card are built to be
+used with a finger as well as with a pointer: a tap opens the same panels a hover
+does, a long press is the right click, the controls grow while the machine is
+being held as a tablet, and an on-screen keyboard appears when something asks to
+be typed into. None of it is a mode to enable. A machine with no touchscreen
+behaves exactly as it did before, and even on this one the mouse and the Type
+Cover keep working the way they always have.
+
+The pieces are:
+
+1. **The bar and the cards are laid out for a fingertip** while the machine is a
+   tablet — the bar grows, the pills and rows get 44-pixel targets, the sliders
+   get a thumb you can grab, the scrollbars get wide enough to drag. That is the
+   shared `touch` CSS class (see [Look and feel](#look-and-feel)); nothing is
+   duplicated per element.
+2. **A panel opened by a finger stays up until you tap outside it.** There is no
+   pointer to leave, so a tapped pill opens its panel *pinned* and the shell dims
+   the rest of the screen with a [tap catcher](#the-tap-catcher) — a tap anywhere
+   outside the card closes it. The same panel opened by hovering still closes the
+   way it always did when the pointer leaves. Tapping the pill again closes it
+   too, and so does `Escape` on the cards that take the keyboard.
+3. **A long press is the right click.** The tray's context menus, pinning an
+   application, the clock's notifications: everything that used to need button 3
+   is on a long press as well, and the mouse keeps its right button.
+4. **An on-screen keyboard** (squeekboard) appears when the launcher, the
+   applications panel or the settings window has a field focused — and only on a
+   tablet, because a keyboard daemon on a laptop would cover the field it is
+   supposed to be typing into.
+5. **Gestures** open the panels that a flat screen has no button for: sweep down
+   from the top edge for the system popup, up from the bottom for the workspace
+   overview, and so on. They need the [hyprgrass](#gestures) plugin.
+
+### Tablet mode, and what it means
+
+The Surface's Type Cover has a **tablet-mode switch**, and it is the only thing
+that knows the keyboard has been folded back. Hyprland 0.56 does not publish
+switch changes on its event socket — about the only way to see one is a *bind* —
+so `osd.lua` binds the switch's two directions to the bar:
+
+```lua
+hl.bind("switch:on:Microsoft Surface Type Cover Tablet Mode Switch", hl.dsp.exec_cmd(bar .. " tablet on"))
+hl.bind("switch:off:Microsoft Surface Type Cover Tablet Mode Switch", hl.dsp.exec_cmd(bar .. " tablet off"))
+```
+
+The bar writes the answer into `$XDG_RUNTIME_DIR/hypr-osd-tablet`, and every
+element reads that flag: a panel that was not running when you folded the machine
+must not come up believing the wrong thing about it. Elements poll the flag about
+once a second and add or remove their `touch` class as it changes, so folding the
+cover back folds the layout back too, with nothing to restart.
+
+The switch's name has to match `hyprctl devices` exactly. If yours is called
+something else, change the two binds; a machine with no switch at all falls back
+to the keyboard: no typing keyboard attached means a tablet. That fallback is
+also what makes a session that *started* folded back correct, since a switch that
+never moves never fires a bind.
+
+The bar is also what starts and stops the on-screen keyboard, because it is the
+one element that is always running. `hypr-osd-bar tablet status` answers the
+question directly:
+
+```sh
+hypr-osd-bar tablet on      # what the switch's "on" bind runs
+hypr-osd-bar tablet off     # ... and the "off" one
+hypr-osd-bar tablet status  # touch: tablet / touch: laptop, and what the keyboard is
+```
+
+`enabled = false` in [`touch.conf`](#touchconf) switches the whole behaviour off
+while leaving the touchscreen working as a pointer, which is the setting to reach
+for if a touch-sensitive laptop panel is being bumped by a sleeve.
+
+### The tap catcher
+
+A hover popup closes when the pointer leaves it. A finger does not leave: it
+lifts, and the pointer GDK leaves behind stays exactly where the finger was — so a
+tapped panel would stay up until something else happened. The way out is a second
+layer-shell surface, a **tap catcher**: a full-screen surface on the overlay
+layer, drawn as four dimmed bands around a hole that is exactly the card. A tap
+on a band closes the card (and is swallowed, so it does not also activate whatever
+was behind it); a tap on the card reaches the card, because the hole is
+transparent and the compositor's `ignore_alpha` rule lets it through.
+
+It exists only while a finger-opened panel is up. The stack is the same palette as
+everything else, the dim is `box.tap-catcher` in `base.css`, and it never takes
+the keyboard — a card with a field keeps focus, which is what keeps the
+on-screen keyboard usable above it. Implementation:
+`Osd::tap_catcher(Some(Hole), close)` in `crates/hypr-osd-core/src/osd.rs`.
+
+### The on-screen keyboard
+
+`squeekboard` is the one in the Arch repositories and the one this desktop
+supports:
+
+```sh
+sudo pacman -S squeekboard
+```
+
+The bar starts it when the machine becomes a tablet and stops it when the cover
+comes back — deliberately, because squeekboard shows itself for *any* focused
+text field, whether or not a real keyboard is in your hands. On a tablet it is
+what types into the launcher's search field, the applications panel's filter and
+every text row of the settings window; `gtk::Entry` speaks the text-input
+protocol that makes it appear, so none of the cards has to ask twice.
+
+`touch.conf`'s `osk = auto` finds squeekboard, then `wvkbd-mobintl`, then `wvkbd`;
+`osk = none` turns the keyboard off; anything else is a command line
+(`osk = wvkbd-mobintl -H 300`), for an AUR wvkbd. If a tablet has no keyboard
+installed at all, the cards that want one say so on stderr instead of silently
+doing nothing.
+
+**The lock screen** is the one place the keyboard does not come by itself:
+hyprlock is not a text-input client, so an on-screen keyboard has nothing to
+appear for, and Hyprland draws nothing above a locked session that is not allowed
+to be there. So locking goes through `~/.local/bin/hypr-osd-lock` — which `SUPER
++ L`, hypridle and the session card all run — and on a tablet it starts the locker
+and then asks squeekboard to show itself, over the layer rule that permits exactly
+that:
+
+```lua
+hl.layer_rule({ name = "squeekboard-above-lock", match = { namespace = "^osk$" }, above_lock = 2 })
+```
+
+`above_lock = 2` draws the keyboard over the lock screen *and* makes it
+interactive, which is the point: its keys are what type the password. It is also
+the one deliberate hole in the lock screen's isolation, and it is a trade-off
+worth knowing about — the surface that can be touched while locked is the
+keyboard, and nothing else. On a laptop the script is just the locker.
+
+### Right click, long press, and what is where
+
+| Mouse | Finger | Where |
+| --- | --- | --- |
+| right click on a tray icon | long press | the application indicator's own `ContextMenu` |
+| right click on an application tile | long press | pin/unpin it in the applications panel |
+| right click on the clock | long press | notification centre / do-not-disturb |
+| right click on the status pill | long press | the wireless radio on/off |
+| right click on the media pill | long press | next track |
+| middle click on the status pill | — | microphone mute lives in the system popup's sound row on a touchscreen |
+| wheel on the status pill | two-finger swipe up/down | the volume, one step per gesture |
+| hover the clock / status pill / grid button | tap | the island / system popup / applications panel, pinned with a tap catcher |
+
+The bar's pills keep their pointer behaviour unchanged, including the wheel and
+the right and middle buttons; the touchscreen is an *addition*, not a
+replacement. What a finger cannot do — hover — is the one thing that was
+redesigned, and that is the tap catcher.
+
+### Gestures
+
+The touchscreen gestures are **hyprgrass**'s, not Hyprland's: Hyprland's own
+`hl.gesture` only knows the trackpad. The plugin is a hyprpm one:
+
+```sh
+hyprpm add https://github.com/horriblename/hyprgrass
+hyprpm enable hyprgrass
+hyprpm reload -n
+```
+
+`hyprctl plugins list` names it when it is loaded, and `scripts/install.sh`
+reports it when it is not. Without it the guard around the gesture block in
+`osd.lua` leaves the block unread and everything else keeps working — the panels
+are still reachable by tapping the bar.
+
+| Gesture | Opens |
+| --- | --- |
+| one finger from the **top** edge, downward | the system popup (wireless, sound, bluetooth, brightness) |
+| one finger from the **bottom** edge, upward | the workspace overview — the tablet's "home" |
+| one finger from the **left** edge, inward | the applications panel (the bar's left button) |
+| one finger from the **right** edge, inward | the island: what is playing, and the notifications |
+| two fingers up / down | the volume, one step per gesture |
+| three fingers up | the window switcher |
+| three fingers down | the session card |
+| three fingers sideways | the workspace swipe — but this one is **not registered here**: it is Hyprland's own gesture (in `hyprland.lua`'s hyprgrass block on this desktop), and a second registration of the same pattern is reported by the plugin as “Gesture will be overshadowed by a previous gesture”. `osd.lua` only registers gestures that open this collection's panels |
+| three-finger tap | the window switcher, without the travel |
+
+`edge_margin` (in the plugin's options, 40px by default in `osd.lua`) is how far
+in from an edge a swipe may start and still count as an edge swipe, and
+`long_press_delay` is the long press behind the right-click table above. Everything
+runs the same verb a key would, so the card a gesture opens is the card a key
+opens — and a gesture can be replaced by a keybind with no other change.
+
+The workspace swipe is the one touchscreen gesture that is *not* in `osd.lua`: it
+is Hyprland's own (`hyprgrass.gesture` with `action = "workspace"`, usually in
+`hyprland.lua` already). Registering the same pattern in both files is what makes
+the plugin log `Gesture will be overshadowed by a previous gesture`; only the
+first registration is used, so there is nothing to gain by repeating it. If your
+`hyprland.lua` has no touchscreen workspace gesture, add the four lines shown at
+the end of `osd.lua`'s gesture block.
+
+Two details of this build are worth knowing if you edit the block. A hyprgrass
+*gesture* action may be a string (`"workspace"`) or a Lua function, but a
+dispatcher (`hl.dsp.exec_cmd(...)`) only works in a **bind**, so commands are
+written as `hyprgrass.bind`; and the plugin clears and re-adds every gesture on
+every config reload, which is why the block is guarded.
+
+### What a finger cannot do (yet)
+
+- **Rotate the panel.** Hyprland does not auto-rotate, and a rotation needs both
+  the monitor and the touch transform set (a rotated output does *not* rotate its
+  touch input). The accelerometer is there; nothing reads it yet. If you add it,
+  set `input:touchdevice:transform` alongside the monitor's, or the finger lands
+  in the wrong place.
+- **Use the pen's barrel button as a right click.** Hyprland forwards stylus
+  buttons to tablet-v2 clients only; the pen is otherwise a pointer, so it taps
+  and drags, and the long press is the way to a context menu with it too.
+- **Type on the lock screen without squeekboard.** See above — the script and the
+  layer rule are the whole mechanism, and they need squeekboard installed.
+- **See tooltips.** They are still there for the pointer; on a touchscreen the
+  meaning moves to a visible label wherever it matters (the system popup's rows),
+  and the rest is left to the card itself.
+
+### `touch.conf`
+
+One file, not one per element: the questions it answers — is this machine a
+tablet, is there a keyboard on screen — are about the machine.
+
+| Key | Default | |
+| --- | --- | --- |
+| `enabled` | `true` | the whole touch behaviour: tap-open panels, long presses, the `touch` layout and the on-screen keyboard. Off, the touchscreen still clicks and drags like a pointer |
+| `osk` | `auto` | `auto` (squeekboard, then wvkbd), `none`, or a command line (`wvkbd-mobintl -H 300`) |
+| `osk_height` | `260` | how tall wvkbd is asked to be, in pixels; squeekboard sizes itself |
+| `long_press_ms` | `500` | how long a finger must rest for a long press |
+
+The file lives at `~/.config/hypr-osd/touch.conf` and is read once, at start-up,
+like every element's config — a change is a restart of the elements that read it
+(`scripts/install.sh` restarts the ones that are running).
+
 ## Configure
 
 One file per element under `~/.config/hypr-osd/`, every key optional (the
 defaults are in the comments of the installed templates). `theme.css` is not a
 element config: it is the palette, and it is [its own section](#look-and-feel).
+`touch.conf` is not an element's either — it is the machine's, and it is
+documented in [Touch](#touchconf).
 
 **`bar.conf`**
 
@@ -943,7 +1314,9 @@ element config: it is the palette, and it is [its own section](#look-and-feel).
 | `show_apps`, `show_workspaces`, `show_title`, `show_clock`, `show_media`, `show_stats`, `show_status`, `show_tray`, `show_minimised`, `show_power` | all `true` | **what is on the bar**, one switch each in the settings window's Bar page: a part switched off is not built, not read and not drawn. The two handles go with their pills — hiding the clock takes the island popup's trigger with it, hiding the status pill takes the system popup's (and with `show_tray = false` the bar does not claim the tray's D-Bus names at all) |
 | `workspaces` | `5` | how many numbered workspaces the row keeps room for |
 | `title_width` | `320` | how much room the window title may take before it is ellipsised |
-| `clock_format` | `%H:%M` | the clock's `strftime` format |
+| `media_width` | `340` | the same for the player in the middle of the bar |
+| `clock_format` | `%H:%M` | the clock's `strftime` format (the top line) |
+| `date_format` | `%a, %b %d` | the small line under the time; empty gives a one-line clock |
 | `battery`, `adapter` | `BAT1`, `ADP1` | the battery to watch, and the mains supply that says whether it is charging |
 | `network_interface` | `wlan0` | the wireless interface to read through `iw` |
 | `tray_icon_size` | `18` | tray icon size in pixels (the application indicators and the put-away windows alike) |
@@ -973,7 +1346,7 @@ net for an event socket that quietly died.
 | --- | --- | --- |
 | `bar_height`, `bar_margin_top` | `40`, `8` | where the bar is — these have to match `bar.conf` |
 | `gap` | `6` | the distance between the bar's bottom edge and the panel |
-| `hot_width` | `280` | how wide the hover zone around the bar's centre is |
+| `hot_width` | `120` | how wide the hover zone at the bar's **right** end is: the clock, the power button beside it and the margins between them |
 | `left_width`, `right_width` | `252`, `178` | the panel's two columns |
 | `open_delay_ms` | `120` | how long the pointer has to rest on the clock before the panel opens |
 | `close_delay_ms` | `300` | how long it may be away before the panel closes |
@@ -985,7 +1358,9 @@ net for an event socket that quietly died.
 The panel is told nothing by the bar: it works the bar's geometry out from
 `bar_height`, `bar_margin_top` and `gap`, which is why those three have to agree
 with `bar.conf`. The hover zone is derived rather than measured, because the
-clock is the bar's middle child and therefore always centred on it.
+clock is the bar's last child and therefore always at its right end - and the
+panel lines its own right edge up with the bar's, the same rule the system popup
+follows (`Placement::TopRight`).
 
 **`volume.conf`**
 
@@ -1105,6 +1480,21 @@ applications through `hypr-osd-core`'s `apps` module (the same `.desktop` parser
 the same category map and the same ranking), so an application is classified and
 scored identically in both cards.
 
+**`bluetooth.conf`**
+
+| Key | Default | |
+| --- | --- | --- |
+| `width` | `640` | the card's width in pixels; every row is capped to fit it |
+| `list_height` | `380` | the height of the scrolling device list, below the header and the filter |
+| `max_devices` | `24` | how many devices details are read for (one `bluetoothctl info` each); the rest are still listed from the cheap answer |
+| `devices_every_ms` | `5000` | how often the controller and its devices are re-read *while the card is open* (it costs one `bluetoothctl` per device, and a closed card asks nothing) |
+| `scan_seconds` | `12` | how long the Scan chip looks; `bluetoothctl --timeout` exits by itself, and that exit ends the scan |
+| `idle_close_ms` | `120000` | close after this long with no key and no pointer movement; `0` never closes by itself |
+
+The bluetooth parsing, the pair/trust/connect chain and the scan live in
+`hypr-osd-core`'s `bluetooth` module, so the manager and the system popup's
+tile can never disagree about what a device is doing.
+
 **`stats.conf`**
 
 | Key | Default | |
@@ -1120,8 +1510,9 @@ scored identically in both cards.
 | `max_devices`, `scan_seconds` | `5`, `12` | how many device rows the list shows, and how long Scan looks |
 | `updates_command` | `checkupdates` | what prints the pending-update list; empty turns the updates tile off |
 | `network_interface` | `wlan0` | the interface the NETWORK row reports |
-| `terminal_command` | `kitty` | where btop, nmtui, bluetoothctl and pacman are opened |
+| `terminal_command` | `kitty` | where btop, nmtui and pacman are opened |
 | `settings_command` | `hypr-osd-settings` | what the header's **gear** runs ([Settings](#settings)) |
+| `bluetooth_command` | `hypr-osd-bluetooth` | what the bluetooth tile's **Manage** chip runs ([Bluetooth manager](#bluetooth-manager)) |
 
 **`settings.conf`**
 
@@ -1132,6 +1523,7 @@ scored identically in both cards.
 | `sidebar_width` | `190` | the list of elements down the side |
 | `idle_close_ms` | `120000` | close after this long with no key and no pointer movement; `0` never closes by itself |
 | `bin_dir` | `~/.local/bin` | where the element binaries live, for the Restart chip |
+| `terminal_command` | `kitty` | the terminal a button that needs one opens — the Login screen page's Install runs `sudo` there |
 
 The settings window's own page is in its catalogue too, so its numbers are
 tweakable from inside it — with the same caveat as every element: change one and
@@ -1149,22 +1541,26 @@ a change there is *live* instead of waiting for a restart — see
 ## Lock screen
 
 **hyprlock** draws it (`sudo pacman -S hyprlock`), from
-`~/.config/hypr/hyprlock.conf`, which this repo carries as
-[`configs/hyprlock.conf`](configs/hyprlock.conf) and the installer writes when
-the file is missing — it is meant to be edited, so re-running `install.sh` leaves
-your version alone.
+`~/.config/hypr/hyprlock.conf` — which is **generated**, not shipped:
+[`configs/hyprlock.conf`](configs/hyprlock.conf) is kept as the reference copy
+with the reasoning behind each measurement, and `hypr-osd-lock-vars` writes the
+real file from `~/.config/hypr-osd/lock.conf` and the palette. A hand-written
+file from before that is backed up once (`hyprlock.conf.bak-handwritten`).
 
 hyprlock cannot read CSS, and nothing here should be kept in step by hand: the
 palette is **generated** out of `~/.config/hypr-osd/theme.css` — the same
 `@define-color` values every element reads, converted to hyprlock's `rgb()` /
 `rgba()` dialect, plus the accent at the opacities the panel, the field's fill and
-its outline are cut from — together with the numbers, which are the knobs of
-`~/.config/hypr-osd/lock.conf` (the settings window's **Lock screen** page). Both
-land in `~/.config/hypr/hyprlock-vars.conf`, and the first line of the structure
-sources it:
+its outline are cut from — together with every number, which is a row on the
+settings window's **Lock screen** page ([Appearance → Lock
+screen](#settings)). One file is written, with the values in place:
 
 ```ini
-source = ~/.config/hypr/hyprlock-vars.conf
+general { hide_cursor = true … }
+background { path = /home/lars/Bilder/Wallpapers/1022522.jpg … }
+shape { size = 800, 670 … }          # the glass
+label { text = cmd[update:1000] … }  # the clock, the date, the lock mark, the hint
+input-field { … }                    # the field
 ```
 
 so a retint reaches this screen with no hyprlang to edit, and no colour on it can
@@ -1172,37 +1568,47 @@ be out of step with the bar. Nothing has to be restarted either — hyprlock rea
 its config at every lock, which is what makes the page live as you change a value:
 
 ```sh
-hypr-osd-lock-vars            # rewrite the variables now
-hypr-osd-lock-vars --print    # ...or just look at what they are
+hypr-osd-lock-vars            # write the whole config now
+hypr-osd-lock-vars --print    # ...or just look at what it would be
 ```
 
 The installer runs it, the settings window runs it when it opens and on every
 change on that page, and after editing `theme.css` by hand it is the one command
-to run. `crates/hypr-osd-core/src/lock.rs` is the generator; a test holds every
-row of that page against a variable it defines, so a switch cannot sit on the page
-and change nothing.
+to run. `crates/hypr-osd-core/src/lock.rs` is the generator; a test changes every
+row of that page in turn and requires the generated file to change with it, so a
+switch cannot sit on the page and change nothing.
 
-The keys of `~/.config/hypr-osd/lock.conf`, all of them rows on that page:
+Every key of `~/.config/hypr-osd/lock.conf` is a row on that page, and every
+option hyprlock 0.9 has for the widgets this screen uses is a key. The groups:
 
-| key | default | what |
-| --- | --- | --- |
-| `wallpaper` | *(empty)* | the picture behind the lock screen: empty follows hyprpaper's, `screenshot` re-takes the live desktop |
-| `blur_passes`, `blur_size` | `1`, `1` | how the picture is blurred — 1 is essentially untouched, 8–16 is frosted glass |
-| `brightness`, `contrast` | `0.7`, `1.02` | dim the picture, and lift or flatten it |
-| `vibrancy`, `vibrancy_darkness` | `0.1`, `0.1` | how much colour the picture keeps |
-| `noise` | `0.004` | a whisper of grain over the picture |
-| `panel_width`, `panel_height` | `800`, `670` | the sheet of dark glass behind the clock and the field |
-| `hide_cursor` | `true` | no pointer on the lock screen |
-| `ignore_empty_input` | `true` | an empty Enter is not a wrong password, so it cannot spend a PAM attempt |
-| `immediate_render` | `true` | draw the glass before the picture is ready |
-| `fail_timeout` | `2000` | how long a wrong password stays red, in milliseconds |
+| keys | what |
+| --- | --- |
+| `wallpaper`, `monitor` | the picture behind the lock screen (empty follows hyprpaper's, `screenshot` re-takes the live desktop), and the output it draws on |
+| `blur_passes`, `blur_size`, `brightness`, `contrast`, `vibrancy`, `vibrancy_darkness`, `noise`, `reload_time`, `crossfade_time` | the whole `background` treatment |
+| `hide_cursor`, `ignore_empty_input`, `immediate_render`, `text_trim`, `fractional_scaling`, `screencopy_mode`, `fail_timeout`, `animations` | `general` and `animations` |
+| `pam_enabled`, `pam_module`, `fingerprint_enabled`, `fingerprint_ready_message`, `fingerprint_present_message`, `fingerprint_retry_delay` | `auth` |
+| `panel_*` (width, height, x, y, rounding, border, opacity, shadow size/passes/boost/opacity) | the sheet of dark glass |
+| `clock_*` (font, size, x, y, format, accent colon), `date_*` (format, size, x, y, uppercase) | the clock and the date |
+| `show_rule`, `rule_*` | the accent rule between them |
+| `show_lock_icon`, `lock_icon`, `lock_size`, `lock_y` | the lock mark |
+| `field_*` (font, width, height, x, y, rounding, tint, outline, the two gradient opacities), `dots_*` (size, spacing, centring, rounding, text), `placeholder_text`, `check_text`, `fail_text`, `fade_on_empty`, `fade_timeout`, `hide_input`, `swap_font_color`, `invert_numlock` | the password field |
+| `hint_text`, `hint_size`, `hint_x`, `hint_y` | the resting hint under the field |
+
+The rows are drawn under **headings** — Background, Behaviour, Authentication,
+Glass panel, Clock and date, Accent rule, Lock mark, Password field, Hint — so the
+page reads like the screen it describes instead of one long list. Its **Check**
+button is the other half of that: it asks hyprlock's own parser to read the
+generated file against a display that does not exist (so it cannot lock anything)
+and reports the number of bad options. It is a button rather than a reading
+because that check ends in an abort — hyprlock cannot connect — and doing it on
+every page render would fill the journal with crash entries.
 
 What it draws, over **your desktop wallpaper** — the lock screen points straight at
 the image the desktop uses, rather than at a screenshot of the desktop, so it
 shows the background you chose, never the shape of what you had open, and the
 backdrop holds still while everything else sleeps:
 
-- a sheet of dark glass — one `shape`, `$panel_width` × `$panel_height`
+- a sheet of dark glass — one `shape`, `panel_width` × `panel_height`
   (`Glass width` / `Glass height` on the page, 800×670 unset), hairline accent
   border, deep shadow — so the type sits on a known contrast instead of on the
   wallpaper;
@@ -1213,19 +1619,21 @@ backdrop holds still while everything else sleeps:
   the state (accent while PAM checks, red when the password is wrong, amber while
   capslock is on).
 
-`$wallpaper` is the `path` of [`configs/hyprpaper.conf`](configs/hyprpaper.conf),
-read when the variables are written, so the wallpaper and the lock screen's
-backdrop are one picture and one file decides it. A picture of its own is the
-page's **Wallpaper** row; empty follows hyprpaper, and `screenshot` (the fallback
-when there is no hyprpaper config at all) re-takes the live desktop on every lock.
+The background `path` is the `path` of
+[`hyprpaper.conf`](configs/hyprpaper.conf), read when the lock screen is written,
+so the wallpaper and the lock screen's backdrop are one picture and one file
+decides it. A picture of its own is the page's **Wallpaper** row (with a file
+chooser beside it); empty follows hyprpaper, and `screenshot` (the fallback when
+there is no hyprpaper config at all) re-takes the live desktop on every lock.
 hyprlock draws a still image, so a *video* wallpaper needs a frame of it instead —
 the comment above that line has the one-liner. Blur, dim, contrast, vibrancy and
 grain are that page's other picture rows: at **Blur size** 1 the image is
 essentially untouched, and 8–16 is frosted glass.
 
 Switching wallpapers at runtime is one command —
-`hyprctl hyprpaper wallpaper ",/path/to/image.jpg"` — and the lock screen follows
-the next time the variables are written, which is the next time the settings
+`hyprctl hyprpaper wallpaper ",/path/to/image.jpg"` — and the Wallpaper page's
+**Use for → Lock** does the same plus the write, in one click. The lock
+screen follows the next time it is written, which is the next time the settings
 window opens or changes anything (or `hypr-osd-lock-vars`).
 
 The field is what makes the resting screen quiet: it fades out while the buffer
@@ -1293,6 +1701,98 @@ Three habits worth having with a lock screen:
 `loginctl lock-session` works from anywhere — a keybinding, a script, a timer —
 and is what the pieces above use, so any future locker that listens for the
 session lock signal slots in without touching them.
+
+## Wallpaper
+
+**hyprpaper** draws the desktop's background (`sudo pacman -S hyprpaper`), from
+`~/.config/hypr/hyprpaper.conf` — generated from
+`~/.config/hypr-osd/wallpaper.conf`, the settings window's **Wallpaper** page
+([Appearance → Wallpaper](#settings)). Every option hyprpaper 0.8 has is a row:
+
+| key | default | what |
+| --- | --- | --- |
+| `path` | *(the picture already there)* | the image, or a directory it walks as a slideshow; the row has a **file** button and a **folder** button, and the page opens with the picture itself (or the slideshow's first frame) above the rows |
+| `fit_mode` | `cover` | `cover` crops the overflow, `contain` letterboxes, `tile` repeats, `fill` stretches |
+| `monitor` | *(empty)* | the output this block is for; empty makes it the fallback for every output |
+| `timeout`, `order`, `recursive` | `30`, *(none)*, `false` | the slideshow: seconds per picture, `random` order, descend into subdirectories |
+| `splash`, `splash_offset`, `splash_opacity` | `false`, `20`, `0.8` | Hyprland's splash over a freshly loaded wallpaper |
+| `ipc` | `true` | let `hyprctl hyprpaper` talk to the daemon — which is how a new picture is applied |
+
+A change writes the config **and** hands the picture to the running daemon
+(`hyprctl hyprpaper wallpaper "[mon],path[,fit_mode]"`), so the screen changes as
+you pick it. The page opens with the picture itself — cropped to a banner, with
+its name and size, or the first frame of a slideshow — and a reading line says
+whether hyprpaper is running (the first thing to check when a picture change
+seems to do nothing). `splash` and `ipc` are read once at start-up, so those two
+need the page's **Restart** button. The page's **Use for** row is the one-click
+way to share it:
+
+- **Lock** writes `wallpaper` into `~/.config/hypr-osd/lock.conf` and regenerates
+  the lock screen;
+- **Login** writes `background` into `~/.config/hypr-osd/login.conf` and re-renders
+  the greeter's image;
+- **Everywhere** does both — one picture for the desktop, the lock screen and the
+  login screen.
+
+The **Follow wallpaper** button on the Lock screen page gives the lock screen back
+to hyprpaper (the `wallpaper` row becomes unset again).
+
+The installer writes the template only when hyprpaper is present and the file is
+missing; the settings window is what keeps it up to date afterwards. hyprpaper
+maps a background layer named `hyprpaper` over every monitor, which is the
+cleanest proof it is running: `hyprctl -j layers`.
+
+## Login screen
+
+The login screen is **SDDM**, before any compositor: a Qt greeter that draws the
+`hypr-osd` theme from `/usr/share/sddm/themes/hypr-osd/`. Its source lives in
+`~/.config/hypr/sddm-theme/` (Main.qml, metadata.desktop, `theme.conf`,
+`images/background.jpg`), and the settings window's **Login screen** page
+([Appearance → Login screen](#settings)) edits `~/.config/hypr-osd/login.conf` and
+regenerates two of those files:
+
+- **`theme.conf`** — the picture, the face, and the eight palette colours the QML
+  reads (`bg`, `fg`, `fg_dim`, `fg_faint`, `accent`, `on_accent`, `warn`, `crit`).
+  The greeter cannot read CSS, so those colours are written out in hyprlock's
+  place too: a colour `login.conf` does not set follows `theme.css` (the page shows
+  the live token as `· now …`), and a line in `login.conf` overrides it — the same
+  rule as the lock screen, and why a retint of the theme reaches the greeter.
+- **`images/background.jpg`** — rendered from the wallpaper (or a picture of your
+  own) with `magick`: resize, crop, blur, dim and saturate. The greeter has no
+  compositor behind it and no blur of its own, so this happens once, here.
+
+| keys | what |
+| --- | --- |
+| `background` | the picture behind the login; empty follows hyprpaper's wallpaper. The row has a **file chooser** |
+| `render`, `blur`, `dim`, `saturation`, `render_width`, `render_height` | the rendering: whether to do it, how much, and at what size |
+| `font` | the face the greeter draws |
+| `bg`, `fg`, `fg_dim`, `fg_faint`, `accent`, `on_accent`, `warn`, `crit` | the palette; an unset colour follows `theme.css`, a set one wins |
+| `cursor_size` | SDDM's cursor size, for the drop-in `install.sh` writes |
+
+The page opens with the picture the greeter would show and two readings: whether
+the installed theme still carries what the page writes, and what the rendered
+background came out as (its size). The page's **Render** button writes the theme
+and renders the image now; **Install** copies both into `/usr/share/sddm` (it runs
+the theme's own `install.sh` through `sudo` in a terminal — `terminal_command` on
+the Settings page, `kitty` by default — so the password is typed where the
+installer's output can be read); **Preview** opens
+`sddm-greeter --test-mode --theme ~/.config/hypr/sddm-theme`, which is how
+the theme is looked at without logging out (in test mode the power pills and the
+user name are absent, because there is no daemon socket and no last user — not a
+bug).
+
+Installing is the one step the window cannot take itself: `/usr/share/sddm/` and
+`/etc/sddm.conf.d/` belong to root. The **Install** button does exactly what this
+command does,
+
+```sh
+sudo ~/.config/hypr/sddm-theme/install.sh
+```
+
+which copies the theme, renders the background into it, and writes
+`/etc/sddm.conf.d/hypr-osd.conf` (`Current=hypr-osd`, `CursorSize=…`). It takes
+effect at the next logout; the greeter is deliberately not restarted, because that
+would end the session. `--render-only` rebuilds just the picture.
 
 ## How it works
 
@@ -1369,13 +1869,14 @@ session lock signal slots in without touching them.
 - **It never steals focus — except for the cards that are driven by keys.**
   The layer surface is created with `KeyboardMode::None`, so the window you were
   typing in keeps the keyboard while the card is up; pointer input still works —
-  the slider needs it. The switcher, the overview, the launcher and the
-  applications panel ask for the keyboard (`Opts::keyboard`) for as long as their
-  card is on screen, because all four are driven by keys that must not also reach
-  the window underneath: an Alt release ends a switch, Escape and the arrows
-  cancel an overview, and a launcher or the panel has to be *typed into*. All four
+  the slider needs it. The switcher, the overview, the launcher, the
+  applications panel, the bluetooth manager and the settings window ask for the
+  keyboard (`Opts::keyboard`) for as long as their card is on screen, because all
+  six are driven by keys that must not also reach the window underneath: an Alt
+  release ends a switch, Escape and the arrows cancel an overview, and a launcher,
+  the panel, the manager or the settings window has to be *typed into*. All six
   are opened on purpose, which is what makes eating a keystroke acceptable there,
-  and all four let go of the keyboard by themselves if they are left alone — the
+  and all six let go of the keyboard by themselves if they are left alone — the
   switcher when Alt comes back up, the rest after `idle_close_ms`.
 - **The transparent frame is click-through.** The surface is the card plus an
   18px ring that lets the card's shadow breathe; `osd.lua`'s `ignore_alpha` layer
@@ -1390,8 +1891,9 @@ session lock signal slots in without touching them.
   cards** (volume, media, session) go on the *primary display* named in the
   settings window's Display page — that is what designating one is for. A card you
   *drive* with the keyboard (the switcher, the overview, the launcher, the
-  settings window) keeps following the focused output, because one that opened on
-  a screen you are not using would be unusable.
+  settings window, the applications panel and the bluetooth manager) keeps
+  following the focused output, because one that opened on a screen you are not
+  using would be unusable.
 - **`wpctl` is the single source of truth.** The volume element reads the sink, applies
   the change and reads it back, so the card can never show a number the sink does
   not have — and it can never disagree with the bar's volume pill, which asks the
@@ -1438,15 +1940,28 @@ session lock signal slots in without touching them.
   pictures: a window behind another is as complete as the one in front, and a
   window on a workspace that is not on screen has a picture at all (grabbing the
   screen once and cropping per window could do neither). `hyprctl -j clients`
-  names each window for it (`stableId`), and the capture is scaled down and
-  encoded as JPEG before it is read: the card holds textures for as long as it is
-  up, and a dozen full-size windows would be a couple of hundred megabytes.
+  names each window for it (`stableId`), and the capture is scaled down to the
+  pixels the tile can show — the monitor scale cancels, so the factor is just the
+  fit between the window and its tile, and a 1x screen is not asked for twice the
+  detail it has — then encoded as JPEG before it is read: the card holds textures
+  for as long as it is up, and a dozen full-size windows would be a couple of
+  hundred megabytes.
+- **Rearranging is a gesture, not a re-read.** Dropping a window on a workspace
+  moves it with `hl.dsp.window.move({ workspace = …, follow = false })` — the
+  `follow` is what keeps the desktop where it is — and then the card *corrects its
+  own picture*: one window changed workspace, the thumbnails it already holds are
+  still what those windows look like, so it re-plans and re-renders against the
+  pictures it has instead of paying a `grim` per window. A press that never moves
+  is a click, which is why the tile's `GtkGestureDrag` claims the press (a
+  `GtkButton`'s own gesture claims it in the bubble phase, and a gesture a level up
+  would never hear the motion after it).
 - **The overview sizes itself to fit.** Tile height is solved, not guessed: a
   tile's width follows from the window's shape, so "does it fit the screen" is a
   question about one number, and the largest number that fits is the answer — no
   scrolling, because the whole point is seeing everything at once. The
   arithmetic is a pure function in `layout.rs`, which is also where its tests
-  are.
+  are. The search is a bisection (the answer is monotone in the tile height), so
+  opening the card costs eight layout passes rather than two hundred.
 - **Stopping a daemon stops its helpers.** Follower children are not killed by
   their parent dying, so `run` turns SIGTERM/SIGINT into a clean shutdown and
   `Osd::on_shutdown` gives each element the chance to stop what it started.
@@ -1531,12 +2046,21 @@ Debugging:
 | A right click on a tray icon does nothing | The item has no `ContextMenu` of its own, and the bar does not draw `dbusmenu` menus — see [How it works](#how-it-works). The left click is the one that works everywhere. |
 | A put-away window is missing from `ALT + TAB` | That is what putting it away means: the switcher and the overview offer the windows you can switch to, and the tray is where a put-away window is offered instead. `hypr-osd-bar minimised` names them. |
 | A put-away window came back to the wrong workspace | It is on the workspace you were on, because the bar was restarted or replaced in between and the workspace it came from went with the old process: the icon's tooltip said so before you clicked it. Click it on the workspace it belongs on, or move it there. |
-| The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Is `island.conf`'s `hot_width` wide enough for the clock pill, and do `bar_height`/`bar_margin_top` match `bar.conf`? `hypr-osd-island status` prints the geometry it works with. |
+| The island popup never opens | Is it running (`pgrep -f hypr-osd-island`)? Is `island.conf`'s `hot_width` wide enough for the clock pill (it is the strip at the bar's right end), and do `bar_height`/`bar_margin_top` match `bar.conf`? `hypr-osd-island status` prints the geometry it works with. |
 | The island opens or closes too eagerly | `open_delay_ms` and `close_delay_ms` in `island.conf`: the first is how long the pointer has to rest on the clock, the second how long it may be away before the panel closes. |
 | The clock pill stays lit with no panel behind it | A stale “panel is open” flag — the island writes it on show/hide, so a `kill` leaves it behind. It is cleared at start-up: `pkill -f hypr-osd-island; hypr-osd-island &`. |
 | The bar's clock says the wrong time | It ticks once a second by default; `tick_ms` in `bar.conf` is the resolution (and the clock's `strftime` format is `clock_format`). |
 | No card, but the volume changes | The daemon died — check its stderr, and `pgrep -x hypr-osd-volume`. On a session without `gtk4-layer-shell` it cannot create the surface at all. |
 | The volume moves two steps per press | `hyprland.lua` still binds the volume keys to `wpctl`; re-run with `--take-over-keys`. |
+| A tap on the bar opens nothing, or the panel opens and shuts at once | The machine is not being read as a tablet, so the tap is being treated as a hover with no pointer to follow. Check `hypr-osd-bar tablet status`; if it says `laptop` with the cover off, the switch bind's name does not match `hyprctl devices` — edit the two `switch:on/off:` binds in `osd.lua` (see [Touch](#tablet-mode-and-what-it-means)). |
+| The bar is still the laptop size with the cover folded back | Same cause as above — the `touch` layout follows the tablet flag, and the flag only moves when the switch bind fires or the keyboard disappears. `hypr-osd-bar tablet on` sets it by hand for a test. |
+| The screen is dimmed around a card and tapping does nothing | That is the tap catcher of a panel that is still up: tap outside it, or run the panel's `hide` verb (`hypr-osd-apps hide`, `hypr-osd-island close`, `hypr-osd-stats close`). `hyprctl layers` shows the two surfaces. It only exists for panels opened by a finger, so a stuck one means the panel never closed. |
+| No on-screen keyboard on a tablet | Is squeekboard installed (`pacman -Q squeekboard`)? Is the machine reading as a tablet (`hypr-osd-bar tablet status`)? Is GNOME's keyboard switch on (`gsettings get org.gnome.desktop.a11y.applications screen-keyboard-enabled`)? The bar starts the daemon, so `pgrep -x squeekboard` while folded back is the second question. |
+| A gesture does nothing | Is hyprgrass loaded (`hyprctl plugins list`)? Gestures are cleared and re-added on every config reload, and they never appear in `hyprctl binds` — so a missing plugin looks exactly like a gesture that was never registered. |
+| `hyprctl configerrors` says `Gesture will be overshadowed by a previous gesture` | The same gesture pattern is registered twice. hyprgrass keeps the first registration and reports every later one, which is not harmful but is a config error on every reload. The usual pair is the touchscreen workspace swipe: `hyprland.lua`'s own hyprgrass block already registers it, so `osd.lua` must not (see [Gestures](#gestures)). Delete the duplicate `hl.plugin.hyprgrass.gesture(...)` and `hyprctl reload`. |
+| The on-screen keyboard is missing over the lock screen | squeekboard must be running (the bar starts it on a tablet) and the layer rule `squeekboard-above-lock` must match its namespace — `hyprctl layers` while locked shows it (it is `osk`), and `hypr-osd-lock` is what force-shows it. Without the rule Hyprland draws nothing above a locked session at all. |
+| A locked tablet cannot be unlocked | It has no hardware keyboard and the on-screen keyboard did not come up: see the row above, then check that locking goes through `hypr-osd-lock` rather than `hyprlock` directly (`~/.config/hypr/hypridle.conf`'s `lock_cmd`, and `SUPER + L` in `osd.lua`). |
+| The touch position is wrong after rotating the panel | Rotating the monitor does not rotate its touch input. Set the same number in `input:touchdevice:transform` (or `hl.device({ name = "ipts-045e:099f-touchscreen", transform = N })`) and in the monitor's transform. |
 | `wpctl … failed` on stderr | PipeWire/WirePlumber trouble; `wpctl status` should list a default sink. |
 | Card in the wrong place | `bottom_margin` / `width` in the element's config. |
 | Card on the wrong monitor | It follows the focused output through `hyprctl`; if `hyprctl` is unavailable it stays on the monitor it was built for. A volume/media/session card that keeps appearing on one screen is most likely the Display page's `primary` key — `hypr-osd-settings keys display` shows it, and `unset` puts it back on `Follow focus`. |
@@ -1548,7 +2072,7 @@ Debugging:
 | The session card won't go away | Press `SUPER + SHIFT + L` again, or set `duration_ms` to something shorter in `session.conf` (`0` means “stay until dismissed”, which is also what a card with no way out looks like). |
 | The overview shows icons instead of pictures | No `grim`, or a compositor that cannot hand over a single window (`hypr-osd-overview status` says which windows have a capture id; a *nested* Hyprland cannot capture a toplevel, a real one can). `thumbnails = false` makes the icon tiles the deliberate look. |
 | The overview won't go away | It takes the keyboard while it is up: Escape, a click on the card where there is no tile, or the key again. `hypr-osd-overview close` works from anywhere, and after `idle_close_ms` (a minute by default) it closes itself — which is what gets rid of it after a session lock. |
-| A card is on screen but nothing responds to keys | A keyboard card is up (switcher, overview, launcher or applications panel) and something else grabbed the keyboard first — usually a session lock. Wait for `idle_close_ms`, or `hypr-osd-overview close` / `hypr-osd-switcher cancel` / `hypr-osd-launcher hide` / `hypr-osd-apps hide`. |
+| A card is on screen but nothing responds to keys | A keyboard card is up (switcher, overview, launcher, applications panel, bluetooth manager or settings) and something else grabbed the keyboard first — usually a session lock. Wait for `idle_close_ms`, or `hypr-osd-overview close` / `hypr-osd-switcher cancel` / `hypr-osd-launcher hide` / `hypr-osd-apps hide` / `hypr-osd-bluetooth hide`. |
 | `SUPER + SPACE` opens nothing | Is the launcher running (`pgrep -f hypr-osd-launcher`)? `hyprctl -j layers` shows the surface (namespace `hypr-osd`, overlay layer) when it is up, and `hypr-osd-launcher status` says `state open` or `closed`. |
 | Two search bars open at once | Both launchers are bound to `SUPER + SPACE`: `launchpad.lua` is still loaded. Re-run `./scripts/install.sh` (it comments the `require("launchpad")` line out), or bind one of them elsewhere. |
 | The launcher's results are not what I expected | `hypr-osd-launcher search <text>` prints the ranking it decided on, with the desktop file each application came from. Keywords and categories count as matches, which is why an application can appear for a word that is not in its name. |
@@ -1561,3 +2085,5 @@ Debugging:
 | The applications panel won't go away | Move the pointer off it — that is how it normally ends — or press `Escape`, or `hypr-osd-apps hide` from anywhere. After `idle_close_ms` (a minute by default) it closes itself, which is what gets rid of it after a session lock. `hypr-osd-apps status` says `open, pinned` when a `show`/`toggle` (not the bar) put it up, and then only a verb closes it. |
 | Applications are in the wrong drawers | The drawer comes from the entry's `Categories=` (and, for entries that claim nothing, from its name and keywords). `hypr-osd-apps apps` prints every application with the drawer it landed in; changing it means changing the `.desktop` file. |
 | A pinned tile is not in the **Pinned** drawer | Pins are desktop file ids in `~/.config/hypr-osd/apps-pinned` (`hypr-osd-apps status` prints the list) — an id that no installed entry has any more is ignored. |
+| The bluetooth manager is empty or says "No controller" | `hypr-osd-bluetooth status` reads the controller and every device without a card. `No controller` means BlueZ did not answer (`systemctl status bluetooth`); `Bluetooth is off` means the radio is off — the header's ⏻ switches it. A device a scan found is listed under **Nearby** until it is paired. |
+| A bluetooth device will not pair | The card pairs with a `NoInputNoOutput` agent, so a device that insists on a passkey cannot be paired from it — the note under the list says so. `bluetoothctl` in a terminal can still ask for one. |

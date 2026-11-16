@@ -25,6 +25,26 @@
 //!   status               list the windows in switcher order, no card
 //!   (no verb)            start the daemon and wait for the first key press
 //! ```
+//!
+//! # By finger
+//!
+//! A touchscreen has no Alt to release and no Tab to walk with, so a finger user
+//! is handed the card by `show` instead - the system's touch gesture (another
+//! crate) calls it, and it has to work from a cold daemon with nothing held: it
+//! reads the window list, draws it and takes the keyboard exactly like `next`
+//! does, just without moving the selection first. From there:
+//!
+//! * a tap on a tile is the click it always was, and it switches;
+//! * a tap *outside* the card cancels it - while the machine is a tablet the card
+//!   arms the shell's tap catcher around itself ([`Switcher::arm_catcher`]), so
+//!   the rest of the screen is the "no thanks" target a fingertip needs;
+//! * the idle-commit watchdog does not fire while a finger is still down on the
+//!   card ([`Switcher::arm_idle`]), because a card that commits while you are
+//!   still aiming is a card that switches windows under your hand.
+//!
+//! The hint line and the tiles themselves follow the machine too: `.touch` grows
+//! the tiles (and their type), and the hint says "tap a window" rather than
+//! describing keys that are not there.
 
 mod view;
 
@@ -35,8 +55,13 @@ use std::time::Duration;
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
+use hypr_osd_core::monitors;
+use hypr_osd_core::touch;
 use hypr_osd_core::windows::{self, Window};
-use hypr_osd_core::{css, hyprctl, run, Config, Content, Keyboard, Opts, Osd, Placement};
+use hypr_osd_core::{
+    css, hyprctl, run, Config, Content, Hole, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
+    CARD_PAD_Y,
+};
 
 use view::SwitcherView;
 
@@ -54,6 +79,10 @@ const DEFAULT_TILE_WIDTH: i32 = 132;
 const DEFAULT_ICON_SIZE: i32 = 72;
 /// How long the card may sit there untouched before it commits on its own.
 const DEFAULT_IDLE_COMMIT_MS: u64 = 5000;
+/// How often a held finger is re-checked once the idle watchdog has come due.
+/// Short enough that letting go continues the countdown promptly, long enough
+/// that a finger resting on a tile is not a busy loop.
+const HELD_RECHECK: Duration = Duration::from_millis(150);
 
 /// What the config file resolved to.
 struct Settings {
@@ -82,7 +111,7 @@ impl Settings {
     /// from the same numbers the grid lays out with, so the two cannot drift.
     fn width(&self) -> i32 {
         let gaps = (self.columns - 1).max(0) * view::GAP;
-        self.columns * self.tile_width + gaps + 2 * hypr_osd_core::CARD_PAD_X
+        self.columns * self.tile_width + gaps + 2 * CARD_PAD_X
     }
 }
 
@@ -127,6 +156,11 @@ impl Switcher {
     }
 
     /// Open the card with the list as it is now, selection on the current window.
+    ///
+    /// This is the touch entry point as well: `show` runs it with nothing held,
+    /// and it has no dependency on a key release or a previous `next` - the list
+    /// is read, drawn and shown, and the card then waits for a tap. It arms the
+    /// tap catcher and the idle watchdog like every other open does.
     fn open(self: &Rc<Self>) {
         let list = windows::list();
         if list.is_empty() {
@@ -134,11 +168,16 @@ impl Switcher {
             return;
         }
         self.selected.set(0);
+        // The hint describes whichever input this machine has, and the card can
+        // be opened after the machine was folded (the idle watchdog may have
+        // been silenced by an open card since).
+        self.view.set_hint(touch::tablet());
         self.view.render(&list, &self.settings);
         *self.list.borrow_mut() = list;
         self.osd.set_content(&self.view.root);
         self.osd.show();
         self.view.select(0);
+        self.arm_catcher();
         self.arm_idle();
     }
 
@@ -169,15 +208,40 @@ impl Switcher {
     }
 
     /// Take the card down without switching.
-    fn cancel(&self) {
+    fn cancel(self: &Rc<Self>) {
         self.close();
     }
 
-    fn close(&self) {
+    fn close(self: &Rc<Self>) {
         if let Some(source) = self.idle.borrow_mut().take() {
             source.remove();
         }
+        // A card cannot be gone while its tap catcher still dims the screen; the
+        // shell's `hide` does this too, as a backstop, but clearing it here keeps
+        // the two in step when the close came from the catcher itself.
+        self.osd.tap_catcher(None, || {});
         self.osd.hide();
+    }
+
+    /// Put the shell's tap catcher around the card while it is up on a tablet, or
+    /// take it away.
+    ///
+    /// Called when the card is opened and again if the machine is folded under
+    /// it. On a laptop there is no catcher: the pointer's click on another window
+    /// is the card's own click, and a dimmed screen would be a new behaviour for
+    /// a mouse user who never asked for one.
+    fn arm_catcher(self: &Rc<Self>) {
+        let cancel = {
+            let me = self.clone();
+            move || me.cancel()
+        };
+        let hole = touch::tablet()
+            .then(|| monitor_hole(&self.osd, &self.view.root, self.settings.width()))
+            .flatten();
+        match hole {
+            Some(hole) => self.osd.tap_catcher(Some(hole), cancel),
+            None => self.osd.tap_catcher(None, cancel),
+        }
     }
 
     /// Commit if no key arrives for a while.
@@ -188,6 +252,12 @@ impl Switcher {
     /// the card watches for silence instead - and does what the release would
     /// have done, because by then the user has made up their mind. Every key
     /// press re-arms it, so holding Alt and browsing is not disturbed by it.
+    ///
+    /// A finger changes the last part: the card can be opened by a gesture with
+    /// nothing held, and a tap takes longer than a key. The watchdog therefore
+    /// asks the view whether anything is still down on the card and, if it is,
+    /// looks again in [`HELD_RECHECK`] instead of committing - a finger that is
+    /// still on a tile has not finished choosing.
     fn arm_idle(self: &Rc<Self>) {
         if let Some(source) = self.idle.borrow_mut().take() {
             source.remove();
@@ -195,11 +265,22 @@ impl Switcher {
         let Some(duration) = self.settings.idle_commit else {
             return;
         };
-        let me = Rc::clone(self);
-        let source = glib::timeout_add_local_once(duration, move || {
-            if me.osd.is_visible() {
-                me.commit();
+        self.arm_idle_after(duration);
+    }
+
+    fn arm_idle_after(self: &Rc<Self>, after: Duration) {
+        // The slot is overwritten rather than cleared first: either the previous
+        // watchdog fired (a stale id, harmless to drop) or `arm_idle` removed it.
+        let me = self.clone();
+        let source = glib::timeout_add_local_once(after, move || {
+            if !me.osd.is_visible() {
+                return;
             }
+            if me.view.is_pressed() {
+                me.arm_idle_after(HELD_RECHECK);
+                return;
+            }
+            me.commit();
         });
         *self.idle.borrow_mut() = Some(source);
     }
@@ -237,16 +318,35 @@ fn main() -> glib::ExitCode {
         let settings = settings.clone();
         Box::new(move |osd: &Rc<Osd>| {
             let view = Rc::new(SwitcherView::new());
+            // The daemon starts in whatever mode the machine is in, and the shell
+            // only calls the tablet handlers on a *change*: the starting answer
+            // has to be applied by hand.
+            view.set_hint(touch::tablet());
             let switcher = Switcher::new(osd, view.clone(), settings);
 
             // A click on a tile is a switch, exactly like pressing Enter on it:
             // the card takes the pointer for the same reason it takes the
-            // keyboard.
+            // keyboard. A finger's tap *is* that click, so nothing is special-
+            // cased here.
             view.on_click({
                 let switcher = switcher.clone();
                 move |index| {
                     switcher.move_to(index as i32);
                     switcher.commit();
+                }
+            });
+
+            // Folded or unfolded under the card: the hint and the catcher are the
+            // two things that cannot follow the window's `touch` class on their
+            // own.
+            let watch = osd.clone();
+            let watched = switcher.clone();
+            osd.on_tablet_change(move |tablet| {
+                watched.view.set_hint(tablet);
+                if watch.is_visible() {
+                    watched.arm_catcher();
+                } else {
+                    watch.tap_catcher(None, || {});
                 }
             });
 
@@ -288,6 +388,70 @@ fn main() -> glib::ExitCode {
     };
 
     run(opts, build, handle)
+}
+
+// ---------------------------------------------------------------------------
+// The card's rectangle on the screen
+// ---------------------------------------------------------------------------
+
+/// The card's rectangle on its monitor, in the logical pixels the catcher's
+/// strips are laid out in, or `None` when there is no monitor to measure against.
+fn monitor_hole(osd: &Osd, root: &impl IsA<gtk::Widget>, width: i32) -> Option<Hole> {
+    let screen = monitor_size(osd)?;
+    Some(center_hole(screen, card_size(root, width)))
+}
+
+/// The logical size of the monitor the card is on.
+///
+/// GDK's geometry is already in layout pixels, which is the space the card's own
+/// width and margins are measured in, so no scale factor is applied.
+fn monitor_size(osd: &Osd) -> Option<(i32, i32)> {
+    let monitor = osd
+        .monitor()
+        .as_deref()
+        .and_then(monitors::find)
+        .or_else(monitors::first)?;
+    let geometry = monitor.geometry();
+    Some((geometry.width(), geometry.height()))
+}
+
+/// The card's size in logical pixels: the content as it will be drawn, plus the
+/// shell's card padding, and never narrower than the width the grid was planned
+/// for.
+///
+/// Measured rather than read from the card's last layout: opening the card again
+/// can produce a different number of tile rows, and the catcher must surround the
+/// grid that is on screen now. The planned width is a floor, exactly as the shell
+/// applies it - the grid's own natural width is the same number.
+fn card_size(root: &impl IsA<gtk::Widget>, width: i32) -> (i32, i32) {
+    let root = root.as_ref();
+    // Measured, not read from the allocation: the widget may have been laid out
+    // for the label it was showing a moment ago (a row that just turned into its
+    // "click again" text), and a stale allocation would hand the catcher a hole
+    // that no longer matches the card.
+    let (_, natural_width, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+    let (_, natural_height, _, _) = root.measure(gtk::Orientation::Vertical, natural_width);
+    (
+        width.max(natural_width + 2 * CARD_PAD_X),
+        natural_height + 2 * CARD_PAD_Y,
+    )
+}
+
+/// Where a centred card of `card` size sits on a `screen`-sized monitor.
+///
+/// A [`Placement::Center`] surface has no anchor, so layer-shell centres it on
+/// the output at its own size; the hole is that rectangle, with the shadow frame
+/// the catcher grows it by already accounted for there. Split out from the
+/// measuring so the arithmetic can be tested without a compositor.
+fn center_hole(screen: (i32, i32), card: (i32, i32)) -> Hole {
+    let (screen_width, screen_height) = screen;
+    let (card_width, card_height) = card;
+    Hole {
+        x: (screen_width - card_width) / 2,
+        y: (screen_height - card_height) / 2,
+        width: card_width,
+        height: card_height,
+    }
 }
 
 /// Wire the keys the switcher lives on.
@@ -394,4 +558,41 @@ fn status_lines() -> String {
         .map(|(index, window)| format!("{} {}", index + 1, window.describe()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This machine: 2736x1824 at scale 2 is 1368x912 logical pixels. The card is
+    /// the grid's 724px plus the card padding, and a couple of rows tall; a
+    /// centred card puts half of what is left on each side.
+    #[test]
+    fn a_centred_card_sits_in_the_middle_of_the_screen() {
+        let hole = center_hole((1368, 912), (724, 300));
+        assert_eq!(
+            hole,
+            Hole {
+                x: (1368 - 724) / 2,
+                y: (912 - 300) / 2,
+                width: 724,
+                height: 300,
+            }
+        );
+        // The hole grown by the shadow pad is the surface the shell drew: the
+        // card plus SHADOW_PAD on every side, still centred.
+        assert_eq!(hole.x + hole.width / 2, 1368 / 2);
+    }
+
+    /// A card larger than the screen still answers with where the shell put it -
+    /// a hole that starts off-screen is clamped by the catcher, not by this.
+    #[test]
+    fn a_card_bigger_than_the_screen_is_still_centred() {
+        let hole = center_hole((1368, 912), (2000, 1200));
+        assert!(hole.x < 0);
+        assert!(hole.y < 0);
+        assert_eq!(hole.width, 2000);
+        assert_eq!(hole.height, 1200);
+        assert_eq!(hole.x + hole.width / 2, 1368 / 2);
+    }
 }

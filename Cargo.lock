@@ -452,6 +452,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypr-osd-bluetooth"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hypr-osd-core",
+]
+
+[[package]]
 name = "hypr-osd-core"
 version = "0.1.0"
 dependencies = [

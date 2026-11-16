@@ -11,6 +11,7 @@ members = [
     "crates/hypr-osd-bar",
     "crates/hypr-osd-island",
     "crates/hypr-osd-stats",
+    "crates/hypr-osd-bluetooth",
     "crates/hypr-osd-volume",
     "crates/hypr-osd-media",
     "crates/hypr-osd-session",

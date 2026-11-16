@@ -1,0 +1,422 @@
+/* ── the bluetooth manager ───────────────────────────────────────────────────
+ *
+ * The card the system popup's bluetooth tile opens instead of a terminal. It is
+ * a card like every other OSD here: the fill, the border, the 16px radius and
+ * the shadow are the shell's `box.card`, the tiles and chips are the shared
+ * recipes in `base.css`, and the palette is `~/.config/hypr-osd/theme.css`. What
+ * is here is the one thing the card needed of its own: the rows of a device list.
+ *
+ * The shape of a row is the design: a 3px accent bar that means "connected", a
+ * rounded badge carrying the kind of device, the name with its address under it,
+ * then the link meter and the battery in a column, and the row's buttons in a
+ * fixed slot at the end. The readings are packed against that slot, so a row
+ * with one button and a row with two put their meters on the same edge.
+ *
+ * The hierarchy is type size again: the title is the largest type in the card,
+ * the device names are body size, and the addresses, counts and footer are the
+ * smallest and faintest. No rules between rows - the rows are already pills, and
+ * a rule between pills would be a third kind of ink for the same job.
+ */
+
+/* ---- the card -------------------------------------------------------------- */
+box.bluetooth {
+    padding: 2px 2px 4px 2px;
+}
+
+/* ---- the hero: what the radio is doing ------------------------------------ */
+/* The mark is the one saturated thing on the card - an accent-tinted square
+ * holding the bluetooth drawing - so the eye lands on "this is the bluetooth
+ * card" before it reads a word. */
+box.hero {
+    padding: 2px 2px 9px 2px;
+}
+
+box.hero-mark {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 14px;
+    background-color: @accent_tint;
+    box-shadow: inset 0 0 0 1px @border_soft;
+}
+
+image.hero-icon {
+    color: @accent;
+}
+
+label.hero-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: @fg;
+}
+
+label.hero-sub {
+    font-size: 10px;
+    color: @fg_dim;
+    letter-spacing: 0.2px;
+}
+
+/* The ✕ is the card's way out, so its hover is the danger colour rather than
+ * the accent every other icon button lights in. */
+box.hero button.iconbtn.close:hover {
+    background-color: @crit_tint;
+    border-color: rgba(255, 85, 102, 0.30);
+    color: @crit;
+}
+
+/* ---- the filter and the tools --------------------------------------------- */
+box.tools {
+    padding: 9px 2px;
+}
+
+box.search {
+    background-color: @surface;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 0 9px;
+    min-height: 30px;
+}
+
+box.search:focus-within {
+    border-color: @border_soft;
+    background-color: @surface_h;
+}
+
+image.search-icon {
+    color: @fg_faint;
+}
+
+/* The theme draws the entry's focus ring on its inner `text` node, so only a
+ * descendant wildcard takes it away - the same rule the launcher's field uses. */
+entry.filter,
+entry.filter * {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    color: @fg;
+    font-size: 12px;
+    min-height: 26px;
+}
+
+entry.filter placeholder {
+    color: @fg_faint;
+}
+
+/* ---- the list ------------------------------------------------------------- */
+scrolledwindow.dev-scroll {
+    border-radius: 12px;
+}
+
+scrolledwindow.dev-scroll viewport,
+scrolledwindow.dev-scroll overshoot,
+scrolledwindow.dev-scroll undershoot {
+    background: none;
+    border: none;
+}
+
+/* The theme's scrollbar is a heavy bar for a document; this is a short list.
+ * Only the colour would change, but the shape has to travel with it: the theme
+ * draws the slider with an 8px transparent border and a matching negative
+ * margin (a fat hit area around a thin mark), and taking the border away leaves
+ * a negative minimum that GTK reports on stderr. */
+scrolledwindow.dev-scroll scrollbar slider {
+    background-color: @surface_h;
+    background-clip: padding-box;
+    border: 8px solid transparent;
+    border-radius: 99px;
+    min-width: 8px;
+    min-height: 8px;
+    margin: -8px;
+}
+
+scrolledwindow.dev-scroll scrollbar slider:hover {
+    background-color: @accent_tint;
+}
+
+box.list-body {
+    padding: 2px 2px 2px 2px;
+}
+
+/* A section heading: a small mark, the word in the faintest colour and the
+ * count pushed to the right edge - the same shape the system popup's tiles use,
+ * at the size a list of devices deserves. */
+box.section-row {
+    padding: 6px 8px 3px 8px;
+}
+
+label.section {
+    font-size: 10px;
+    font-weight: 700;
+    color: @fg_faint;
+    letter-spacing: 0.8px;
+}
+
+image.section-icon {
+    color: @fg_faint;
+}
+
+label.chain-count {
+    font-size: 9px;
+    font-weight: 700;
+    color: @fg_faint;
+}
+
+label.section-hint {
+    font-size: 10px;
+    color: @fg_faint;
+    padding: 2px 9px 8px 9px;
+}
+
+/* ---- a device row --------------------------------------------------------- */
+/* The row is a pill of its own, so hover and selection are a fill rather than
+ * an underline. `live` is the connected device: it is the one fact worth
+ * colouring in a list of names. */
+box.device-row {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    padding: 5px 7px 5px 0;
+    min-height: 50px;
+}
+
+box.device-row:hover {
+    background-color: @surface;
+}
+
+box.device-row.live {
+    background-color: @surface;
+}
+
+box.device-row.selected,
+box.device-row.selected:hover {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+}
+
+/* The 3px bar that says "connected". It is always in the row - only its colour
+ * comes and goes - so connected and idle rows keep their badges aligned. */
+box.dev-mark {
+    min-width: 3px;
+    border-radius: 999px;
+    background-color: transparent;
+    margin-right: 7px;
+}
+
+box.dev-mark.live {
+    background-image: linear-gradient(180deg, @accent, @accent2);
+}
+
+/* A `GtkBox` gives its child its natural width at the box's start, so the mark
+ * inside a square badge sits left of centre unless the image takes the slack -
+ * and the badge must refuse that slack for itself, or it grows around it. Both
+ * lines, or neither works (measured on the system popup's badge). */
+box.dev-badge {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 11px;
+    background-color: @surface_h;
+}
+
+box.dev-badge.live {
+    background-color: @accent_tint;
+}
+
+image.dev-icon {
+    color: @fg_dim;
+}
+
+box.dev-badge.live image.dev-icon {
+    color: @accent;
+}
+
+label.dev-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: @fg;
+}
+
+label.dev-sub {
+    font-size: 9px;
+    color: @fg_faint;
+    letter-spacing: 0.2px;
+}
+
+/* The link meter: filled blocks in the dim colour, the rest fainter. A number
+ * nobody can calibrate at a glance is worse than a meter; the dBm is in the
+ * row's tooltip. */
+box.dev-sig {
+    margin: 0 8px;
+}
+
+label.sig-on {
+    font-size: 10px;
+    color: @fg_dim;
+}
+
+label.sig-off {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
+/* The battery as a capsule of its own: it lines up from row to row, and a low
+ * one can warn without colouring the whole row. */
+box.dev-batt {
+    background-color: @surface;
+    border-radius: 999px;
+    padding: 2px 7px;
+}
+
+box.dev-batt.low {
+    background-color: @warn_tint;
+}
+
+image.batt-icon {
+    color: @fg_dim;
+}
+
+box.dev-batt.low image.batt-icon,
+box.dev-batt.low label.batt-value {
+    color: @warn;
+}
+
+label.batt-value {
+    font-size: 9px;
+    font-weight: 600;
+    color: @fg_dim;
+}
+
+/* The fixed slot at the end of a row. Two 26px buttons and the gap between
+ * them; the readings to its left are packed against it, which is what makes
+ * them a column instead of a ragged tail. */
+box.device-row box.actions {
+    min-width: 62px;
+    margin-left: 8px;
+}
+
+/* ---- the buttons ---------------------------------------------------------- */
+/* One icon, a tint on hover and no word: the tooltip carries that, and the row
+ * has no room for a second sentence. */
+button.iconbtn {
+    background-color: @surface;
+    background-image: none;
+    border: 1px solid transparent;
+    box-shadow: none;
+    border-radius: 999px;
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    color: @fg_dim;
+}
+
+button.iconbtn:hover {
+    background-color: @accent_tint;
+    border-color: @border_soft;
+    color: @accent;
+}
+
+button.iconbtn.on {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+/* The forget button: the one action here that cannot be undone from this card,
+ * so its hover is the danger colour - and it rests fainter than the action
+ * beside it, because connecting is the row's business and forgetting is not. */
+button.iconbtn.danger {
+    color: @fg_faint;
+}
+
+button.iconbtn.danger:hover {
+    background-color: @crit_tint;
+    border-color: rgba(255, 85, 102, 0.30);
+    color: @crit;
+}
+
+button.iconbtn:disabled {
+    background-color: transparent;
+    color: @fg_faint;
+}
+
+spinner.btn-spinner {
+    min-width: 12px;
+    min-height: 12px;
+    color: @accent;
+}
+
+/* ---- the notes and the footer --------------------------------------------- */
+label.dev-hint {
+    font-size: 11px;
+    color: @fg_dim;
+    padding: 22px 9px;
+}
+
+/* The dashed capsule is the "there is nothing here and there could be" state;
+ * it has no business framing a plain sentence about a radio that is off. */
+label.dev-hint.empty {
+    background-color: @surface;
+    border: 1px dashed @hairline;
+    border-radius: 12px;
+}
+
+label.dev-note {
+    font-size: 10px;
+    color: @warn;
+    padding: 5px 9px;
+}
+
+label.footer-hint {
+    font-size: 9px;
+    color: @fg_faint;
+    letter-spacing: 0.3px;
+    padding: 7px 2px 0 2px;
+}
+
+separator.sep {
+    background-color: @hairline;
+    min-height: 1px;
+    margin: 0 2px;
+}
+
+/* ---- touch: a fingertip instead of a pointer ----------------------------- */
+/* The card is already finger-sized by the standard of the system popup, but a
+ * row is a hit target as well as a reading, and 50px is two-thirds of what a
+ * fingertip needs. The list grows its rows and the buttons grow with them. */
+window.osd.touch box.device-row {
+    min-height: 62px;
+    padding: 8px 9px 8px 0;
+}
+
+window.osd.touch box.dev-badge {
+    min-width: 42px;
+    min-height: 42px;
+    border-radius: 13px;
+}
+
+window.osd.touch label.dev-name {
+    font-size: 14px;
+}
+
+window.osd.touch label.dev-sub {
+    font-size: 11px;
+}
+
+window.osd.touch button.iconbtn {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 12px;
+}
+
+window.osd.touch box.device-row box.actions {
+    min-width: 80px;
+}
+
+window.osd.touch box.search {
+    min-height: 40px;
+}
+
+window.osd.touch entry.filter,
+window.osd.touch entry.filter * {
+    font-size: 14px;
+    min-height: 34px;
+}

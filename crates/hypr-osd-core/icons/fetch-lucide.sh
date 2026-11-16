@@ -44,7 +44,7 @@ icons="
 audio-lines battery battery-charging battery-full battery-low battery-medium
 bell bell-off bluetooth camera chevron-left chevron-right circle clapperboard
 clock compass cpu download eye eye-off file folder gamepad-2 globe headphones
-keyboard layout-grid link list lock log-out memory-stick monitor moon mouse
+keyboard layout-grid link list lock log-out memory-stick mic mic-off monitor moon mouse
 music pause pin play plus power presentation printer repeat rotate-cw search
 settings shuffle skip-back skip-forward sliders-horizontal smartphone speaker sun
 terminal thermometer trash-2 tv unlink volume-1 volume-2 volume-x watch wifi

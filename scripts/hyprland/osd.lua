@@ -18,6 +18,7 @@
 local bar = "@BAR_OSD_BIN@"
 local island = "@ISLAND_OSD_BIN@"
 local stats = "@STATS_OSD_BIN@"
+local bluetooth_osd = "@BLUETOOTH_OSD_BIN@"
 local volume_osd = "@VOLUME_OSD_BIN@"
 local media_osd = "@MEDIA_OSD_BIN@"
 local session_osd = "@SESSION_OSD_BIN@"
@@ -52,6 +53,10 @@ if AUTOSTART then
         -- The same for the system popup, which unfolds from the bar's status
         -- pill and hangs under the bar's right end.
         hl.exec_cmd(stats)
+        -- The bluetooth manager: the card the popup's bluetooth tile opens. It
+        -- reads nothing until it is shown, but having it up means the first
+        -- click paints at once instead of paying for GTK start-up first.
+        hl.exec_cmd(bluetooth_osd)
         hl.exec_cmd(volume_osd)
         hl.exec_cmd(media_osd)
         hl.exec_cmd(session_osd)
@@ -439,6 +444,164 @@ hl.bind("SUPER + SPACE", hl.dsp.exec_cmd(launcher_osd .. " toggle"), {
 -- })
 
 
+-------------------------------
+---- TOUCH: THE TABLET --------
+-------------------------------
+
+-- A touchscreen has no pointer to hover and no key to press, so the panels that
+-- are normally reached by hovering or by a key need their own way in. This
+-- section is that way: the gestures that open them, the switch that says the
+-- machine has been folded into a tablet, and the on-screen keyboard that only
+-- exists while it is one.
+--
+-- None of it is required. On a machine with no touchscreen the gestures simply
+-- never fire, and every key and pointer path above keeps working on the machine
+-- that has one.
+
+-- ---- the tablet-mode switch ------------------------------------------------
+--
+-- The Surface Type Cover's switch is how a fold is announced, and Hyprland 0.56
+-- is the only program that can see it: the switch arrives as *binds* (there is
+-- no switch event on the IPC socket, and `hyprctl -j devices` lists the switch's
+-- name but not its state). So the two binds below are the whole detection
+-- mechanism, and they hand the answer to the bar, which writes it into
+-- $XDG_RUNTIME_DIR/hypr-osd-tablet. Every other element reads that flag (an
+-- element that is not running when the fold happens must not come up believing
+-- the wrong thing), adds or removes its `touch` CSS class, and the bar starts or
+-- stops the on-screen keyboard with it.
+--
+-- The switch's name has to match `hyprctl devices` exactly, spaces and all. On a
+-- machine with no such switch these binds are simply never fired - the keyboard
+-- presence is the fallback every element uses instead.
+--
+--     hypr-osd-bar tablet on      # folded back / cover detached
+--     hypr-osd-bar tablet off     # back to a laptop
+hl.bind("switch:on:Microsoft Surface Type Cover Tablet Mode Switch", hl.dsp.exec_cmd(bar .. " tablet on"), {
+    description = "hypr-osd: the machine is a tablet now",
+})
+hl.bind("switch:off:Microsoft Surface Type Cover Tablet Mode Switch", hl.dsp.exec_cmd(bar .. " tablet off"), {
+    description = "hypr-osd: the machine is a laptop again",
+})
+
+-- ---- the gestures ----------------------------------------------------------
+--
+-- These are **hyprgrass** gestures, not Hyprland keybinds. hyprgrass is a hyprpm
+-- plugin (https://github.com/horriblename/hyprgrass): it is what turns raw
+-- touches into gestures, and Hyprland's own `hl.gesture` only knows the
+-- trackpad. Install it with
+--
+--     hyprpm add https://github.com/horriblename/hyprgrass
+--     hyprpm enable hyprgrass
+--     hyprpm reload -n
+--
+-- and `hyprctl plugins list` names it when it is loaded. Without it the guard
+-- below leaves this block unread and everything else keeps working - the panels
+-- are still reachable by tapping the bar (a finger tap opens the same cards a
+-- hover and a click open), just not by swiping.
+--
+-- One thing worth knowing about this build (hyprgrass v0.8.2 against Hyprland
+-- 0.56): a *gesture* action may be a string (`"workspace"`) or a Lua function,
+-- but a dispatcher (`hl.dsp.exec_cmd(...)`) only works in a **bind**. So every
+-- gesture below is a `hyprgrass.bind` whose action runs one of this collection's
+-- verbs. (The workspace swipe is not registered here at all: it is Hyprland's
+-- own gesture, and lives in `hyprland.lua` - see the end of this block.)
+if hl.plugin.hyprgrass then
+    hl.config({
+        plugin = {
+            hyprgrass = {
+                -- Default 1.0 is tuned for trackpads and is too insensitive on a
+                -- touchscreen; upstream recommends ~4.0 for tablets. It scales
+                -- every gesture: swipes register after a shorter drag.
+                sensitivity = 4.0,
+                -- How far in from the edge an edge swipe has to start, and how
+                -- long a finger has to rest for the long press.
+                edge_margin = 40,
+                long_press_delay = 500,
+            },
+        },
+    })
+
+    -- Run a command from a gesture. `pattern` is the shape (see below), and the
+    -- action is one of this collection's verb lines - the same ones the keys run,
+    -- so the card a finger opens is the card a key opens.
+    local function touch_bind(pattern, command)
+        hl.plugin.hyprgrass.bind({ pattern = pattern, action = hl.dsp.exec_cmd(command) })
+    end
+
+    -- ---- edge swipes: one finger, starting at an edge ----
+    --
+    -- `origin` is the edge the swipe starts on - named by the direction you would
+    -- leave the screen through it, so the top edge is "up" - and `direction` is
+    -- where the finger goes. They are the tablet's own grammar: pull the control
+    -- centre down from the top, the overview up from the bottom, the drawers in
+    -- from the sides.
+    touch_bind({ kind = "edge", origin = "up", direction = "down" }, stats .. " toggle")
+    touch_bind({ kind = "edge", origin = "down", direction = "up" }, overview_osd .. " toggle")
+    touch_bind({ kind = "edge", origin = "left", direction = "right" }, apps_osd .. " toggle")
+    touch_bind({ kind = "edge", origin = "right", direction = "left" }, island .. " toggle")
+
+    -- ---- whole-hand swipes: two and three fingers ----
+    --
+    -- Two fingers up/down is the volume, one step per gesture - the wheel the
+    -- bar's status pill takes with a mouse, which a touchscreen cannot turn.
+    touch_bind({ kind = "swipe", fingers = 2, direction = "up" }, volume_osd .. " up")
+    touch_bind({ kind = "swipe", fingers = 2, direction = "down" }, volume_osd .. " down")
+
+    -- Three fingers up is the window switcher, down is the session card.
+    touch_bind({ kind = "swipe", fingers = 3, direction = "up" }, switcher_osd .. " show")
+    touch_bind({ kind = "swipe", fingers = 3, direction = "down" }, session_osd .. " toggle")
+
+    -- The **workspace swipe is deliberately not here.** It is Hyprland's own
+    -- gesture rather than one of this collection's panels, and it is usually
+    -- already registered in `hyprland.lua` (in this desktop's own hyprgrass
+    -- block: three fingers, horizontal, `action = "workspace"`). Registering the
+    -- same pattern twice is not an error, but the plugin keeps only the first
+    -- one and reports the second as `Gesture will be overshadowed by a previous
+    -- gesture` - a config error on every reload for no benefit. If no
+    -- `hyprgrass.gesture` is registered elsewhere, add this to `hyprland.lua`:
+    --
+    --     hl.plugin.hyprgrass.gesture({
+    --         pattern = { kind = "swipe", fingers = 3, direction = "horizontal" },
+    --         action  = "workspace",
+    --     })
+
+    -- A three-finger tap is the same window switcher without the travel: the
+    -- quick way to pick another window when the machine is being held with two
+    -- hands.
+    touch_bind({ kind = "tap", fingers = 3 }, switcher_osd .. " show")
+end
+
+-- ---- the on-screen keyboard ------------------------------------------------
+--
+-- A tablet without its Type Cover can only type into a card through an on-screen
+-- keyboard, and squeekboard is the one a Hyprland session has (it is in
+-- `extra`: `sudo pacman -S squeekboard`). Nothing here starts it: the bar does,
+-- and only while the machine is a tablet - a keyboard daemon running on a laptop
+-- would cover the launcher's search field the moment it is focused.
+--
+-- Two things are worth configuring for it here. While the screen is **locked**
+-- hyprlock owns the session and only layers with `above_lock` are drawn (and
+-- made interactive); squeekboard has no text input to show itself for on that
+-- screen, so it is force-shown with its D-Bus method instead:
+--
+--     busctl call --user sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true
+--
+-- The namespace is squeekboard's own (`osk`, on the compositor's top layer),
+-- which is what this rule matches; `hyprctl layers` shows it while the keyboard
+-- is up. `above_lock = 2` is deliberate: 1 would draw it over the lock screen
+-- but leave it inert, and a keyboard nobody can press is not a way to unlock a
+-- tablet. The cost is that this one surface is interactive while the session is
+-- locked - it is the keyboard, and typing on it is the point. `hypr-osd-lock`
+-- (`SUPER + L`, hypridle) force-shows it on a tablet and takes it down again on
+-- unlock; hyprlock itself has no text input for an on-screen keyboard to appear
+-- for (see the lock screen section below).
+hl.layer_rule({
+    name  = "squeekboard-above-lock",
+    match = { namespace = "^osk$" },
+    above_lock = 2,
+})
+
+
 --------------------------------
 ---- THE LOCK SCREEN -----------
 --------------------------------
@@ -450,9 +613,13 @@ hl.bind("SUPER + SPACE", hl.dsp.exec_cmd(launcher_osd .. " toggle"), {
 -- same screen, because they all end up running the same binary.
 --
 -- SUPER + SHIFT + L opens the session card, so bare SUPER + L gets the lock.
--- `pidof` first: pressing the key on an already locked screen should do nothing,
--- not start a second hyprlock (it would refuse the lock and log an error).
-hl.bind("SUPER + L", hl.dsp.exec_cmd("sh -c 'pidof hyprlock >/dev/null || hyprlock'"), {
+-- The command is this collection's own lock script rather than `hyprlock`
+-- directly: on a tablet it also puts the on-screen keyboard over the lock screen
+-- (hyprlock has no text input to summon one, so a finger would otherwise have no
+-- way to type the password - see the TOUCH section above). On a laptop the script
+-- is just the locker, and the `pidof` guard inside it is what keeps a second
+-- press on an already locked screen from starting a second locker.
+hl.bind("SUPER + L", hl.dsp.exec_cmd("sh -c 'command -v hypr-osd-lock >/dev/null 2>&1 && exec hypr-osd-lock; pidof hyprlock >/dev/null || hyprlock'"), {
     locked = true,
 })
 

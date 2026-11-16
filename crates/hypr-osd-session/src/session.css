@@ -57,3 +57,33 @@ button.row.confirm {
 button.row:disabled {
     color: @fg_faint;
 }
+
+/* ---- touch: a fingertip instead of a pointer ------------------------------ */
+/* The shell adds `window.osd.touch` while the machine is a tablet (see
+ * core::touch), and these rules only then apply: a pointer row is a 7px-padded
+ * line, which is comfortable to click at and too small to aim at with a finger.
+ * 24px of content plus 10px of padding on each side is the 44px target the
+ * shared touch rules use, and the bigger type is what makes five rows read at
+ * arm's length. The hint line grows with them: on a tablet it is the only
+ * written way out of the card. */
+window.osd.touch label.title {
+    font-size: 15px;
+}
+
+window.osd.touch button.row {
+    min-height: 24px;
+    padding: 10px 12px;
+    border-radius: 12px;
+}
+
+window.osd.touch button.row label {
+    font-size: 14px;
+}
+
+window.osd.touch image.row-icon {
+    min-width: 30px;
+}
+
+window.osd.touch label.hint {
+    font-size: 12px;
+}

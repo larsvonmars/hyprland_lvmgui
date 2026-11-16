@@ -43,6 +43,22 @@ pub enum Kind {
     Fraction { min: f64, max: f64 },
     /// A line of text: a command, an interface name, a date format.
     Text,
+    /// A path to a file on this machine - a picture, mostly. Drawn as a text field
+    /// with a folder button that opens GTK's file chooser, because a path is the
+    /// one setting nobody should have to type correctly.
+    Path,
+    /// A path that may be a **file or a directory** - hyprpaper's wallpaper, which
+    /// turns into a slideshow when it names a directory. Drawn like [`Kind::Path`],
+    /// with a second button that picks a folder.
+    PathFolder,
+    /// A colour, written the way every file in this collection spells one:
+    /// `#rrggbb` (or `#rrggbbaa`). Drawn as a colour swatch that opens GTK's
+    /// colour chooser.
+    Color,
+    /// A font **family** name - what Pango and hyprlock take. Drawn as a button
+    /// that opens GTK's font chooser; the size stays a separate row, because the
+    /// screens here size their type independently of the family.
+    Font,
     /// One of a handful of words this table can spell out itself (`adaptive`,
     /// `flat`): a dropdown, which is the only way to get one of them *right*.
     Choice(&'static [&'static str]),
@@ -199,6 +215,70 @@ const fn text(
     }
 }
 
+/// A path on this machine: a text field with a file chooser beside it.
+const fn path(
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    default: &'static str,
+) -> Setting {
+    Setting {
+        key,
+        label,
+        help,
+        default,
+        kind: Kind::Path,
+    }
+}
+
+/// A path that may also be a directory: the same field, with a folder button too.
+const fn path_folder(
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    default: &'static str,
+) -> Setting {
+    Setting {
+        key,
+        label,
+        help,
+        default,
+        kind: Kind::PathFolder,
+    }
+}
+
+/// A colour: a field whose value is `#rrggbb`, edited with GTK's colour chooser.
+const fn color(
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    default: &'static str,
+) -> Setting {
+    Setting {
+        key,
+        label,
+        help,
+        default,
+        kind: Kind::Color,
+    }
+}
+
+/// A font family, picked from the fonts the machine has.
+const fn font(
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    default: &'static str,
+) -> Setting {
+    Setting {
+        key,
+        label,
+        help,
+        default,
+        kind: Kind::Font,
+    }
+}
+
 /// A value picked from a list rather than typed - the list being one this table
 /// can spell out.
 const fn choice(
@@ -288,6 +368,17 @@ pub enum Applies {
     /// for a `theme.css` that was edited by hand - it rewrites the same file the
     /// change does.
     Lock,
+    /// The **Touch** page: the touchscreen side of the collection - whether a
+    /// finger is treated as a finger at all, which on-screen keyboard a tablet
+    /// gets, and how long a long press lasts.
+    ///
+    /// It is not an element's page even though it has a file of its own
+    /// ([`crate::touch::ELEMENT`]): the questions it answers are about the
+    /// *machine*, and every element reads the same `touch.conf`, so there is no
+    /// one binary for a restart chip to stop and start. A change takes effect
+    /// when the elements that read it are restarted (`scripts/install.sh` does
+    /// that for the ones that are running), which is what the page's blurb says.
+    Touch,
     /// The **Shortcuts** page: the keys this collection implements, list *only*.
     /// It has no config file and no values to write - what it shows is
     /// [`SHORTCUTS`] - so its rows are readings with the keys in place of a name,
@@ -301,6 +392,18 @@ pub enum Applies {
     /// a Lua-configured bind as `__lua` with a function number, so it cannot say
     /// which element a key runs.
     Shortcuts,
+    /// The **Wallpaper** page: hyprpaper's own config, generated from
+    /// `~/.config/hypr-osd/wallpaper.conf` (see [`crate::wallpaper`]). A change is
+    /// written at once and applied through hyprpaper's IPC, so the picture changes
+    /// on screen without a restart; the splash and `ipc` need the daemon restarted,
+    /// which the page's own button does.
+    Wallpaper,
+    /// The **Login screen** page: SDDM's hypr-osd theme, written into
+    /// `~/.config/hypr/sddm-theme/theme.conf` from
+    /// `~/.config/hypr-osd/login.conf`, with the background rendered from the
+    /// wallpaper (see [`crate::login`]). Installing the theme into
+    /// `/usr/share/sddm/` needs root, so the page says so instead of trying.
+    Login,
 }
 
 /// One element's (or one Hyprland area's) page in the window.
@@ -364,13 +467,14 @@ pub struct Tab {
 
 /// The window's tabs, in the order their buttons are drawn.
 ///
-/// The first is this collection - one page per element and one for the lock
-/// screen, each with its own config file. The second is the desktop the
-/// collection sits on: Hyprland's own options, which belong together because they
-/// are not *about* any one element and are applied to the compositor rather than
-/// to a program of ours. The third is the machine under both: the energy policy
-/// that ties the compositor's effects to the power profile (see
-/// [`crate::energy`]).
+/// The first is this collection - one page per element, each with its own config
+/// file. The second is the desktop the collection sits on: Hyprland's own
+/// options, which belong together because they are not *about* any one element
+/// and are applied to the compositor rather than to a program of ours. The third
+/// is the desktop's three faces - the wallpaper, the lock screen and the login
+/// screen - which are one tab because they are one picture seen three times. The
+/// fourth is the machine under all of it: the energy policy that ties the
+/// compositor's effects to the power profile (see [`crate::energy`]).
 pub const TABS: &[Tab] = &[
     Tab {
         id: "osd",
@@ -386,6 +490,13 @@ pub const TABS: &[Tab] = &[
         sections: DESKTOP,
     },
     Tab {
+        id: "appearance",
+        title: "Appearance",
+        blurb: "The desktop's three faces - the wallpaper, the lock screen and the login \
+                screen - and the picture they can share.",
+        sections: APPEARANCE,
+    },
+    Tab {
         id: "system",
         title: "System",
         blurb: "The machine under the desktop: what its power profile is right now, and \
@@ -394,10 +505,46 @@ pub const TABS: &[Tab] = &[
     },
 ];
 
+/// The **Appearance** tab: everything that is a picture rather than a program.
+///
+/// One page per face, in the order a session meets them - the login screen before
+/// the wallpaper, the wallpaper behind the lock screen. All three can point at the
+/// same image, and the Wallpaper page's own buttons are how that is done in one
+/// click (see the settings element's `command`).
+pub const APPEARANCE: &[Section] = &[
+    Section {
+        file: crate::wallpaper::FILE,
+        title: "Wallpaper",
+        icon: names::DISPLAY,
+        blurb: "hyprpaper: the picture behind every window, how it fills a screen, and \
+                the slideshow it can be.",
+        applies: Applies::Wallpaper,
+        settings: WALLPAPER,
+    },
+    Section {
+        file: crate::lock::FILE,
+        title: "Lock screen",
+        icon: names::LOCK,
+        blurb: "SUPER + L, and the session card's Lock row: the wallpaper under a sheet \
+                of glass, the clock, the date and the field - every knob hyprlock has \
+                for them.",
+        applies: Applies::Lock,
+        settings: LOCK,
+    },
+    Section {
+        file: crate::login::FILE,
+        title: "Login screen",
+        icon: names::MONITOR,
+        blurb: "SDDM, before Hyprland starts: the picture, the face and the palette the \
+                greeter draws.",
+        applies: Applies::Login,
+        settings: LOGIN,
+    },
+];
+
 /// The first tab: every element of the collection, in the order the sidebar shows
 /// them - the bar first (it is the furniture), then the two popups that belong to
-/// it, then the cards, then the lock screen (a page without a binary of its own:
-/// hyprlock draws it), then the two keyboard panels, then the settings window
+/// it, then the cards, then the two keyboard panels, then the settings window
 /// itself.
 pub const OSD: &[Section] = &[
     Section {
@@ -428,6 +575,15 @@ pub const OSD: &[Section] = &[
         settings: STATS,
     },
     Section {
+        file: "bluetooth",
+        title: "Bluetooth manager",
+        icon: names::BLUETOOTH,
+        blurb: "The card the system popup's bluetooth tile opens: every paired and \
+                nearby device, its battery and link, and the one action that fits it.",
+        applies: Applies::Element,
+        settings: BLUETOOTH,
+    },
+    Section {
         file: "volume",
         title: "Volume card",
         icon: names::VOLUME_HIGH,
@@ -453,16 +609,6 @@ pub const OSD: &[Section] = &[
                 the destructive ones follow.",
         applies: Applies::Element,
         settings: SESSION,
-    },
-    Section {
-        file: crate::lock::FILE,
-        title: "Lock screen",
-        icon: names::LOCK,
-        blurb: "SUPER + L, and the session card's Lock row: hyprpaper's wallpaper under a \
-                sheet of glass, the clock, and the field. The palette is the desktop's, \
-                written out for hyprlock.",
-        applies: Applies::Lock,
-        settings: LOCK,
     },
     Section {
         file: "switcher",
@@ -506,6 +652,17 @@ pub const OSD: &[Section] = &[
                 a change here takes a restart of the window to show.",
         applies: Applies::Element,
         settings: WINDOW,
+    },
+    Section {
+        file: crate::touch::ELEMENT,
+        title: "Touch",
+        icon: names::MOUSE,
+        blurb: "The touchscreen side: a finger tap opens the panels a hover opens, a \
+                long press is the right click, a tablet gets an on-screen keyboard, and \
+                the controls grow while the keyboard is folded away. Every element reads \
+                this one file, so a change is a restart of the elements that are running.",
+        applies: Applies::Touch,
+        settings: TOUCH,
     },
     Section {
         file: "shortcuts",
@@ -728,10 +885,17 @@ pub const SHORTCUTS: &[Shortcut] = &[
         scope: ShortcutScope::Card,
     },
     Shortcut {
+        keys: "CTRL + TAB / CTRL + SHIFT + TAB",
+        action: "Settings: the next or previous tab",
+        help: "Walks the window's four tabs without leaving the keyboard. Each tab \
+               remembers the page it was last on.",
+        scope: ShortcutScope::Card,
+    },
+    Shortcut {
         keys: "ESC",
         action: "Settings: close this window",
-        help: "The only key this window takes for itself - everything else belongs to \
-               the control that has the focus.",
+        help: "One of the two keys this window takes for itself (the other is \
+               Ctrl+Tab) - everything else belongs to the control that has the focus.",
         scope: ShortcutScope::Card,
     },
 ];
@@ -912,16 +1076,18 @@ const BAR: &[Setting] = &[
     flag("show_apps", "Applications button", "The grid button at the far left, which opens the applications panel.", true),
     flag("show_workspaces", "Workspaces", "The row of workspace pills.", true),
     flag("show_title", "Window title", "The focused window's title, beside the workspaces.", true),
-    flag("show_clock", "Clock", "The clock in the middle - and the handle that unfolds the island popup.", true),
-    flag("show_media", "Media", "What is playing.", true),
+    flag("show_clock", "Clock", "The clock at the bar's right end - and the handle that unfolds the island popup.", true),
+    flag("show_media", "Media", "The player: cover, track and artist, in the middle of the bar.", true),
     flag("show_stats", "System info", "CPU, memory, temperature and the pending updates.", true),
     flag("show_status", "Status", "The link, the sound and the battery - and the handle that unfolds the system popup.", true),
     flag("show_tray", "Tray", "The application indicators. Off, the bar does not claim the tray's D-Bus names at all.", true),
     flag("show_minimised", "Put-away windows", "The windows you put away with SUPER + H, drawn in the tray's row.", true),
-    flag("show_power", "Power button", "The session button at the far right.", true),
+    flag("show_power", "Power button", "The session button, between the status pill and the clock.", true),
     number("workspaces", "Workspaces", "How many numbered workspaces the row keeps room for.", "5", 1, 30),
     number("title_width", "Title width", "How much room the focused window's title may take before it is ellipsised.", "320", 60, 2000),
-    text("clock_format", "Clock format", "The clock pill, in strftime terms - `%H:%M` or `%a %H:%M`.", "%H:%M"),
+    number("media_width", "Track width", "How much room the player's track may take before it is ellipsised.", "340", 60, 2000),
+    text("clock_format", "Clock format", "The clock's top line, in strftime terms - `%H:%M` or `%a %H:%M`.", "%H:%M"),
+    text("date_format", "Date format", "The small line under the time; empty gives a one-line clock.", "%a, %b %d"),
     text("battery", "Battery", "The battery to watch, by name. A machine with none gets no battery pill.", "BAT1"),
     text("adapter", "Adapter", "The mains supply that says whether the battery is charging.", "ADP1"),
     text("network_interface", "Wireless interface", "The interface the network pill reads, through `iw`.", "wlan0"),
@@ -938,6 +1104,46 @@ const BAR: &[Setting] = &[
     text("stats_command", "Popup command", "The element the status pill opens.", "hypr-osd-stats"),
     text("island_command", "Island command", "The element the clock's hover opens.", "hypr-osd-island"),
     text("apps_command", "Applications command", "The element the bar's left-end button opens.", "hypr-osd-apps"),
+];
+
+// --- touch (the machine's own page) -----------------------------------------
+
+/// The defaults here are [`crate::touch`]'s, not an element's: `touch.conf` is
+/// shared by every element and read at start-up (see `touch::settings`).
+const TOUCH: &[Setting] = &[
+    flag(
+        "enabled",
+        "Touch handling",
+        "A finger tap opens the panels a hover opens (pinned, with a dimmed \
+         tap-outside to close them), a long press is the right click, and the \
+         controls grow on a tablet. Off, the touchscreen still clicks and drags \
+         like a pointer.",
+        true,
+    ),
+    text(
+        "osk",
+        "On-screen keyboard",
+        "`auto` finds squeekboard, then wvkbd; `none` turns it off; anything else \
+         is a command line (`wvkbd-mobintl -H 300`).",
+        "auto",
+    ),
+    number(
+        "osk_height",
+        "Keyboard height",
+        "How tall wvkbd is asked to be, in pixels. squeekboard sizes itself.",
+        "260",
+        80,
+        600,
+    ),
+    number(
+        "long_press_ms",
+        "Long press",
+        "How long a finger has to rest before it counts as a right click, in \
+         milliseconds.",
+        "500",
+        200,
+        2000,
+    ),
 ];
 
 // --- the island ------------------------------------------------------------
@@ -962,8 +1168,8 @@ const ISLAND: &[Setting] = &[
     number(
         "hot_width",
         "Hover zone",
-        "How wide a strip around the clock's centre counts as hovering it.",
-        "240",
+        "How wide a strip at the bar's right end counts as hovering the clock.",
+        "120",
         40,
         1200,
     ),
@@ -1101,7 +1307,7 @@ const STATS: &[Setting] = &[
     number(
         "left_width",
         "Left column",
-        "The width of the load column: the gauges and the bluetooth tile.",
+        "The width of the load column: the gauges and the two radio tiles.",
         "260",
         80,
         900,
@@ -1170,6 +1376,22 @@ const STATS: &[Setting] = &[
         1,
         12,
     ),
+    millis(
+        "networks_every_ms",
+        "Networks interval",
+        "How often the networks in reach are re-read while the panel is open.",
+        "15000",
+        2000,
+        120000,
+    ),
+    number(
+        "max_networks",
+        "Network rows",
+        "How many network rows the wireless tile shows before it switches to a count.",
+        "5",
+        1,
+        12,
+    ),
     number(
         "scan_seconds",
         "Scan length",
@@ -1187,13 +1409,13 @@ const STATS: &[Setting] = &[
     text(
         "network_interface",
         "Wireless interface",
-        "The interface the NETWORK row reports on.",
+        "The interface the network tile reports on and disconnects.",
         "wlan0",
     ),
     text(
         "terminal_command",
         "Terminal",
-        "Where the buttons that open something put it (btop, nmtui, bluetoothctl, pacman).",
+        "Where the buttons that open something put it (btop, nmtui, pacman).",
         "kitty",
     ),
     text(
@@ -1201,6 +1423,65 @@ const STATS: &[Setting] = &[
         "Settings command",
         "What the header's gear runs - this settings window.",
         "hypr-osd-settings",
+    ),
+    text(
+        "bluetooth_command",
+        "Bluetooth command",
+        "What the bluetooth tile's Manage chip runs - the manager card.",
+        "hypr-osd-bluetooth",
+    ),
+];
+
+// --- the bluetooth manager ------------------------------------------------
+
+const BLUETOOTH: &[Setting] = &[
+    number(
+        "width",
+        "Card width",
+        "The card's width. It grows for nothing: every row is capped to fit it.",
+        "640",
+        420,
+        1400,
+    ),
+    number(
+        "list_height",
+        "List height",
+        "The height of the scrolling device list, below the header and filter.",
+        "380",
+        160,
+        1200,
+    ),
+    number(
+        "max_devices",
+        "Device limit",
+        "How many devices the card reads details for (one bluetoothctl info each).",
+        "24",
+        1,
+        100,
+    ),
+    millis(
+        "devices_every_ms",
+        "Devices interval",
+        "How often the controller and its devices are re-read while the card is open.",
+        "5000",
+        1000,
+        120000,
+    ),
+    number(
+        "scan_seconds",
+        "Scan length",
+        "How long the Scan button looks for devices, in seconds.",
+        "12",
+        2,
+        60,
+    ),
+    millis(
+        "idle_close_ms",
+        "Idle close",
+        "Close the card after this long with no key or pointer movement (0 disables it).",
+        "120000",
+        0,
+        600000,
     ),
 ];
 
@@ -1315,39 +1596,118 @@ const SESSION: &[Setting] = &[
     ),
 ];
 
+// --- the wallpaper ---------------------------------------------------------
+//
+// hyprpaper's config is `~/.config/hypr/hyprpaper.conf`, generated from
+// `~/.config/hypr-osd/wallpaper.conf` (see [`crate::wallpaper`]). Every option
+// hyprpaper 0.8 has is a row: the three splash knobs, `ipc`, and the wallpaper
+// block's `monitor`, `path`, `fit_mode`, `timeout`, `order` and `recursive` -
+// the last three turn a directory into a slideshow.
+
+pub const WALLPAPER: &[Setting] = &[
+    path_folder(
+        "path",
+        "Picture",
+        "The image hyprpaper draws, or a directory it walks as a slideshow (the folder \
+         button picks a directory). Empty keeps whatever ~/.config/hypr/hyprpaper.conf \
+         already names.",
+        crate::wallpaper::DEFAULT_PATH,
+    ),
+    choice(
+        "fit_mode",
+        "Fit mode",
+        "How the picture fills a screen: `cover` crops the overflow, `contain` letterboxes, \
+         `tile` repeats it, `fill` stretches it.",
+        crate::wallpaper::DEFAULT_FIT_MODE,
+        crate::wallpaper::FIT_MODES,
+    ),
+    text(
+        "monitor",
+        "Monitor",
+        "The output this block is for (e.g. `DP-1`); empty makes it the fallback for every \
+         output.",
+        crate::wallpaper::DEFAULT_MONITOR,
+    ),
+    number(
+        "timeout",
+        "Slide time",
+        "Seconds between pictures when `path` is a directory.",
+        crate::wallpaper::DEFAULT_TIMEOUT,
+        1,
+        86400,
+    ),
+    choice(
+        "order",
+        "Slide order",
+        "Walk the directory in `random` order; `(none)` keeps the file order.",
+        crate::wallpaper::DEFAULT_ORDER,
+        &["random"],
+    ),
+    flag(
+        "recursive",
+        "Recursive",
+        "Descend into subdirectories when `path` is a directory.",
+        crate::wallpaper::DEFAULT_RECURSIVE,
+    ),
+    flag(
+        "splash",
+        "Splash",
+        "Draw Hyprland's splash over a freshly loaded wallpaper. Read at start-up, so \
+         restart hyprpaper after changing it.",
+        crate::wallpaper::DEFAULT_SPLASH,
+    ),
+    number(
+        "splash_offset",
+        "Splash offset",
+        "How far up the splash sits.",
+        crate::wallpaper::DEFAULT_SPLASH_OFFSET,
+        0,
+        500,
+    ),
+    fraction(
+        "splash_opacity",
+        "Splash opacity",
+        "How opaque the splash is.",
+        crate::wallpaper::DEFAULT_SPLASH_OPACITY,
+        0.0,
+        1.0,
+    ),
+    flag(
+        "ipc",
+        "IPC",
+        "Let `hyprctl hyprpaper` talk to the daemon - which is how a new picture is applied \
+         without a restart. Read at start-up.",
+        crate::wallpaper::DEFAULT_IPC,
+    ),
+];
+
 // --- the lock screen -------------------------------------------------------
 //
-// hyprlock's config is `~/.config/hypr/hyprlock.conf`: structure, in hyprlang -
-// the glass, the clock, the field and where each of them sits - carried by this
-// repository and installed by `install.sh`. What this page edits is the *other*
-// half, `~/.config/hypr-osd/lock.conf`, which `hypr-osd-lock-vars` turns into the
-// variables that structure is written in terms of (see [`crate::lock`]), palette
-// included: hyprlock cannot read CSS, so those variables are how the desktop's
-// one palette reaches it.
+// hyprlock's config is `~/.config/hypr/hyprlock.conf`, generated from
+// `~/.config/hypr-osd/lock.conf` and the theme's palette (see [`crate::lock`]):
+// hyprlock cannot read CSS, so the colours are written out for it.
 //
-// Three groups of numbers are deliberately *not* rows here. The label positions,
-// the shadows and the sizes of the type are one composition tuned against each
-// other - the file explains each measurement - so a row for one of them on its
-// own would break the arrangement rather than adjust it. What is exposed is what
-// can move independently: the picture, the glass, and the behaviour.
+// Every option hyprlock 0.9 has for the widgets this screen uses is a row here -
+// `general`, `auth`, `animations`, `background`, and the panel, clock, date, rule,
+// lock mark, field and hint widgets. A change is live at the next lock; nothing
+// has to be restarted.
 //
 // Public because [`crate::lock`] holds it against the file it generates (a test
-// there): every row has to be a variable that file defines.
+// there): every row has to change that file.
+
 pub const LOCK: &[Setting] = &[
-    text(
+    path(
         "wallpaper",
         "Wallpaper",
         "The picture behind the lock screen; empty follows the wallpaper hyprpaper draws, \
          so the desktop and the lock screen cannot disagree.",
         crate::lock::DEFAULT_WALLPAPER,
     ),
-    number(
-        "blur_size",
-        "Blur size",
-        "How far the picture is blurred: 1 is essentially untouched, 8-16 is frosted glass.",
-        crate::lock::DEFAULT_BLUR_SIZE,
-        0,
-        32,
+    text(
+        "monitor",
+        "Monitor",
+        "The output the lock screen draws on; empty means every output.",
+        crate::lock::DEFAULT_MONITOR,
     ),
     number(
         "blur_passes",
@@ -1356,7 +1716,15 @@ pub const LOCK: &[Setting] = &[
          the pipeline with it.",
         crate::lock::DEFAULT_BLUR_PASSES,
         1,
-        5,
+        10,
+    ),
+    number(
+        "blur_size",
+        "Blur size",
+        "How far the picture is blurred: 1 is essentially untouched, 8-16 is frosted glass.",
+        crate::lock::DEFAULT_BLUR_SIZE,
+        0,
+        32,
     ),
     fraction(
         "brightness",
@@ -1399,20 +1767,20 @@ pub const LOCK: &[Setting] = &[
         0.05,
     ),
     number(
-        "panel_width",
-        "Glass width",
-        "How wide the sheet of dark glass behind the clock and the field is.",
-        crate::lock::DEFAULT_PANEL_WIDTH,
-        200,
-        1600,
+        "reload_time",
+        "Reload time",
+        "Seconds between re-reads of the picture; -1 reloads only on SIGUSR2.",
+        crate::lock::DEFAULT_RELOAD_TIME,
+        -1,
+        86400,
     ),
-    number(
-        "panel_height",
-        "Glass height",
-        "How tall that sheet is; the type inside is placed against its middle.",
-        crate::lock::DEFAULT_PANEL_HEIGHT,
-        200,
-        1200,
+    fraction(
+        "crossfade_time",
+        "Cross-fade",
+        "Seconds to cross-fade between reloaded backgrounds; negative disables it.",
+        crate::lock::DEFAULT_CROSSFADE_TIME,
+        -1.0,
+        10.0,
     ),
     flag(
         "hide_cursor",
@@ -1430,9 +1798,29 @@ pub const LOCK: &[Setting] = &[
     flag(
         "immediate_render",
         "Draw immediately",
-        "Draw the glass before the picture is ready, so a lock looks deliberate a beat \
+        "Draw the widgets before the picture is ready, so a lock looks deliberate a beat \
          earlier instead of showing the wallpaper appearing underneath it.",
         crate::lock::DEFAULT_IMMEDIATE_RENDER,
+    ),
+    flag(
+        "text_trim",
+        "Trim text",
+        "Trim trailing whitespace from command output in labels.",
+        crate::lock::DEFAULT_TEXT_TRIM,
+    ),
+    choice(
+        "fractional_scaling",
+        "Fractional scaling",
+        "How the surface follows a fractional monitor scale: 0 off, 1 on, 2 auto.",
+        crate::lock::DEFAULT_FRACTIONAL_SCALING,
+        &["0", "1", "2"],
+    ),
+    choice(
+        "screencopy_mode",
+        "Screencopy",
+        "How the background is captured: 0 GPU-accelerated, 1 CPU (slow).",
+        crate::lock::DEFAULT_SCREENCOPY_MODE,
+        &["0", "1"],
     ),
     millis(
         "fail_timeout",
@@ -1441,6 +1829,624 @@ pub const LOCK: &[Setting] = &[
         crate::lock::DEFAULT_FAIL_TIMEOUT,
         0,
         10000,
+    ),
+    flag(
+        "animations",
+        "Animations",
+        "Fade the lock in and out, and animate the field's colours.",
+        crate::lock::DEFAULT_ANIMATIONS,
+    ),
+    flag(
+        "pam_enabled",
+        "PAM",
+        "Authenticate through PAM, which is how the password is checked.",
+        crate::lock::DEFAULT_PAM_ENABLED,
+    ),
+    text(
+        "pam_module",
+        "PAM module",
+        "The PAM service to ask (`/etc/pam.d/<name>`); `su` is the fallback when it is \
+         missing.",
+        crate::lock::DEFAULT_PAM_MODULE,
+    ),
+    flag(
+        "fingerprint_enabled",
+        "Fingerprint",
+        "Authenticate in parallel through fprintd.",
+        crate::lock::DEFAULT_FINGERPRINT_ENABLED,
+    ),
+    text(
+        "fingerprint_ready_message",
+        "Fingerprint ready",
+        "What the field says while the reader waits for a finger.",
+        crate::lock::DEFAULT_FINGERPRINT_READY_MESSAGE,
+    ),
+    text(
+        "fingerprint_present_message",
+        "Fingerprint scanning",
+        "What the field says while a finger is being read.",
+        crate::lock::DEFAULT_FINGERPRINT_PRESENT_MESSAGE,
+    ),
+    millis(
+        "fingerprint_retry_delay",
+        "Fingerprint retry",
+        "How long to wait after an unrecognised finger before the next read, in \
+         milliseconds.",
+        crate::lock::DEFAULT_FINGERPRINT_RETRY_DELAY,
+        0,
+        5000,
+    ),
+    number(
+        "panel_width",
+        "Glass width",
+        "How wide the sheet of dark glass behind the clock and the field is.",
+        crate::lock::DEFAULT_PANEL_WIDTH,
+        200,
+        1600,
+    ),
+    number(
+        "panel_height",
+        "Glass height",
+        "How tall that sheet is; the type inside is placed against its middle.",
+        crate::lock::DEFAULT_PANEL_HEIGHT,
+        200,
+        1200,
+    ),
+    number(
+        "panel_x",
+        "Glass x",
+        "Horizontal offset of the glass from the centre.",
+        crate::lock::DEFAULT_PANEL_X,
+        -4000,
+        4000,
+    ),
+    number(
+        "panel_y",
+        "Glass y",
+        "Vertical offset of the glass; **positive is up**, as everywhere on this screen.",
+        crate::lock::DEFAULT_PANEL_Y,
+        -4000,
+        4000,
+    ),
+    number(
+        "panel_rounding",
+        "Glass rounding",
+        "Corner radius of the glass.",
+        crate::lock::DEFAULT_PANEL_ROUNDING,
+        0,
+        200,
+    ),
+    number(
+        "panel_border",
+        "Glass border",
+        "Width of the glass's border, in pixels.",
+        crate::lock::DEFAULT_PANEL_BORDER,
+        0,
+        50,
+    ),
+    fraction(
+        "panel_opacity",
+        "Glass opacity",
+        "How opaque the glass is; it is the theme's `bg` at this opacity.",
+        crate::lock::DEFAULT_PANEL_OPACITY,
+        0.0,
+        1.0,
+    ),
+    number(
+        "panel_shadow_size",
+        "Glass shadow",
+        "How far the glass's shadow spreads.",
+        crate::lock::DEFAULT_PANEL_SHADOW_SIZE,
+        0,
+        200,
+    ),
+    number(
+        "panel_shadow_passes",
+        "Shadow passes",
+        "How many times the shadow is drawn; 0 disables it.",
+        crate::lock::DEFAULT_PANEL_SHADOW_PASSES,
+        0,
+        10,
+    ),
+    fraction(
+        "panel_shadow_boost",
+        "Shadow boost",
+        "How much the shadow's opacity is boosted.",
+        crate::lock::DEFAULT_PANEL_SHADOW_BOOST,
+        0.0,
+        5.0,
+    ),
+    fraction(
+        "panel_shadow_opacity",
+        "Shadow opacity",
+        "How dark the glass's shadow is.",
+        crate::lock::DEFAULT_PANEL_SHADOW_OPACITY,
+        0.0,
+        1.0,
+    ),
+    font(
+        "clock_font",
+        "Font",
+        "The face the clock, the date, the lock mark and the hint are drawn in.",
+        crate::lock::DEFAULT_CLOCK_FONT,
+    ),
+    number(
+        "clock_size",
+        "Clock size",
+        "The clock's font size.",
+        crate::lock::DEFAULT_CLOCK_SIZE,
+        8,
+        400,
+    ),
+    number(
+        "clock_x",
+        "Clock x",
+        "Horizontal offset of the clock, the rule and the lock mark.",
+        crate::lock::DEFAULT_CLOCK_X,
+        -4000,
+        4000,
+    ),
+    number(
+        "clock_y",
+        "Clock y",
+        "Vertical offset of the clock; positive is up.",
+        crate::lock::DEFAULT_CLOCK_Y,
+        -4000,
+        4000,
+    ),
+    text(
+        "clock_format",
+        "Clock format",
+        "The clock's `date` format. `%H:%M` gets the accent colon; anything else is handed \
+         to `date` unchanged.",
+        crate::lock::DEFAULT_CLOCK_FORMAT,
+    ),
+    flag(
+        "clock_accent_colon",
+        "Accent colon",
+        "Colour the colon between hours and minutes with the theme's accent (only for \
+         `%H:%M`).",
+        crate::lock::DEFAULT_CLOCK_ACCENT_COLON,
+    ),
+    text(
+        "date_format",
+        "Date format",
+        "The date line under the clock, in `date` terms.",
+        crate::lock::DEFAULT_DATE_FORMAT,
+    ),
+    number(
+        "date_size",
+        "Date size",
+        "The date's font size.",
+        crate::lock::DEFAULT_DATE_SIZE,
+        6,
+        300,
+    ),
+    number(
+        "date_x",
+        "Date x",
+        "Horizontal offset of the date.",
+        crate::lock::DEFAULT_DATE_X,
+        -4000,
+        4000,
+    ),
+    number(
+        "date_y",
+        "Date y",
+        "Vertical offset of the date; positive is up.",
+        crate::lock::DEFAULT_DATE_Y,
+        -4000,
+        4000,
+    ),
+    flag(
+        "date_uppercase",
+        "Date in caps",
+        "Set the date in capitals, the way the tuned screen did.",
+        crate::lock::DEFAULT_DATE_UPPERCASE,
+    ),
+    flag(
+        "show_rule",
+        "Accent rule",
+        "Draw the short accent line where the clock and the field meet.",
+        crate::lock::DEFAULT_SHOW_RULE,
+    ),
+    number(
+        "rule_width",
+        "Rule width",
+        "Width of the accent rule.",
+        crate::lock::DEFAULT_RULE_WIDTH,
+        0,
+        2000,
+    ),
+    number(
+        "rule_height",
+        "Rule height",
+        "Height of the accent rule.",
+        crate::lock::DEFAULT_RULE_HEIGHT,
+        0,
+        50,
+    ),
+    number(
+        "rule_y",
+        "Rule y",
+        "Vertical offset of the rule; positive is up.",
+        crate::lock::DEFAULT_RULE_Y,
+        -4000,
+        4000,
+    ),
+    number(
+        "rule_rounding",
+        "Rule rounding",
+        "Corner radius of the rule.",
+        crate::lock::DEFAULT_RULE_ROUNDING,
+        0,
+        100,
+    ),
+    fraction(
+        "rule_opacity",
+        "Rule opacity",
+        "How opaque the accent rule is.",
+        crate::lock::DEFAULT_RULE_OPACITY,
+        0.0,
+        1.0,
+    ),
+    flag(
+        "show_lock_icon",
+        "Lock mark",
+        "Draw the lock mark above the password field.",
+        crate::lock::DEFAULT_SHOW_LOCK_ICON,
+    ),
+    text(
+        "lock_icon",
+        "Lock glyph",
+        "The glyph drawn as the lock mark. hyprlock draws text, so this is a Nerd Font \
+         character rather than a Lucide drawing.",
+        crate::lock::DEFAULT_LOCK_ICON,
+    ),
+    number(
+        "lock_size",
+        "Lock size",
+        "The lock mark's font size.",
+        crate::lock::DEFAULT_LOCK_SIZE,
+        6,
+        300,
+    ),
+    number(
+        "lock_y",
+        "Lock y",
+        "Vertical offset of the lock mark; positive is up.",
+        crate::lock::DEFAULT_LOCK_Y,
+        -4000,
+        4000,
+    ),
+    font(
+        "field_font",
+        "Field font",
+        "The face the password field is drawn in.",
+        crate::lock::DEFAULT_FIELD_FONT,
+    ),
+    number(
+        "field_width",
+        "Field width",
+        "Width of the password field.",
+        crate::lock::DEFAULT_FIELD_WIDTH,
+        80,
+        2000,
+    ),
+    number(
+        "field_height",
+        "Field height",
+        "Height of the password field.",
+        crate::lock::DEFAULT_FIELD_HEIGHT,
+        20,
+        500,
+    ),
+    number(
+        "field_x",
+        "Field x",
+        "Horizontal offset of the password field.",
+        crate::lock::DEFAULT_FIELD_X,
+        -4000,
+        4000,
+    ),
+    number(
+        "field_y",
+        "Field y",
+        "Vertical offset of the password field; positive is up.",
+        crate::lock::DEFAULT_FIELD_Y,
+        -4000,
+        4000,
+    ),
+    number(
+        "field_rounding",
+        "Field rounding",
+        "Corner radius of the password field.",
+        crate::lock::DEFAULT_FIELD_ROUNDING,
+        0,
+        200,
+    ),
+    fraction(
+        "field_tint",
+        "Field tint",
+        "How strong the accent tint inside the field is.",
+        crate::lock::DEFAULT_FIELD_TINT,
+        0.0,
+        1.0,
+    ),
+    number(
+        "field_outline",
+        "Field outline",
+        "Thickness of the field's outline; 0 tints the inside instead.",
+        crate::lock::DEFAULT_FIELD_OUTLINE,
+        0,
+        50,
+    ),
+    fraction(
+        "field_outline_accent",
+        "Outline accent",
+        "The first colour of the outline gradient: the accent at this opacity.",
+        crate::lock::DEFAULT_FIELD_OUTLINE_ACCENT,
+        0.0,
+        1.0,
+    ),
+    fraction(
+        "field_outline_accent2",
+        "Outline accent2",
+        "The second colour of the outline gradient: the accent2 at this opacity.",
+        crate::lock::DEFAULT_FIELD_OUTLINE_ACCENT2,
+        0.0,
+        1.0,
+    ),
+    fraction(
+        "dots_size",
+        "Dot size",
+        "Size of the password dots.",
+        crate::lock::DEFAULT_DOTS_SIZE,
+        0.001,
+        0.8,
+    ),
+    fraction(
+        "dots_spacing",
+        "Dot spacing",
+        "Space between the password dots.",
+        crate::lock::DEFAULT_DOTS_SPACING,
+        -1.0,
+        1.0,
+    ),
+    flag(
+        "dots_center",
+        "Centre dots",
+        "Centre the dots in the field instead of aligning them left.",
+        crate::lock::DEFAULT_DOTS_CENTER,
+    ),
+    number(
+        "dots_rounding",
+        "Dot rounding",
+        "Corner radius of a dot; -1 is fully round.",
+        crate::lock::DEFAULT_DOTS_ROUNDING,
+        -1,
+        100,
+    ),
+    text(
+        "dots_text_format",
+        "Dot text",
+        "A character to draw instead of a dot; empty keeps the rounded rectangles.",
+        crate::lock::DEFAULT_DOTS_TEXT_FORMAT,
+    ),
+    text(
+        "placeholder_text",
+        "Placeholder",
+        "What the empty field says. Pango markup is allowed.",
+        crate::lock::DEFAULT_PLACEHOLDER_TEXT,
+    ),
+    text(
+        "check_text",
+        "Checking text",
+        "What the field says while PAM is thinking. `$PAMPROMPT` and friends are \
+         substituted.",
+        crate::lock::DEFAULT_CHECK_TEXT,
+    ),
+    text(
+        "fail_text",
+        "Failure text",
+        "What the field says after a wrong password. `$FAIL` and `$ATTEMPTS` are \
+         substituted.",
+        crate::lock::DEFAULT_FAIL_TEXT,
+    ),
+    flag(
+        "fade_on_empty",
+        "Fade when empty",
+        "Hide the field while the buffer is empty, so an empty box does not say 'type \
+         here'.",
+        crate::lock::DEFAULT_FADE_ON_EMPTY,
+    ),
+    millis(
+        "fade_timeout",
+        "Fade delay",
+        "How long the field waits after the buffer empties before fading, in milliseconds.",
+        crate::lock::DEFAULT_FADE_TIMEOUT,
+        0,
+        10000,
+    ),
+    flag(
+        "hide_input",
+        "Hide input",
+        "Draw a swaylock-style indicator instead of dots.",
+        crate::lock::DEFAULT_HIDE_INPUT,
+    ),
+    flag(
+        "swap_font_color",
+        "Swap font colour",
+        "Swap the font and inner colours when the field changes state.",
+        crate::lock::DEFAULT_SWAP_FONT_COLOR,
+    ),
+    flag(
+        "invert_numlock",
+        "Invert numlock",
+        "Change the colour when numlock is off rather than on.",
+        crate::lock::DEFAULT_INVERT_NUMLOCK,
+    ),
+    text(
+        "hint_text",
+        "Hint",
+        "The line under the field at rest. `$ATTEMPTS[…]` hides it once there is something \
+         to report; empty removes the label.",
+        crate::lock::DEFAULT_HINT_TEXT,
+    ),
+    number(
+        "hint_size",
+        "Hint size",
+        "The hint's font size.",
+        crate::lock::DEFAULT_HINT_SIZE,
+        6,
+        200,
+    ),
+    number(
+        "hint_x",
+        "Hint x",
+        "Horizontal offset of the hint.",
+        crate::lock::DEFAULT_HINT_X,
+        -4000,
+        4000,
+    ),
+    number(
+        "hint_y",
+        "Hint y",
+        "Vertical offset of the hint; positive is up.",
+        crate::lock::DEFAULT_HINT_Y,
+        -4000,
+        4000,
+    ),
+];
+
+// --- the login screen ------------------------------------------------------
+//
+// SDDM's hypr-osd theme, written into `~/.config/hypr/sddm-theme/theme.conf` from
+// `~/.config/hypr-osd/login.conf` (see [`crate::login`]). The palette is mirrored
+// rather than read, because the greeter is Qt and cannot read CSS - the same
+// reason the lock screen's colours are generated.
+//
+// The rendering keys (blur, dim, saturation, size) are not theme.conf keys: they
+// are what `magick` does to the wallpaper to produce the background image the
+// greeter draws.
+
+pub const LOGIN: &[Setting] = &[
+    path(
+        "background",
+        "Picture",
+        "The picture behind the login; empty follows the wallpaper hyprpaper draws.",
+        crate::login::DEFAULT_BACKGROUND,
+    ),
+    flag(
+        "render",
+        "Render background",
+        "Blur and dim the picture into the theme's own image. Off hands the greeter the \
+         file directly, which needs it to be readable by the `sddm` user.",
+        crate::login::DEFAULT_RENDER,
+    ),
+    number(
+        "blur",
+        "Blur",
+        "How far the rendered background is blurred (magick's `-blur 0xN`).",
+        crate::login::DEFAULT_BLUR,
+        0,
+        64,
+    ),
+    number(
+        "dim",
+        "Dim",
+        "How much the rendered background is dimmed, in percent (magick's `-modulate`).",
+        crate::login::DEFAULT_DIM,
+        0,
+        200,
+    ),
+    number(
+        "saturation",
+        "Saturation",
+        "Colour saturation of the rendered background, in percent.",
+        crate::login::DEFAULT_SATURATION,
+        0,
+        300,
+    ),
+    number(
+        "render_width",
+        "Image width",
+        "Width the background is rendered at.",
+        crate::login::DEFAULT_RENDER_WIDTH,
+        512,
+        7680,
+    ),
+    number(
+        "render_height",
+        "Image height",
+        "Height the background is rendered at.",
+        crate::login::DEFAULT_RENDER_HEIGHT,
+        512,
+        4320,
+    ),
+    font(
+        "font",
+        "Font",
+        "The face the greeter draws its text in. It draws no glyphs, so any monospace \
+         works.",
+        crate::login::DEFAULT_FONT,
+    ),
+    color(
+        "bg",
+        "Background",
+        "The greeter's background colour, for the bars and the sheet behind the form.",
+        crate::login::DEFAULT_BG,
+    ),
+    color(
+        "fg",
+        "Foreground",
+        "The greeter's main text colour.",
+        crate::login::DEFAULT_FG,
+    ),
+    color(
+        "fg_dim",
+        "Dim text",
+        "Secondary text: the session name, the hints.",
+        crate::login::DEFAULT_FG_DIM,
+    ),
+    color(
+        "fg_faint",
+        "Faint text",
+        "The quietest text: separators and placeholders.",
+        crate::login::DEFAULT_FG_FAINT,
+    ),
+    color(
+        "accent",
+        "Accent",
+        "The accent: the focused field, the login button.",
+        crate::login::DEFAULT_ACCENT,
+    ),
+    color(
+        "on_accent",
+        "On accent",
+        "Text drawn on top of the accent.",
+        crate::login::DEFAULT_ON_ACCENT,
+    ),
+    color(
+        "warn",
+        "Warning",
+        "Caps-lock and other warnings.",
+        crate::login::DEFAULT_WARN,
+    ),
+    color(
+        "crit",
+        "Critical",
+        "A failed login.",
+        crate::login::DEFAULT_CRIT,
+    ),
+    number(
+        "cursor_size",
+        "Cursor size",
+        "SDDM's cursor size, written into its drop-in. Installing the theme needs root, \
+         so this is carried by `install.sh`.",
+        crate::login::DEFAULT_CURSOR_SIZE,
+        16,
+        96,
     ),
 ];
 
@@ -1708,6 +2714,13 @@ const WINDOW: &[Setting] = &[
         "Binaries",
         "Where the element binaries live, so the restart buttons can find them.",
         "~/.local/bin",
+    ),
+    text(
+        "terminal_command",
+        "Terminal",
+        "What a button that needs a terminal opens - the Login screen page's Install runs \
+         `sudo` there, so the password is typed where the installer's output can be read.",
+        "kitty",
     ),
 ];
 
@@ -2083,10 +3096,11 @@ mod tests {
                 tab.id
             );
         }
-        // The first tab is this collection and the second is the desktop; the
-        // window's buttons are drawn in this order.
-        assert_eq!(TABS[0].id, "osd");
-        assert_eq!(TABS[1].id, "hyprland");
+        // The first tab is this collection, the second the desktop it sits on, the
+        // third the desktop's three faces, and the fourth the machine under both;
+        // the window's buttons are drawn in this order.
+        let ids: Vec<&str> = TABS.iter().map(|tab| tab.id).collect();
+        assert_eq!(ids, vec!["osd", "hyprland", "appearance", "system"]);
     }
 
     /// Every page names a config file, has something to show, and wears an icon
@@ -2159,6 +3173,23 @@ mod tests {
                         );
                     }
                     Kind::Text => {}
+                    // A path is a line of text with a file chooser beside it; any
+                    // string is a value it can hold, and a folder path is just a
+                    // path that names a directory.
+                    Kind::Path | Kind::PathFolder => {}
+                    // A colour is spelled `#rrggbb` (or with an alpha byte) and a
+                    // font is a family name - both are text, but one of them has
+                    // a shape the chooser depends on.
+                    Kind::Color => assert!(
+                        setting.default.starts_with('#')
+                            && matches!(setting.default.len(), 4 | 7 | 9),
+                        "{where_}: `{}` is not a #rrggbb colour",
+                        setting.default
+                    ),
+                    Kind::Font => assert!(
+                        !setting.default.is_empty(),
+                        "{where_}: a font needs a family name"
+                    ),
                     Kind::Choice(options) => assert!(
                         setting.default.is_empty() || options.contains(&setting.default),
                         "{where_}: `{}` is not one of {options:?}",
@@ -2218,23 +3249,33 @@ mod tests {
     fn the_osd_tab_covers_the_whole_collection() {
         let files: Vec<&str> = OSD.iter().map(|section| section.file).collect();
         for expected in [
-            "bar", "island", "stats", "volume", "media", "session", "lock", "switcher",
-            "overview", "launcher", "apps", "settings",
+            "bar",
+            "island",
+            "stats",
+            "bluetooth",
+            "volume",
+            "media",
+            "session",
+            "switcher",
+            "overview",
+            "launcher",
+            "apps",
+            "settings",
         ] {
             assert!(
                 files.contains(&expected),
                 "the catalogue has no page for `{expected}`"
             );
         }
-        // Every other page of the first tab is an element's, so it can be
-        // restarted - or the lock screen's, which is not a binary of ours and so
-        // has nothing to restart; the last one is the list of keys, which belongs
-        // to no element of its own.
+        // Every page of the first tab is an element's, so it can be restarted; the
+        // last one is the list of keys, which belongs to no element of its own -
+        // and the Touch page is the machine's, not an element's (it has a file,
+        // but every element reads that one).
         for section in OSD {
             assert!(
                 matches!(
                     section.applies,
-                    Applies::Element | Applies::Lock | Applies::Shortcuts
+                    Applies::Element | Applies::Shortcuts | Applies::Touch
                 ),
                 "{} is not an element's page",
                 section.title
@@ -2256,6 +3297,12 @@ mod tests {
     /// here fails the build's tests, and so does a row naming a key nobody bound.
     /// The template's commented-out suggestions (`SUPER + SHIFT + M`, `SUPER +
     /// SHIFT + S`, `SUPER + A`) are not binds and are deliberately not listed.
+    ///
+    /// The one kind of bind the page does *not* list is a **switch** bind
+    /// (`switch:on:<name>`): it is not a shortcut anybody presses - it fires when
+    /// a device changes state, and the Type Cover's tablet-mode switch is what
+    /// the collection binds to grow the bar for a finger. It is documented in the
+    /// README's Touch section, where the tablet is, not among the keys.
     #[test]
     fn the_shortcut_page_matches_the_hyprland_template() {
         const TEMPLATE: &str = include_str!("../../../scripts/hyprland/osd.lua");
@@ -2265,6 +3312,7 @@ mod tests {
             .lines()
             .filter_map(|line| line.trim().strip_prefix("hl.bind(\""))
             .filter_map(|rest| rest.split('"').next())
+            .filter(|keys| !keys.starts_with("switch:"))
             .collect();
         assert!(
             !bound.is_empty(),
@@ -2360,6 +3408,9 @@ mod tests {
                 Applies::Element => panic!("{} is an element's page", section.title),
                 Applies::Energy => panic!("{} is an energy page", section.title),
                 Applies::Lock => panic!("{} is the lock screen's page", section.title),
+                Applies::Wallpaper => panic!("{} is the wallpaper's page", section.title),
+                Applies::Login => panic!("{} is the login screen's page", section.title),
+                Applies::Touch => panic!("{} is the touch page", section.title),
                 Applies::Shortcuts => panic!("{} is a list of keys", section.title),
             }
         }
@@ -2377,11 +3428,37 @@ mod tests {
     /// policy on the daemon's file.
     #[test]
     fn the_system_tab_holds_the_energy_page() {
-        assert_eq!(TABS[2].id, "system");
+        let system = TABS
+            .iter()
+            .find(|tab| tab.id == "system")
+            .expect("there is no System tab");
         assert_eq!(SYSTEM.len(), 1);
         assert_eq!(SYSTEM[0].applies, Applies::Energy);
         assert_eq!(SYSTEM[0].file, "energy");
         assert!(std::ptr::eq(SYSTEM[0].settings, ENERGY));
+        assert!(std::ptr::eq(system.sections, SYSTEM));
+    }
+
+    /// The Appearance tab is the desktop's three faces - the wallpaper, the lock
+    /// screen and the login screen - and each is generated from its own file
+    /// rather than read by an element at start-up.
+    #[test]
+    fn the_appearance_tab_holds_the_three_backgrounds() {
+        let appearance = TABS
+            .iter()
+            .find(|tab| tab.id == "appearance")
+            .expect("there is no Appearance tab");
+        assert!(std::ptr::eq(appearance.sections, APPEARANCE));
+        let applies: Vec<Applies> = APPEARANCE.iter().map(|section| section.applies).collect();
+        assert_eq!(
+            applies,
+            vec![Applies::Wallpaper, Applies::Lock, Applies::Login]
+        );
+        let files: Vec<&str> = APPEARANCE.iter().map(|section| section.file).collect();
+        assert_eq!(files, vec!["wallpaper", "lock", "login"]);
+        assert!(std::ptr::eq(APPEARANCE[0].settings, WALLPAPER));
+        assert!(std::ptr::eq(APPEARANCE[1].settings, LOCK));
+        assert!(std::ptr::eq(APPEARANCE[2].settings, LOGIN));
     }
 
     /// The effect table and the page's switches name each other: every effect's

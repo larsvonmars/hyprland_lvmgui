@@ -1,0 +1,15 @@
+[package]
+name = "hypr-osd-bluetooth"
+description = "The bluetooth manager for Hyprland: every paired and nearby device in one card, with connect, pair, forget, scan and the controller's own switches."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hypr-osd-bluetooth"
+path = "src/main.rs"
+
+[dependencies]
+hypr-osd-core.workspace = true
+gtk.workspace = true

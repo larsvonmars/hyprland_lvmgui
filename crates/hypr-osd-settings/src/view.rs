@@ -5,7 +5,7 @@
 //! which element has to be restarted for it to matter - is the element's business
 //! (`main.rs`). Nothing here knows what a config file is.
 //!
-//! Two things about the pane are deliberate:
+//! Three things about the pane are deliberate:
 //!
 //! * **It is one size, always.** The rows live in a fixed-height scroller, so
 //!   picking another element cannot change the card's height - a mapped layer
@@ -17,16 +17,26 @@
 //!   longest text in the window - are capped at the width the pane actually has
 //!   (`text::cap_width`, the same helper the tiles use). Without that, one long
 //!   help string would decide how wide the whole window comes out.
+//! * **A finger can work all of it.** The shell marks this window `touch` while
+//!   the machine is a tablet (see `hypr_osd_core::touch`), and `settings.css`
+//!   grows every control to a fingertip's size off that class. Every text field
+//!   hands itself to the on-screen keyboard, and every tap, scroll and drag is
+//!   reported to the element as *activity* - a finger never moves a pointer on
+//!   its way to a row, so a watchdog that only watched motion would close the
+//!   window while somebody was still reading it.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
+use std::sync::OnceLock;
 
+use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::keymap::Entry;
 use hypr_osd_core::settings::{Applies, Command, Kind, Section};
 use hypr_osd_core::text;
+use hypr_osd_core::touch;
 
 /// How large the sidebar's marks are drawn, and the mark inside a round button.
 const SECTION_ICON: i32 = 14;
@@ -52,11 +62,23 @@ pub const ENERGY_HINT: &str =
 /// The lock screen is the one page whose change is complete the moment the file
 /// is written: hyprlock reads its config at every lock, so nothing has to be
 /// restarted and nothing handed to the compositor.
-pub const LOCK_HINT: &str =
-    "esc closes \u{b7} a change rewrites the lock screen's variables at once \u{b7} \
-     hyprlock reads them at the next lock";
+pub const LOCK_HINT: &str = "esc closes \u{b7} a change rewrites the lock screen at once \u{b7} \
+     hyprlock reads it at the next lock";
+/// The wallpaper and the login screen are generated the same way, but each has a
+/// program that has to be told.
+pub const WALLPAPER_HINT: &str =
+    "esc closes \u{b7} a change rewrites hyprpaper's config and applies the picture at once \
+     \u{b7} splash and ipc need Restart";
+pub const LOGIN_HINT: &str =
+    "esc closes \u{b7} a change rewrites the theme and renders the background at once \
+     \u{b7} Install copies it into /usr/share/sddm, through sudo in a terminal";
 pub const SHORTCUTS_HINT: &str = "esc closes \u{b7} a list to read, not a page to change \u{b7} \
      the bound keys live in ~/.config/hypr/osd.lua";
+/// The touch page is the machine's, and every element reads its file once at
+/// start-up - so the footer says what the chip cannot do for one of them.
+pub const TOUCH_HINT: &str =
+    "esc closes \u{b7} the file is written at once \u{b7} restart the elements to make them \
+     read it (scripts/install.sh restarts the ones that are running)";
 
 /// The room a control keeps for itself, the room a reset button takes, and the
 /// room a row spends on its own padding, border and gap. The text column gets
@@ -86,6 +108,11 @@ const ROW_OVERHEAD: i32 = CONTROL_WIDTH + RESET_WIDTH + 74;
 /// own, so a long element title cannot widen the list either.
 const SECTION_OVERHEAD: i32 = 58;
 
+/// Set once a missing on-screen keyboard has been reported. The report is about
+/// the *machine*, not about one field, and a page can carry a dozen text rows:
+/// repeating the same sentence on stderr for each of them would bury it.
+static OSK_WARNED: OnceLock<()> = OnceLock::new();
+
 /// One entry in the sidebar: an element, and whether it is the one being shown.
 pub struct SectionRow {
     pub label: String,
@@ -110,10 +137,10 @@ pub enum PageAction {
     /// again. (A change is applied at once anyway - this is for after a
     /// hand-edited file.)
     Apply,
-    /// The lock screen's page: rewrite the variables `hyprlock.conf` is written in
-    /// terms of. (A change rewrites them anyway - this is for after a hand-edited
-    /// `theme.css`, which the generated file is cut from.)
-    Regenerate,
+    /// A page whose values are *generated* into another program's file - the lock
+    /// screen, the wallpaper and the login screen: write that file again. (A
+    /// change writes it anyway - this is for after a file edited by hand.)
+    Write,
     /// No chip: the settings window's own page, which cannot act on itself.
     None,
 }
@@ -185,6 +212,11 @@ type SectionHandler = Rc<dyn Fn(usize)>;
 type ChangeHandler = Rc<dyn Fn(&str, &str, Option<&str>)>;
 /// The id of one of a page's buttons (see [`Kind::Actions`]).
 type CommandHandler = Rc<dyn Fn(&str)>;
+/// A file chooser opening (`true`) or closing (`false`). The element takes the
+/// window away while one is up: the chooser is a normal window (through the
+/// portal), and this window is a layer surface on the overlay layer, so the card
+/// would otherwise sit on top of it.
+type PickHandler = Rc<dyn Fn(bool)>;
 type VoidHandler = Rc<dyn Fn()>;
 
 pub struct SettingsView {
@@ -199,8 +231,14 @@ pub struct SettingsView {
     pane: gtk::Box,
     pane_title: gtk::Label,
     pane_blurb: gtk::Label,
+    /// Which file the page writes, and how much of it is set - one quiet line under
+    /// the blurb, so a hand-edited key is never a mystery.
+    pane_file: gtk::Label,
     /// The rule under the card - the elements' one, or the compositor's.
     hint: gtk::Label,
+    /// What the last action did (a write, an apply, a restart, a refusal). Hidden
+    /// until there is something to say; red when the action failed.
+    status: gtk::Label,
     /// The page's own chip: "Restart" on an element's page, "Apply" on a
     /// Hyprland page, and hidden on the window's own (which cannot act on
     /// itself).
@@ -217,8 +255,9 @@ pub struct SettingsView {
     on_change: RefCell<Option<ChangeHandler>>,
     on_action: RefCell<Option<VoidHandler>>,
     on_command: RefCell<Option<CommandHandler>>,
+    on_pick: RefCell<Option<PickHandler>>,
     on_close: RefCell<Option<VoidHandler>>,
-    on_motion: RefCell<Option<VoidHandler>>,
+    on_activity: RefCell<Option<VoidHandler>>,
 }
 
 impl SettingsView {
@@ -280,9 +319,16 @@ impl SettingsView {
             text::cap_width(&pane_blurb, (pane_width - 24).max(120));
             pane_blurb.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
+            let pane_file = gtk::Label::new(None);
+            pane_file.add_css_class("pane-file");
+            pane_file.set_xalign(0.0);
+            text::cap_width(&pane_file, (pane_width - 24).max(120));
+            pane_file.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+
             let pane_head = gtk::Box::new(gtk::Orientation::Vertical, 1);
             pane_head.append(&pane_title);
             pane_head.append(&pane_blurb);
+            pane_head.append(&pane_file);
 
             let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 2);
             sidebar.add_css_class("sidebar");
@@ -296,6 +342,12 @@ impl SettingsView {
             let scroller = gtk::ScrolledWindow::new();
             scroller.add_css_class("pane-scroll");
             scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            // A finger scrolls by dragging the content; a flick has to keep going
+            // and settle, which is what kinetic scrolling is. It is GTK's default,
+            // but this is the pane a finger spends the most time in and the
+            // behaviour is the point rather than an accident of the toolkit - so
+            // it is asked for by name.
+            scroller.set_kinetic_scrolling(true);
             // The pane's width is the config's, not its content's: without this
             // the scroller reports the widest row as its own natural width and
             // the card grows past the number the user set (measured: 16px, which
@@ -317,6 +369,13 @@ impl SettingsView {
             text::cap_width(&hint, pane_width + sidebar_width - 24);
             hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
+            let status = gtk::Label::new(None);
+            status.add_css_class("settings-status");
+            status.set_xalign(0.0);
+            status.set_visible(false);
+            text::cap_width(&status, pane_width + sidebar_width - 24);
+            status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
             let body = gtk::Box::new(gtk::Orientation::Horizontal, BODY_GAP);
             body.append(&sidebar);
             body.append(&right);
@@ -337,6 +396,7 @@ impl SettingsView {
             root.append(&header);
             root.append(&separator);
             root.append(&body);
+            root.append(&status);
             root.append(&hint);
 
             SettingsView {
@@ -346,7 +406,9 @@ impl SettingsView {
                 pane,
                 pane_title,
                 pane_blurb,
+                pane_file,
                 hint,
+                status,
                 action,
                 text_width: (pane_width - ROW_OVERHEAD).max(120),
                 section_text_width: (sidebar_width - SECTION_OVERHEAD).max(60),
@@ -356,9 +418,10 @@ impl SettingsView {
                 on_section: RefCell::new(None),
                 on_change: RefCell::new(None),
                 on_action: RefCell::new(None),
+                on_pick: RefCell::new(None),
                 on_command: RefCell::new(None),
                 on_close: RefCell::new(None),
-                on_motion: RefCell::new(None),
+                on_activity: RefCell::new(None),
             }
         });
 
@@ -366,9 +429,31 @@ impl SettingsView {
         let motion = gtk::EventControllerMotion::new();
         {
             let view = view.clone();
-            motion.connect_motion(move |_, _, _| view.emit_motion());
+            motion.connect_motion(move |_, _, _| view.emit_activity());
         }
         view.root.add_controller(motion);
+
+        // A finger does not move a pointer: the tap that chooses a tab, the drag
+        // that flicks the pane and the scroll wheel are the only "somebody is
+        // still here" signals a touchscreen gives, and none of them is motion.
+        // The controller is the *legacy* one on purpose - it sees every event on
+        // its way down to whichever widget handles it without ever owning the
+        // sequence, so the pane keeps its own touch drag. A gesture here
+        // (`GtkGestureClick` is the obvious one) claims the touch before the
+        // scroller's drag gesture sees it, and a pane that cannot be flicked with
+        // a finger is exactly what this window must not be.
+        let activity = gtk::EventControllerLegacy::new();
+        activity.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let view = view.clone();
+            activity.connect_event(move |_, event| {
+                if is_activity(event.event_type()) {
+                    view.emit_activity();
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        view.root.add_controller(activity);
 
         view
     }
@@ -395,12 +480,45 @@ impl SettingsView {
         *self.on_command.borrow_mut() = Some(Rc::new(handler));
     }
 
+    /// The file chooser's two moments: `true` as it opens, `false` once it has
+    /// closed (whatever the answer was). The element hides the window in between.
+    pub fn on_pick(&self, handler: impl Fn(bool) + 'static) {
+        *self.on_pick.borrow_mut() = Some(Rc::new(handler));
+    }
+
     pub fn on_close(&self, handler: impl Fn() + 'static) {
         *self.on_close.borrow_mut() = Some(Rc::new(handler));
     }
 
-    pub fn on_motion(&self, handler: impl Fn() + 'static) {
-        *self.on_motion.borrow_mut() = Some(Rc::new(handler));
+    /// Run `handler` whenever the user does something in the window - a pointer
+    /// movement, a tap, a scroll or a drag. The element re-arms its idle-close
+    /// watchdog with it: a window someone is looking at must not take itself away.
+    pub fn on_activity(&self, handler: impl Fn() + 'static) {
+        *self.on_activity.borrow_mut() = Some(Rc::new(handler));
+    }
+
+    /// The quiet line under a page's blurb: which file it writes and how many keys
+    /// of it are set. It is a *path*, not a value - the rows carry the values.
+    pub fn set_file_note(&self, note: &str) {
+        self.pane_file.set_text(note);
+        self.pane_file.set_tooltip_text(Some(note));
+    }
+
+    /// What the last action did, shown above the hint. `None` hides the line; an
+    /// error wears the critical colour, so a refused write cannot pass for a
+    /// successful one.
+    pub fn set_status(&self, text: Option<&str>, error: bool) {
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            self.status.set_visible(false);
+            return;
+        };
+        self.status.set_text(text);
+        self.status.set_tooltip_text(Some(text));
+        self.status.remove_css_class("error");
+        if error {
+            self.status.add_css_class("error");
+        }
+        self.status.set_visible(true);
     }
 
     /// The tab row, rebuilt from the tabs - like the sidebar, so which one is lit
@@ -501,9 +619,12 @@ impl SettingsView {
             // Regenerating is the whole of it, and it has already happened by the
             // time the page is drawn.
             Applies::Lock => LOCK_HINT,
+            Applies::Wallpaper => WALLPAPER_HINT,
+            Applies::Login => LOGIN_HINT,
             // A page of keys is reference: nothing on it can be changed, so the
             // footer says where the bound half really lives instead.
             Applies::Shortcuts => SHORTCUTS_HINT,
+            Applies::Touch => TOUCH_HINT,
             // A display change is applied to the compositor at once, exactly like
             // an option: the footer says the same thing on both pages.
             Applies::Compositor | Applies::Displays => HYPRLAND_HINT,
@@ -735,6 +856,9 @@ impl SettingsView {
                 spinner.set_size_request(90, -1);
                 spinner.set_valign(gtk::Align::Center);
                 spinner.set_tooltip_text(Some(&field.help));
+                // A spinner is typed into (and stepped): on a tablet with no
+                // hardware keyboard it is one of the fields the OSK is for.
+                attach_osk(&spinner);
                 {
                     let (element, key) = (element.to_string(), field.key.clone());
                     let state = state.clone();
@@ -756,6 +880,7 @@ impl SettingsView {
                 spinner.set_size_request(90, -1);
                 spinner.set_valign(gtk::Align::Center);
                 spinner.set_tooltip_text(Some(&field.help));
+                attach_osk(&spinner);
                 {
                     let (element, key) = (element.to_string(), field.key.clone());
                     let state = state.clone();
@@ -770,6 +895,13 @@ impl SettingsView {
                 spinner.upcast()
             }
             Kind::Text => self.text_control(element, field, state),
+            // A path is a text field with a file chooser beside it; a path that may
+            // also be a directory (hyprpaper's slideshow) gets a second button.
+            Kind::Path => self.path_control(element, field, state, false),
+            Kind::PathFolder => self.path_control(element, field, state, true),
+            // A colour and a font are both a value with a chooser made for it.
+            Kind::Color => self.color_control(element, field, state),
+            Kind::Font => self.font_control(element, field, state),
             // A list to pick from - unless there is no list, which is what a
             // machine without xkeyboard-config answers with: then the row stays
             // the field it was, rather than an empty dropdown. A display list is
@@ -792,6 +924,12 @@ impl SettingsView {
     /// A line of text: the control for [`Kind::Text`], and the fallback for a
     /// list that could not be read.
     fn text_control(&self, element: &str, field: &Field, state: &gtk::Label) -> gtk::Widget {
+        let entry = self.text_entry(element, field, state);
+        entry.upcast()
+    }
+
+    /// The entry itself, so the path control can put a button beside it.
+    fn text_entry(&self, element: &str, field: &Field, state: &gtk::Label) -> gtk::Entry {
         let handler = self.on_change.borrow().clone();
         let entry = gtk::Entry::new();
         entry.add_css_class("setting-text");
@@ -799,6 +937,19 @@ impl SettingsView {
         entry.set_size_request(CONTROL_WIDTH, -1);
         entry.set_valign(gtk::Align::Center);
         entry.set_tooltip_text(Some(&field.help));
+        // Every way this window has of entering text comes through here: a Text
+        // row, a Path row, and the fallback a dropdown becomes when the machine
+        // has no list to pick from.
+        attach_osk(&entry);
+        // A Path row that is unset still *has* a picture in force (hyprpaper's own,
+        // the wallpaper the lock screen follows): show it greyed in the field, so
+        // the row is not an empty box with the answer only in the truncated state
+        // line.
+        if field.value.is_empty() && matches!(field.kind, Kind::Path | Kind::PathFolder) {
+            if let Some(current) = &field.current {
+                entry.set_placeholder_text(Some(current));
+            }
+        }
         // Typing into a field must not rewrite the file on every keystroke, so
         // the value is committed when the field is *finished* - Enter, or leaving
         // it.
@@ -825,7 +976,217 @@ impl SettingsView {
             focus.connect_leave(move |_| commit(entry_for_leave.text().as_str()));
             entry.add_controller(focus);
         }
-        entry.upcast()
+        entry
+    }
+
+    /// A path: the same entry as [`Kind::Text`], with a file button beside it that
+    /// opens a file chooser and fills the field in. [`Kind::PathFolder`] gets a
+    /// second button that picks a directory instead - which is what turns
+    /// hyprpaper's `path` into a slideshow.
+    ///
+    /// A path is the one setting nobody should have to type correctly, and it is
+    /// the only one a picker can know better than a text field - so it is a kind
+    /// of its own rather than a convention.
+    ///
+    /// `GtkFileDialog` is used with **no parent and with the card taken away**
+    /// (see [`SettingsView::on_pick`]): the dialog is a normal window - through the
+    /// portal - and this window is a layer surface on the *overlay* layer, so the
+    /// card would sit on top of the dialog. Hiding the card while it is up is what
+    /// makes the chooser visible, and the card comes back once it has closed.
+    fn path_control(
+        &self,
+        element: &str,
+        field: &Field,
+        state: &gtk::Label,
+        with_folder: bool,
+    ) -> gtk::Widget {
+        let handler = self.on_change.borrow().clone();
+        let on_pick = self.on_pick.borrow().clone();
+        let entry = self.text_entry(element, field, state);
+        let choose = icon_button(names::FILE, "Choose a file");
+
+        {
+            let handler = handler.clone();
+            let on_pick = on_pick.clone();
+            let element = element.to_string();
+            let key = field.key.clone();
+            let state = state.clone();
+            let entry = entry.clone();
+            choose.connect_clicked(move |_| {
+                if let Some(on_pick) = &on_pick {
+                    on_pick(true);
+                }
+
+                let dialog = gtk::FileDialog::new();
+                dialog.set_title("Choose a picture");
+                let filter = gtk::FileFilter::new();
+                filter.set_name(Some("Pictures"));
+                filter.add_mime_type("image/*");
+                let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+                filters.append(&filter);
+                dialog.set_filters(Some(&filters));
+                dialog.set_default_filter(Some(&filter));
+
+                let handler = handler.clone();
+                let on_pick = on_pick.clone();
+                let element = element.clone();
+                let key = key.clone();
+                let state = state.clone();
+                let entry = entry.clone();
+                // No parent: a layer surface cannot be one for the portal, and the
+                // dialog has to be a window in its own right.
+                dialog.open(
+                    None::<&gtk::Window>,
+                    None::<&gtk::gio::Cancellable>,
+                    move |result| {
+                        if let Ok(file) = result {
+                            if let Some(path) = file.path() {
+                                let text = path.to_string_lossy().into_owned();
+                                if let Some(handler) = &handler {
+                                    handler(&element, &key, Some(&text));
+                                }
+                                state.set_text(&state_text_of(&key, &text));
+                                entry.set_text(&text);
+                            }
+                        }
+                        if let Some(on_pick) = &on_pick {
+                            on_pick(false);
+                        }
+                    },
+                );
+            });
+        }
+
+        let folder_button = if with_folder {
+            let choose_folder = icon_button(names::FOLDER, "Choose a folder (slideshow)");
+            {
+                let handler = handler.clone();
+                let on_pick = on_pick.clone();
+                let element = element.to_string();
+                let key = field.key.clone();
+                let state = state.clone();
+                let entry = entry.clone();
+                choose_folder.connect_clicked(move |_| {
+                    if let Some(on_pick) = &on_pick {
+                        on_pick(true);
+                    }
+
+                    let dialog = gtk::FileDialog::new();
+                    dialog.set_title("Choose a wallpaper folder");
+
+                    let handler = handler.clone();
+                    let on_pick = on_pick.clone();
+                    let element = element.clone();
+                    let key = key.clone();
+                    let state = state.clone();
+                    let entry = entry.clone();
+                    dialog.select_folder(
+                        None::<&gtk::Window>,
+                        None::<&gtk::gio::Cancellable>,
+                        move |result| {
+                            if let Ok(folder) = result {
+                                if let Some(path) = folder.path() {
+                                    let text = path.to_string_lossy().into_owned();
+                                    if let Some(handler) = &handler {
+                                        handler(&element, &key, Some(&text));
+                                    }
+                                    state.set_text(&state_text_of(&key, &text));
+                                    entry.set_text(&text);
+                                }
+                            }
+                            if let Some(on_pick) = &on_pick {
+                                on_pick(false);
+                            }
+                        },
+                    );
+                });
+            }
+            Some(choose_folder)
+        } else {
+            None
+        };
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        row.add_css_class("path-control");
+        row.set_valign(gtk::Align::Center);
+        row.append(&entry);
+        row.append(&choose);
+        if let Some(choose_folder) = &folder_button {
+            row.append(choose_folder);
+        }
+        row.upcast()
+    }
+
+    /// A colour: a swatch that opens GTK's colour chooser.
+    ///
+    /// The value is written in the spelling every file here uses - `#rrggbb`, or
+    /// `#rrggbbaa` when the alpha is not opaque - so the file stays exactly what a
+    /// hand edit would have produced.
+    fn color_control(&self, element: &str, field: &Field, state: &gtk::Label) -> gtk::Widget {
+        let handler = self.on_change.borrow().clone();
+        let button = gtk::ColorDialogButton::new(Some(gtk::ColorDialog::new()));
+        button.add_css_class("setting-color");
+        button.set_valign(gtk::Align::Center);
+        button.set_size_request(96, -1);
+        button.set_tooltip_text(Some(&field.help));
+        // What is *in force*: the file's line, else the theme token the state
+        // line names as `now …`. A swatch showing the built-in default while the
+        // row says another colour is in force would be a contradiction on one row.
+        let shown = field.current.as_deref().unwrap_or(&field.value);
+        // A value the chooser cannot parse is black rather than a crash; the state
+        // line still says what the file holds.
+        button.set_rgba(
+            &gdk::RGBA::parse(shown).unwrap_or_else(|_| gdk::RGBA::new(0.0, 0.0, 0.0, 1.0)),
+        );
+        {
+            let (element, key) = (element.to_string(), field.key.clone());
+            let state = state.clone();
+            button.connect_rgba_notify(move |button| {
+                let text = rgba_hex(&button.rgba());
+                if let Some(handler) = &handler {
+                    handler(&element, &key, Some(&text));
+                }
+                state.set_text(&state_text_of(&key, &text));
+            });
+        }
+        button.upcast()
+    }
+
+    /// A font family: a button that opens GTK's font chooser. Only the family is
+    /// written - every screen here has its own size rows, and a picker that also
+    /// wrote `12` would fight them.
+    fn font_control(&self, element: &str, field: &Field, state: &gtk::Label) -> gtk::Widget {
+        let handler = self.on_change.borrow().clone();
+        let button = gtk::FontDialogButton::new(Some(gtk::FontDialog::new()));
+        button.add_css_class("setting-font");
+        button.set_valign(gtk::Align::Center);
+        button.set_tooltip_text(Some(&field.help));
+        // Family only: a description parsed from the value would also carry a size
+        // (and display it, `… Regular 0`), but every screen here has its own size
+        // rows - the family is the whole setting. The size below is only there so
+        // GTK can spell the description: a size-less one reads `… Regular 0`, and
+        // `font_desc().family()` is all that is ever written back.
+        let mut desc = gtk::pango::FontDescription::new();
+        desc.set_family(&field.value);
+        desc.set_size(13 * gtk::pango::SCALE);
+        button.set_font_desc(&desc);
+        {
+            let (element, key) = (element.to_string(), field.key.clone());
+            let state = state.clone();
+            button.connect_font_desc_notify(move |button| {
+                let Some(family) = button
+                    .font_desc()
+                    .and_then(|desc| desc.family().map(|family| family.to_string()))
+                else {
+                    return;
+                };
+                if let Some(handler) = &handler {
+                    handler(&element, &key, Some(&family));
+                }
+                state.set_text(&state_text_of(&key, &family));
+            });
+        }
+        button.upcast()
     }
 
     /// A dropdown: the control for a value that has to be one of a list of names.
@@ -921,17 +1282,86 @@ impl SettingsView {
         }
     }
 
-    fn emit_motion(&self) {
-        if let Some(handler) = self.on_motion.borrow().clone() {
+    fn emit_activity(&self) {
+        if let Some(handler) = self.on_activity.borrow().clone() {
             handler();
         }
     }
+}
+
+/// Whether a GDK event means the user is at the window rather than away from it.
+///
+/// Keys and pointer motion are already covered by their own controllers; what is
+/// listed here is everything a *finger* can do instead. `TouchUpdate` counts
+/// because a drag is somebody moving through the pane, not idleness - and it is
+/// the only event a touch drag produces after the first one.
+fn is_activity(event: gdk::EventType) -> bool {
+    matches!(
+        event,
+        gdk::EventType::ButtonPress
+            | gdk::EventType::TouchBegin
+            | gdk::EventType::TouchUpdate
+            | gdk::EventType::Scroll
+    )
+}
+
+/// Hand a text field to the on-screen keyboard, and say so (once) when there is
+/// no keyboard to hand it to.
+///
+/// [`touch::Osk::attach`] is wired to the *focus* rather than to a tap, because
+/// that is where the answer is true for every way a field gets typed into: a tap
+/// focuses it, a page built with it focused asks at once, and Escape or a tap
+/// elsewhere takes the focus away again. All of that is a no-op on a machine
+/// that is not a tablet and on one with a real keyboard attached - the hardware
+/// keyboard keeps the focus flow it always had.
+///
+/// The warning matters as much as the keyboard: a field that can be tapped and
+/// never typed into looks *broken* rather than unsupported, so the missing
+/// keyboard is named on stderr the first time such a field is focused on a
+/// tablet - the same way the volume element says `wpctl` is missing.
+fn attach_osk(field: &impl IsA<gtk::Widget>) {
+    let osk = touch::osk();
+    osk.attach(field);
+
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_enter(move |_| {
+        if OSK_WARNED.get().is_some() {
+            return;
+        }
+        if let Some(message) = touch::warn_missing(osk) {
+            eprintln!("hypr-osd-settings: {message}");
+            let _ = OSK_WARNED.set(());
+        }
+    });
+    field.add_controller(focus);
 }
 
 /// The state line under a setting's name: the key, and what it is worth *now*.
 pub fn state_text_of(key: &str, value: &str) -> String {
     let shown = if value.is_empty() { "(empty)" } else { value };
     format!("{key} = {shown}")
+}
+
+/// A colour as this collection writes one: `#rrggbb`, or `#rrggbbaa` when the
+/// alpha is not opaque. The chooser deals in `gdk::RGBA`; the files deal in hex.
+fn rgba_hex(color: &gdk::RGBA) -> String {
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if color.alpha() >= 0.999 {
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            channel(color.red()),
+            channel(color.green()),
+            channel(color.blue())
+        )
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            channel(color.red()),
+            channel(color.green()),
+            channel(color.blue()),
+            channel(color.alpha())
+        )
+    }
 }
 
 /// The state line for a field as it was read: an unset key shows its default and
@@ -992,11 +1422,10 @@ fn set_chip(chip: &gtk::Button, action: PageAction) {
             "Write the generated config and hand it to Hyprland again - a change is \
              applied as you make it, so this is for re-applying a file edited by hand",
         ),
-        PageAction::Regenerate => (
-            "Re-apply",
-            "Write the lock screen's generated variables again, from theme.css and \
-             lock.conf - a change is written as you make it, so this is for after \
-             retinting the theme by hand",
+        PageAction::Write => (
+            "Write",
+            "Write this page's generated file again - a change is written as you make \
+             it, so this is for after editing a file by hand",
         ),
         PageAction::None => {
             chip.set_visible(false);
@@ -1149,5 +1578,35 @@ mod tests {
         // An empty value is shown as such rather than as nothing at all: a key
         // that is set to nothing is not a key that is absent.
         assert_eq!(state_text_of("output", ""), "output = (empty)");
+    }
+
+    /// The colour chooser deals in `gdk::RGBA`, the files in hex - and an opaque
+    /// colour is six digits, exactly as every file here writes it.
+    #[test]
+    fn a_colour_is_written_the_way_the_files_spell_it() {
+        assert_eq!(rgba_hex(&gdk::RGBA::new(1.0, 0.0, 0.0, 1.0)), "#ff0000");
+        assert_eq!(rgba_hex(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.5)), "#00000080");
+        // A value the chooser cannot parse still writes something valid rather
+        // than an empty string.
+        assert_eq!(rgba_hex(&gdk::RGBA::new(0.0, 0.0, 0.0, 1.0)), "#000000");
+    }
+
+    /// A window watched only for pointer motion would close itself under a
+    /// finger: a touchscreen has no hover, and a tap or a drag is the only way it
+    /// can say "somebody is still here". Keys and motion have their own
+    /// controllers, so this is the rest of it.
+    #[test]
+    fn a_tap_or_a_scroll_is_activity() {
+        assert!(is_activity(gdk::EventType::ButtonPress));
+        assert!(is_activity(gdk::EventType::TouchBegin));
+        assert!(is_activity(gdk::EventType::TouchUpdate));
+        assert!(is_activity(gdk::EventType::Scroll));
+        // Motion is counted by its own controller (and is not double-armed from
+        // here), and a pointer merely entering the surface - or the keyboard
+        // focus moving, which the key handler already follows - is not the user.
+        assert!(!is_activity(gdk::EventType::MotionNotify));
+        assert!(!is_activity(gdk::EventType::EnterNotify));
+        assert!(!is_activity(gdk::EventType::FocusChange));
+        assert!(!is_activity(gdk::EventType::TouchEnd));
     }
 }

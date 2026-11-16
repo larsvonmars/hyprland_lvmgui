@@ -59,12 +59,37 @@ pub fn focus_window(address: &str) -> bool {
 /// config's workspace binds use); a name goes through as a string
 /// (`{ workspace = "special:magic" }`).
 pub fn focus_workspace(name: &str) -> bool {
-    let target = match name.parse::<i32>() {
-        Ok(id) => id.to_string(),
-        Err(_) => format!("\"{name}\""),
-    };
-    dispatch(&format!("hl.dsp.focus({{ workspace = {target} }})"))
+    dispatch(&format!("hl.dsp.focus({{ workspace = {} }})", target(name)))
         || dispatch(&format!("workspace {name}"))
+}
+
+/// Move one window to one workspace and **stay on the one you are on**.
+///
+/// The `follow` flag is the whole difference between what a key press means and
+/// what a drop means: `window.move` on its own also switches the focused monitor
+/// to the target, which is right for `SUPER + SHIFT + 3` and wrong for a window
+/// dragged onto a workspace chip - that is a statement about where the window
+/// belongs, not about where the person does.
+///
+/// The window is named by address, because the dispatcher would otherwise move
+/// *the focused* window, which is a different window from the one that was
+/// dragged.
+pub fn move_window(address: &str, workspace: &str) -> bool {
+    dispatch(&format!(
+        "hl.dsp.window.move({{ workspace = {}, window = \"address:{address}\", follow = false }})",
+        target(workspace)
+    )) || dispatch(&format!(
+        "movetoworkspacesilent {workspace},address:{address}"
+    ))
+}
+
+/// A workspace as a dispatcher wants it: a number for a numbered workspace, a
+/// quoted string for a name (`special:magic`, `code`).
+fn target(workspace: &str) -> String {
+    match workspace.parse::<i32>() {
+        Ok(id) => id.to_string(),
+        Err(_) => format!("\"{workspace}\""),
+    }
 }
 
 /// One of Hyprland's own options, as it stands *now*: the value it is using, and
@@ -217,5 +242,17 @@ mod tests {
             parse_option(&answer(r#"{"option":"nonsense","set":false}"#)),
             None
         );
+    }
+
+    #[test]
+    fn a_workspace_is_spelled_the_way_the_dispatcher_wants_it() {
+        // A numbered workspace is a number - a Hyprland configured in Lua reads
+        // `"3"` as an addressable name and `3` as an id, and would create a
+        // workspace called `3` in the wrong spelling.
+        assert_eq!(target("3"), "3");
+        assert_eq!(target("12"), "12");
+        // Everything else is a quoted string, special workspaces included.
+        assert_eq!(target("special:magic"), "\"special:magic\"");
+        assert_eq!(target("code"), "\"code\"");
     }
 }

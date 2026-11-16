@@ -20,6 +20,11 @@
 //! What it does: renders each item's icon (its pixmap if it sent one, otherwise
 //! an icon-theme lookup by name), and passes clicks on - `Activate` for a left
 //! click, `SecondaryActivate` for a middle one, `ContextMenu` for a right one.
+//! A touchscreen has no right button and no hover, so the context menu is also
+//! what a *long press* sends (`touch::on_secondary`, the same binding the rest of
+//! the bar uses); the icons themselves are drawn larger while the machine is a
+//! tablet, and the whole row moves with the bar when a surface is rebuilt rather
+//! than being given away with it (see [`Tray::rehost`]).
 //!
 //! What it deliberately does not do: draw the item's *menu*. The
 //! StatusNotifierItem protocol points at a second protocol
@@ -37,6 +42,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use hypr_osd_core::icons;
+use hypr_osd_core::touch;
 
 /// The service every item registers with. One per session - ours, since the bar
 /// is the only tray host on this desktop.
@@ -92,6 +98,11 @@ const CALL_TIMEOUT_MS: i32 = 500;
 /// itself: dropping it neither gives the name back nor takes the registration
 /// (and the closures, and the widgets in them) down with it.
 pub struct Tray {
+    /// The host's half, shared with the callbacks below: the container the
+    /// buttons are in, the size they are drawn at, and the items themselves. It
+    /// outlives any one bar because a rebuild moves the buttons to the new row
+    /// (see [`Tray::rehost`]).
+    state: Rc<RefCell<State>>,
     watcher: RefCell<Option<gio::OwnerId>>,
     host: RefCell<Option<gio::OwnerId>>,
 }
@@ -151,8 +162,42 @@ impl Tray {
         let host = own(&format!("{HOST_PREFIX}-{}", std::process::id()), |_| {}, "");
 
         Tray {
+            state: state.clone(),
             watcher: RefCell::new(Some(watcher)),
             host: RefCell::new(Some(host)),
+        }
+    }
+
+    /// Move the indicators into another bar's row, drawing them at `icon_size`.
+    ///
+    /// The tray is one session-wide D-Bus object with one set of buttons, so a
+    /// surface being rebuilt (a fold makes every bar taller) or a screen being
+    /// unplugged cannot be answered by building a new host: an indicator
+    /// registers with the watcher once, when it starts, so the names must stay
+    /// ours and only the *widgets* move. The buttons are re-parented into the new
+    /// container - GTK allows a widget exactly one parent, which is why they have
+    /// to be taken out of the old one first.
+    pub fn rehost(&self, container: &gtk::Box, icon_size: i32) {
+        let mut redraw: Vec<String> = Vec::new();
+        {
+            let mut state = self.state.borrow_mut();
+            for item in &state.items {
+                if let Some(parent) = item.button.parent() {
+                    if let Some(row) = parent.downcast_ref::<gtk::Box>() {
+                        row.remove(&item.button);
+                    } else {
+                        item.button.unparent();
+                    }
+                }
+                container.append(&item.button);
+                redraw.push(item.registered.clone());
+            }
+            state.container = container.clone();
+            state.icon_size = icon_size;
+        }
+        // Redrawn outside the borrow: `refresh_item` reads the same state.
+        for registered in redraw {
+            refresh_item(&self.state, &registered);
         }
     }
 
@@ -379,23 +424,33 @@ fn attach_item(state: &Rc<RefCell<State>>, registered: &str, proxy: gio::DBusPro
     state.borrow().container.append(&button);
 
     // Clicks are *passed on* rather than acted on: the item decides what its own
-    // icon means. Buttons 1 and 2 ask for the primary and secondary action,
-    // button 3 asks the item to show its menu wherever it likes.
+    // icon means. Button 1 asks for the primary action, the middle button the
+    // secondary one, and button 3 asks the item to show its menu wherever it
+    // likes. A finger has neither a right button nor a middle one: the context
+    // menu keeps its button-3 binding *and* gains a long press, which is the same
+    // gesture everywhere else in the bar (see `touch::on_secondary`). A middle
+    // click stays mouse-only - it is the one gesture the bar borrows for a third
+    // action, and a long press is already the menu's.
     {
         let proxy = proxy.clone();
         let registered = registered.clone();
-        button.connect_clicked(move |_| call(&proxy, &registered, "Activate"));
+        // `touch::on_click` rather than `clicked`: the long press bound below is
+        // the finger's context menu, and a release that followed it must not also
+        // activate the item (see `touch::on_click`).
+        touch::on_click(&button, move |_| call(&proxy, &registered, "Activate"));
     }
-    for (button_number, method) in [
-        (gdk::BUTTON_MIDDLE, "SecondaryActivate"),
-        (gdk::BUTTON_SECONDARY, "ContextMenu"),
-    ] {
+    {
         let gesture = gtk::GestureClick::new();
-        gesture.set_button(button_number);
+        gesture.set_button(gdk::BUTTON_MIDDLE);
         let proxy = proxy.clone();
         let registered = registered.clone();
-        gesture.connect_pressed(move |_, _, _, _| call(&proxy, &registered, method));
+        gesture.connect_pressed(move |_, _, _, _| call(&proxy, &registered, "SecondaryActivate"));
         button.add_controller(gesture);
+    }
+    {
+        let proxy = proxy.clone();
+        let registered = registered.clone();
+        touch::on_secondary(&button, move || call(&proxy, &registered, "ContextMenu"));
     }
 
     // An item redraws itself by changing its properties or by announcing one of

@@ -78,3 +78,34 @@ scale.volume.muted > trough > slider {
     background-color: @fg_dim;
     box-shadow: none;
 }
+
+/* ---- touch: a fingertip instead of a pointer ------------------------------ */
+/* The shell adds `window.osd.touch` while the machine is a tablet (see
+ * core::touch). The pointer scale is a 14px thumb on a 4px trough - two targets
+ * that fit under a mouse cursor and not under a fingertip - so on a tablet the
+ * trough triples and the thumb doubles; the whole scale gets the 44px of room a
+ * drag needs so the finger never has to aim at the line itself. The card grows
+ * with it, and the tap catcher's hole is measured *after* this applies, so the
+ * dim never covers the card. */
+window.osd.touch scale.volume {
+    min-height: 44px;
+}
+
+window.osd.touch scale.volume > trough {
+    min-height: 12px;
+}
+
+window.osd.touch scale.volume > trough > slider {
+    min-width: 28px;
+    min-height: 28px;
+    /* 28px thumb on a 12px trough: (28 - 12) / 2 */
+    margin: -8px;
+}
+
+window.osd.touch image.speaker {
+    min-width: 26px;
+}
+
+window.osd.touch label.value {
+    font-size: 15px;
+}

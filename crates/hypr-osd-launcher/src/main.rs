@@ -16,6 +16,11 @@
 //! ```text
 //!   toggle               open the card, or close it again (what SUPER+SPACE runs)
 //!   show [query]         open it, with an empty query or the one given
+//!   tap [connector]      open it from a *finger* (a system gesture rather than a
+//!                        key): pinned, with a tap catcher around the card; a
+//!                        second tap, or a tap outside it, closes it. `open` is
+//!                        accepted as an alias, because a gesture that opens the
+//!                        launcher is the same request under either name.
 //!   hide | close         take it away
 //!   refresh              re-scan the installed applications
 //!   search <query>       print the ranked results, without drawing a card
@@ -24,7 +29,7 @@
 //!   (no verb)            start the daemon and wait for the first key press
 //! ```
 //!
-//! Two things are worth knowing about how it behaves, because both are
+//! Three things are worth knowing about how it behaves, because all are
 //! deliberately not like the window it replaces:
 //!
 //! * **It takes the keyboard while it is up.** A layer-shell surface that wants
@@ -34,6 +39,14 @@
 //!   cannot take the keyboard back), so it ends the way the other keyboard cards
 //!   do: Escape, the key again, or - if you walked away - `idle_close_ms` after
 //!   a minute of no keys and no pointer movement.
+//! * **On a tablet the field gets the on-screen keyboard, and the card a way
+//!   out.** The field is focused when the card opens, which is what raises the
+//!   daemon keyboard the bar starts when the machine folds (`touch::osk()`, and
+//!   `attach` is the whole wiring); with none installed the card says so once on
+//!   stderr. There is no Escape key on a touchscreen and no pointer to leave the
+//!   card with either, so a card opened by a finger gets a **tap catcher**
+//!   (`Osd::tap_catcher`) - a dimmed surface with a hole over the card, where a
+//!   tap anywhere else closes it.
 //! * **The file search runs on a thread.** The application half is already in
 //!   memory and answers the keystroke; the file half is a filesystem walk, so it
 //!   is debounced, run off the main loop, and its answer is only accepted if it
@@ -53,7 +66,8 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::{
-    css, hardware, icons, run, text, Config, Content, Keyboard, Opts, Osd, Placement,
+    css, hardware, icons, monitors, run, text, touch, Config, Content, Hole, Keyboard, Opts, Osd,
+    Placement, CARD_PAD_X, CARD_PAD_Y,
 };
 
 use files::FileEntry;
@@ -78,6 +92,16 @@ const DEFAULT_IDLE_CLOSE_MS: u64 = 60_000;
 const DEFAULT_DEBOUNCE_MS: u64 = 120;
 /// How often the main loop looks for an answer from a file-search thread.
 const POLL_MS: u64 = 25;
+
+/// How often a tap-opened card re-measures itself for the tap catcher.
+///
+/// A timer rather than a frame callback: the catcher is asked for from the
+/// command that opened the card, which can run before the card's window has a
+/// frame clock - and a tick scheduled then is never called at all (measured on
+/// the applications panel: the catcher simply never appeared). A timer runs on
+/// the main loop whatever the surface is doing, and sixty milliseconds is fast
+/// enough that the catcher is around the card by the time the finger has lifted.
+const HOLE_POLL: Duration = Duration::from_millis(60);
 
 /// What the config file resolved to.
 struct Settings {
@@ -160,6 +184,14 @@ struct Launcher {
     /// Icon lookups, so a keystroke does not ask the icon theme for the same
     /// eight pictures again.
     icon_cache: RefCell<HashMap<String, Option<gdk::Paintable>>>,
+    /// Whether this card was opened by a *finger* (`tap`, or any open while the
+    /// machine is a tablet) - the flag the tap catcher and its hole follow.
+    tap_opened: Cell<bool>,
+    /// Whether a frame callback is currently keeping the catcher around the card.
+    watching_hole: Cell<bool>,
+    /// The hole the catcher was last given, so a frame that finds the card where
+    /// it already was does not touch the shell.
+    last_hole: Cell<Option<Hole>>,
 }
 
 impl Launcher {
@@ -182,6 +214,9 @@ impl Launcher {
             debounce: Rc::new(Timer::new()),
             idle: Rc::new(Timer::new()),
             icon_cache: RefCell::new(HashMap::new()),
+            tap_opened: Cell::new(false),
+            watching_hole: Cell::new(false),
+            last_hole: Cell::new(None),
         })
     }
 
@@ -217,6 +252,87 @@ impl Launcher {
         // refuse focus until it has been allocated.
         let view = self.view.clone();
         glib::timeout_add_local_once(Duration::ZERO, move || view.focus_entry());
+        // A tablet is typed into by the on-screen keyboard; what raises it is
+        // the focus above, which the field's `Osk::attach` (installed at build)
+        // turns into a text-input request. Saying so once beats a focused field
+        // that cannot be typed into.
+        if touch::tablet() {
+            warn_missing_osk();
+            // There is no Escape key on a touchscreen: a card opened while the
+            // machine is a tablet leaves the tap catcher as its way out.
+            self.arm_catcher();
+        }
+    }
+
+    /// A finger opened the card - a system gesture rather than a key.
+    ///
+    /// The same card, opened the same way, with the one difference a fingertip
+    /// needs: a **tap catcher** around it, because the gesture that opened it is
+    /// not the gesture that can close it (there is no Escape key and no pointer
+    /// to leave the card with). A second tap on whatever opened it closes it
+    /// again, and so does a tap anywhere outside the card.
+    ///
+    /// `connector` is which screen the gesture happened on, when it can say:
+    /// the card is centred on the focused output otherwise, and pinning it to
+    /// the named one keeps it where the finger was rather than where a pointer
+    /// last was.
+    fn tap(self: &Rc<Self>, connector: Option<&str>) {
+        if self.osd.is_visible() {
+            self.close();
+            return;
+        }
+        if let Some(connector) = connector {
+            self.osd.pin_output(Some(connector));
+        }
+        self.open(None);
+        // `open` arms the catcher for a tablet; a tap is a finger whatever the
+        // switch says (a pen on a laptop-mode screen), so this is explicit and
+        // idempotent.
+        self.arm_catcher();
+    }
+
+    /// Leave a way out of the card: the tap catcher around its measured
+    /// rectangle.
+    fn arm_catcher(self: &Rc<Self>) {
+        self.tap_opened.set(true);
+        self.watch_hole();
+    }
+
+    /// Keep the tap catcher's hole around the card while it is open.
+    ///
+    /// A frame callback rather than one measurement, because the card has no
+    /// size until a frame after it is shown, and the `touch` class can resize it
+    /// when the machine folds. Comparing the hole with the last one placed means
+    /// the shell is left alone until the card has really moved.
+    fn watch_hole(self: &Rc<Self>) {
+        if self.watching_hole.replace(true) {
+            return;
+        }
+        self.last_hole.set(None);
+        let me = Rc::clone(self);
+        glib::timeout_add_local(HOLE_POLL, move || {
+            if !me.tap_opened.get() || !me.osd.is_visible() {
+                me.watching_hole.set(false);
+                me.last_hole.set(None);
+                return glib::ControlFlow::Break;
+            }
+            let Some(hole) = catcher_hole(&me.osd, &me.view.root) else {
+                return glib::ControlFlow::Continue;
+            };
+            if me.last_hole.get() != Some(hole) {
+                me.last_hole.set(Some(hole));
+                let close = Rc::clone(&me);
+                me.osd.tap_catcher(Some(hole), move || close.close());
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// Stop watching the card's rectangle and take the catcher away.
+    fn clear_catcher(self: &Rc<Self>) {
+        self.tap_opened.set(false);
+        self.last_hole.set(None);
+        self.osd.tap_catcher(None, || {});
     }
 
     fn close(self: &Rc<Self>) {
@@ -225,6 +341,10 @@ impl Launcher {
         self.idle.cancel();
         self.debounce.cancel();
         self.next_seq();
+        // A card cannot be gone while its tap catcher still dims the screen;
+        // `Osd::hide` takes the catcher down as a backstop, and this keeps the
+        // flags in step with what is on screen.
+        self.clear_catcher();
         self.osd.hide();
     }
 
@@ -507,12 +627,14 @@ impl Launcher {
             "closed"
         };
         format!(
-            "apps {apps}\nfiles {files}\nstate {state}\nwidth {} max_results {} idle_close_ms {}",
+            "apps {apps}\nfiles {files}\nstate {state}\nwidth {} max_results {} idle_close_ms {}\n\
+             measured: {}",
             self.settings.width,
             self.settings.max_results,
             self.settings
                 .idle_close
                 .map_or(0, |duration| duration.as_millis()),
+            self.view.measured(),
         )
     }
 
@@ -663,6 +785,83 @@ fn open_path(path: &str) {
     }
 }
 
+/// The card's rectangle on its monitor - the hole the tap catcher leaves open.
+///
+/// The card is centred (`Placement::Center`), so its rectangle follows from its
+/// own measured size and the monitor's: the transparent shadow frame the shell
+/// keeps around it cancels out of the centring, which leaves the visible card
+/// exactly in the middle. Measured, not planned, because the `touch` class and
+/// the result list's height both decide the card's height at run time.
+fn catcher_hole(osd: &Osd, root: &gtk::Box) -> Option<Hole> {
+    let (width, height) = (root.width(), root.height());
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let (monitor_width, monitor_height) = monitor_size(osd)?;
+    Some(centre_hole(
+        (width + 2 * CARD_PAD_X, height + 2 * CARD_PAD_Y),
+        (monitor_width, monitor_height),
+    ))
+}
+
+/// The arithmetic of [`catcher_hole`], split out so the rectangle can be tested
+/// without a display: a card of `card` centred on a monitor of `monitor`.
+fn centre_hole(card: (i32, i32), monitor: (i32, i32)) -> Hole {
+    Hole {
+        x: (monitor.0 - card.0) / 2,
+        y: (monitor.1 - card.1) / 2,
+        width: card.0,
+        height: card.1,
+    }
+}
+
+/// The logical size of the monitor the card is on.
+///
+/// Asked of GDK rather than of the compositor: the card is a layer surface on
+/// that monitor, and the hole has to be in the same coordinates the catcher
+/// surface is laid out in - which is the monitor's own, starting at its corner.
+/// GDK's geometry is already in the logical pixels this is all measured in.
+fn monitor_size(osd: &Osd) -> Option<(i32, i32)> {
+    let monitor = osd
+        .monitor()
+        .as_deref()
+        .and_then(monitors::find)
+        .or_else(monitors::first)?;
+    let geometry = monitor.geometry();
+    Some((geometry.width(), geometry.height()))
+}
+
+/// The connector a `tap`/`open` named, if it named one: a gesture that knows
+/// which screen it happened on sends it first, and the numbers of a bar-style
+/// rectangle may follow (the launcher is centred, so a rectangle means nothing
+/// here - it is accepted so the verb's shape matches the other panels').
+fn parse_connector(args: &[String]) -> Option<String> {
+    let number_start = args.iter().position(|arg| arg.parse::<f64>().is_ok());
+    match number_start {
+        Some(index) => index
+            .checked_sub(1)
+            .and_then(|index| args.get(index))
+            .cloned(),
+        None => args.first().filter(|arg| !arg.is_empty()).cloned(),
+    }
+}
+
+/// Say once, on stderr, that this tablet is being typed into with no on-screen
+/// keyboard installed.
+///
+/// The card still focuses the field and still takes the keyboard - there is
+/// just nothing that can put a character in it, and a user tapping keys on a
+/// screen that ignores them deserves better than silence. Once per process: the
+/// card opens many times, and the same complaint on every open would be noise.
+fn warn_missing_osk() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        if let Some(message) = touch::warn_missing(touch::osk()) {
+            eprintln!("hypr-osd-launcher: {message}");
+        }
+    });
+}
+
 fn main() -> glib::ExitCode {
     let config = Config::load(ELEMENT);
     let settings = Rc::new(Settings::load(&config));
@@ -719,12 +918,23 @@ fn main() -> glib::ExitCode {
                 let launcher = launcher.clone();
                 move |index| launcher.activate(index)
             });
-            // Moving the pointer over the card is looking at it, and looking at
-            // it is not being idle.
-            view.on_motion({
+            // Moving the pointer over the card is looking at it, a tap on it is
+            // using it and a scroll is reading it: none of those is being idle
+            // (see `view::LauncherView::on_activity`). Without this the card
+            // would close itself after `idle_close_ms` while a finger is still
+            // moving through the results.
+            view.on_activity({
                 let launcher = launcher.clone();
                 move || launcher.arm_idle()
             });
+
+            // The search field is the one thing here that is typed into: a
+            // focused field is what raises the on-screen keyboard on a tablet
+            // (the daemon is started and stopped by the bar, see `core::touch`),
+            // and the attach is what makes the focus do it.
+            if touch::usable() {
+                touch::osk().attach(&view.entry);
+            }
 
             install_keys(osd, launcher.clone());
             let root = view.root.clone().upcast::<gtk::Widget>();
@@ -748,6 +958,10 @@ fn main() -> glib::ExitCode {
                 match verb {
                     "toggle" => launcher.toggle(),
                     "show" => launcher.open(args.get(1).map(String::as_str)),
+                    // A finger opened it: the card gets a tap catcher as its way
+                    // out (see [`Launcher::tap`]). `open` is the same request
+                    // under the name the other panels use for a system gesture.
+                    "tap" | "open" => launcher.tap(parse_connector(&args[1..]).as_deref()),
                     "hide" | "close" => launcher.close(),
                     "refresh" => launcher.refresh(),
                     "status" => return Ok(launcher.status_lines()),
@@ -758,8 +972,8 @@ fn main() -> glib::ExitCode {
                     }
                     other => {
                         return Err(format!(
-                            "unknown verb `{other}` (toggle | show | hide | refresh | \
-                             search <query> | apps | status)"
+                            "unknown verb `{other}` (toggle | show [query] | tap [connector] | \
+                             hide | refresh | search <query> | apps | status)"
                         ))
                     }
                 }
@@ -932,5 +1146,42 @@ mod tests {
         let home = std::env::var("HOME").unwrap();
         assert_eq!(shorten_home(&format!("{home}/Documents")), "~/Documents");
         assert_eq!(shorten_home("/usr/share"), "/usr/share");
+    }
+
+    /// The tap catcher leaves the *card* open, and the card is centred: its hole
+    /// is the measured card in the middle of the monitor. Getting this wrong
+    /// leaves half the card dimmed by its own catcher or a strip of screen
+    /// beside it that swallows taps.
+    #[test]
+    fn the_catcher_hole_is_the_card_in_the_middle_of_the_monitor() {
+        // This machine's screen, 2736x1824 at scale 2, and a 640px card.
+        assert_eq!(
+            centre_hole((640 + 2 * 16, 300 + 2 * 13), (1368, 912)),
+            Hole {
+                x: (1368 - 672) / 2,
+                y: (912 - 326) / 2,
+                width: 672,
+                height: 326,
+            }
+        );
+    }
+
+    /// A gesture that knows its screen sends the connector first; the numbers of
+    /// a bar-style rectangle may follow and mean nothing here (the card is
+    /// centred). Both shapes have to be accepted, because both reach this binary.
+    #[test]
+    fn a_tap_names_a_connector_with_or_without_a_rectangle() {
+        let words = |args: &[&str]| args.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_connector(&words(&["eDP-1"])).as_deref(),
+            Some("eDP-1")
+        );
+        assert_eq!(
+            parse_connector(&words(&["eDP-1", "0", "5", "44", "28"])).as_deref(),
+            Some("eDP-1")
+        );
+        // A hand-typed rectangle without a connector says nothing about screens.
+        assert_eq!(parse_connector(&words(&["0", "5", "44", "28"])), None);
+        assert_eq!(parse_connector(&[]), None);
     }
 }

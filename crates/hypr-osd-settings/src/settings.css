@@ -154,6 +154,13 @@ label.pane-blurb {
     color: @fg_dim;
 }
 
+/* The file the page writes, under its blurb. Quiet: it is an address, not a
+ * value - the rows carry those. */
+label.pane-file {
+    font-size: 10px;
+    color: @fg_faint;
+}
+
 /* ---- a group of rows: the Display page's outputs -------------------------- */
 /* A heading is not a setting - it carries no control - so it wears no card of its
  * own: it is the quiet bar over the run of rows that belong to one output, and
@@ -326,6 +333,23 @@ popover.arrange-pop button.arrange-pop-primary:hover {
 popover.arrange-pop button.arrange-pop-primary:disabled {
     color: @accent;
     border-color: @border_soft;
+}
+
+/* The picture at the top of the Wallpaper and Login screen pages. The rounding
+ * is on the picture itself, and `set_overflow(Hidden)` is what clips the texture
+ * to it. */
+picture.preview {
+    border-radius: 10px;
+    background-color: @surface;
+}
+
+box.preview-box {
+    margin-bottom: 4px;
+}
+
+label.preview-caption {
+    font-size: 11px;
+    color: @fg_dim;
 }
 
 /* ---- one setting: its name, its help, its control ------------------------ */
@@ -576,4 +600,244 @@ label.choice-name {
 label.hint {
     font-size: 10px;
     color: @fg_faint;
+}
+
+/* What the last action did: a write, an apply, a restart or a refusal. It sits
+ * above the hint, and only exists once there is something to say. */
+label.settings-status {
+    font-size: 11px;
+    color: @fg_dim;
+}
+
+label.settings-status.error {
+    color: @crit;
+}
+
+/* The colour and font choosers: a button each, holding the swatch or the family
+ * name. The width is pinned by the control, not by the longest font name. */
+button.setting-color,
+button.setting-font {
+    min-width: 0;
+}
+
+button.setting-color {
+    padding: 2px;
+    min-height: 22px;
+    border-radius: 8px;
+}
+
+/* ---- touch: a fingertip instead of a pointer ----------------------------- */
+/* The shell adds `touch` to this window's own layer-shell surface while the
+ * machine is being used as a tablet (see `hypr_osd_core::touch`), so the shared
+ * rules in `base.css` already grow the chips, the tiles and the scrollbar
+ * knobs. This window is none of those: its tabs, rows, switches, spinners and
+ * pickers are its own shapes, every one drawn for a pointer - a 3px tab
+ * padding, a 34px row, an 8px spinner arrow, a 9px size line. The rules below
+ * are the same controls at a fingertip's size, scoped to the class so a session
+ * with the Type Cover attached keeps the compact layout it always had.
+ *
+ * The card is still a 760px-wide window on this machine's 1368x912 logical
+ * screen: the rows are taller but no wider (the 44px icon buttons are inside
+ * the pane's 524px, and the widest row - a path with its reset and its two
+ * pickers - still leaves a ~180px text column), and the sidebar's twelve
+ * fingertip rows are what the body grows by vertically - under 800px of card in
+ * all on the 912px screen, which is the number to check if a page is ever
+ * added to the sidebar. */
+
+window.osd.touch label.popup-title {
+    font-size: 13px;
+}
+
+/* A tab is a place the window goes: a 12px word with 3px of padding around it,
+ * which a fingertip cannot reliably land on. */
+window.osd.touch button.tab {
+    min-height: 40px;
+    padding: 8px 14px;
+    border-radius: 10px;
+}
+
+window.osd.touch label.tab-name {
+    font-size: 13px;
+}
+
+/* The sidebar is the list of pages, one row per element. Twelve rows at a
+ * ~46px fingertip each still leave the card under 800px tall on this machine's
+ * 912px logical screen - the pane beside them is what fixes the body's height,
+ * and the list has no scroller of its own to fall back on. */
+window.osd.touch box.sidebar {
+    padding: 4px;
+}
+
+window.osd.touch button.section {
+    min-height: 30px;
+    padding: 7px 10px;
+    border-radius: 10px;
+}
+
+window.osd.touch label.section-name {
+    font-size: 13px;
+}
+
+/* One setting: its name, the line that says what it is worth, and the control
+ * that edits it. 44px is the shared fingertip target - `touch::TARGET` in the
+ * crate, which the arrangement canvas uses for the same reason. */
+window.osd.touch box.setting-row {
+    min-height: 44px;
+    padding: 10px 12px;
+    border-radius: 12px;
+}
+
+window.osd.touch label.setting-label {
+    font-size: 14px;
+}
+
+/* The key and its value are a footnote in the pointer layout. Here they are the
+ * line that says what a control will write, so they have to be readable at
+ * arm's length - as do the page's own blurb and file line. */
+window.osd.touch label.setting-help,
+window.osd.touch label.pane-blurb,
+window.osd.touch label.pane-file,
+window.osd.touch label.monitor-detail,
+window.osd.touch label.settings-status,
+window.osd.touch label.preview-caption {
+    font-size: 12px;
+}
+
+/* The footer and the two arrangement hints are the window's lines of
+ * instructions: a 10px caption is not something a finger can read. */
+window.osd.touch label.hint,
+window.osd.touch label.arrange-hint,
+window.osd.touch label.arrange-size {
+    font-size: 11px;
+}
+
+window.osd.touch label.arrange-name {
+    font-size: 12px;
+}
+
+/* The heading over a run of rows (`eDP-1`): the one word that says which screen
+ * the rows belong to, so it stays a heading while the rows under it grow. */
+window.osd.touch label.monitor-name {
+    font-size: 13px;
+}
+
+/* A keycap is read like a key, not like a footnote. It carries no control, so
+ * only its legibility changes. */
+window.osd.touch label.keycap {
+    font-size: 12px;
+    padding: 3px 8px;
+}
+
+/* A GTK switch in this theme is a 40-odd-pixel pill with a 14px knob: a finger
+ * has to be able to hit it without looking for the middle. The row around it
+ * grows by its padding, and the knob grows with the trough so the switch still
+ * reads as a switch. */
+window.osd.touch switch {
+    min-width: 68px;
+    min-height: 44px;
+}
+
+window.osd.touch switch > slider {
+    min-width: 32px;
+    min-height: 32px;
+    margin: -2px;
+}
+
+/* A spinner is typed into *and* stepped: its two arrow buttons are 8px wide
+ * with 2px of padding in the pointer layout, which is not a target at all. They
+ * become 40px squares; the field keeps the text column it had, so the spinner
+ * grows into the row's spare width rather than past it. */
+window.osd.touch spinbutton {
+    min-height: 40px;
+    border-radius: 10px;
+}
+
+window.osd.touch spinbutton text {
+    font-size: 14px;
+    padding: 6px 8px;
+}
+
+window.osd.touch spinbutton button {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 4px;
+}
+
+window.osd.touch entry.setting-text {
+    min-height: 40px;
+    padding: 6px 8px;
+    border-radius: 10px;
+}
+
+window.osd.touch entry.setting-text text {
+    font-size: 14px;
+}
+
+/* The dropdown: a 3px-padded button with a small arrow. It becomes a 40px
+ * capsule, and its popup's rows the same 44px target as the window's own. */
+window.osd.touch dropdown.setting-choice > button {
+    min-height: 40px;
+    padding: 6px 10px;
+    border-radius: 10px;
+}
+
+window.osd.touch label.choice-name {
+    font-size: 13px;
+}
+
+window.osd.touch dropdown.setting-choice popover row {
+    min-height: 44px;
+    padding: 0 8px;
+}
+
+/* The colour swatch and the font chooser hold a colour or a family name: 22px
+ * of chip in the pointer layout, a full control height here. */
+window.osd.touch button.setting-color,
+window.osd.touch button.setting-font {
+    min-height: 40px;
+    border-radius: 10px;
+}
+
+window.osd.touch button.setting-color {
+    padding: 4px;
+}
+
+/* The close, the reset and the file/folder pickers are one 12px drawing with a
+ * few pixels of padding - the only controls here that are not a row's height.
+ * They become 44px squares (a fingertip's target); a row that carries one grows
+ * around it, which is why the pane still fits: the reset plus a path's two
+ * pickers is 132px of the pane's 524, not more than the control column. */
+window.osd.touch button.iconbtn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border-radius: 10px;
+}
+
+/* The per-output editor hung off a screen box: a popover of compact rows, with
+ * a primary button that is the same fingertip target as everything else. */
+window.osd.touch popover.arrange-pop > contents {
+    padding: 10px 12px;
+}
+
+window.osd.touch popover.arrange-pop label {
+    font-size: 12px;
+}
+
+window.osd.touch popover.arrange-pop button.arrange-pop-primary {
+    min-height: 40px;
+    padding: 8px 12px;
+    border-radius: 10px;
+}
+
+/* The pane's scrollbar is its other way to scroll, and 8px of thumb is not one
+ * a finger can grab. The transparent border and the matching negative margin
+ * are restated from the pointer rule above: the visible thumb grows to 12px
+ * without the scrollbar widening the card. */
+window.osd.touch scrolledwindow.pane-scroll scrollbar slider {
+    border: 8px solid transparent;
+    border-radius: 99px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: -8px;
 }

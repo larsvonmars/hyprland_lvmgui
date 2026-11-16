@@ -75,13 +75,28 @@ pub fn plan(windows: &[Window], area: Area, limits: Limits) -> Plan {
             rows: Vec::new(),
         };
     }
-    (limits.tile_min..=limits.tile_max)
-        .rev()
-        .map(|tile_height| at(windows, tile_height, area, limits))
-        .find(|candidate| fits(candidate, area, limits.gap))
-        // Nothing fits: keep the smallest tile and let it overflow. A card that
-        // shows too much is still readable; one that shows nothing is not.
-        .unwrap_or_else(|| at(windows, limits.tile_min, area, limits))
+    // The search is a *bisection* rather than a walk down from the largest tile:
+    // a smaller tile is a narrower one (the shape comes from the window), so
+    // fewer or the same tiles fit per row and the block is shorter - "does it
+    // fit" is monotone in the height, and the largest height that fits can be
+    // found in eight steps instead of two hundred. That is the whole cost of
+    // opening the card, and it happens on a key press.
+    let mut low = limits.tile_min;
+    let mut high = limits.tile_max;
+    let mut best: Option<Plan> = None;
+    while low <= high {
+        let height = low + (high - low) / 2;
+        let candidate = at(windows, height, area, limits);
+        if fits(&candidate, area, limits.gap) {
+            best = Some(candidate);
+            low = height + 1;
+        } else {
+            high = height - 1;
+        }
+    }
+    // Nothing fits: keep the smallest tile and let it overflow. A card that
+    // shows too much is still readable; one that shows nothing is not.
+    best.unwrap_or_else(|| at(windows, limits.tile_min, area, limits))
 }
 
 /// Every window laid out as if the tile height were `tile_height`.
@@ -141,6 +156,55 @@ fn fits(plan: &Plan, area: Area, gap: i32) -> bool {
     let rows = plan.rows.len() as i32;
     let needed = rows * plan.tile_height + (rows - 1).max(0) * gap;
     needed <= area.height
+}
+
+/// A rectangle on the card, in whatever widget's coordinates the caller is
+/// working in - what a dragged tile is compared against.
+///
+/// GTK's own `graphene::Rect` would do except that it is not `Eq` and cannot be
+/// built in a test without a display; a dropped window is a decision worth
+/// testing, so the numbers are plain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
+}
+
+impl Span {
+    /// A span from GTK's floating-point answer, in thousandths of a pixel - the
+    /// rounding of a widget position is not something a hit test should be made
+    /// to care about.
+    pub fn from_rect(x: f64, y: f64, width: f64, height: f64) -> Self {
+        let round = |value: f64| (value * 1000.0).round() as i64;
+        Span {
+            x: round(x),
+            y: round(y),
+            width: round(width).max(0),
+            height: round(height).max(0),
+        }
+    }
+
+    /// Whether `point` is inside - the edges count as inside, because a drop on
+    /// the very edge of a chip is a drop on that chip.
+    pub fn holds(&self, point: (f64, f64)) -> bool {
+        let (x, y) = (
+            (point.0 * 1000.0).round() as i64,
+            (point.1 * 1000.0).round() as i64,
+        );
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+/// Which of `spans` holds `point`, as an index.
+///
+/// The *last* one wins, so a caller can hand them over in the order the card
+/// draws them and let the thing in front be the answer - a tile that overlaps
+/// the strip (it cannot today, but a plan is free to change) would be the one a
+/// drop lands on.
+pub fn under(point: (f64, f64), spans: &[Span]) -> Option<usize> {
+    spans.iter().rposition(|span| span.holds(point))
 }
 
 /// Put the windows in the order the card draws them.
@@ -303,5 +367,76 @@ mod tests {
         order(&mut windows, "1");
         assert_eq!(windows[0].workspace, "2");
         assert_eq!(windows[1].workspace, "special:magic");
+    }
+
+    /// The bisection must answer what walking the heights down from the largest
+    /// would have answered - it is only faster, not different.
+    #[test]
+    fn the_solved_height_is_the_largest_one_that_fits() {
+        let shapes = [
+            (1324, 820),
+            (820, 1324),
+            (800, 600),
+            (1600, 400),
+            (400, 900),
+        ];
+        // From one window up: an empty card answers with the smallest tile by
+        // design, which is not a search at all.
+        for count in 1..=13 {
+            for (index, shape) in shapes.iter().enumerate() {
+                let windows: Vec<Window> = (0..count)
+                    .map(|position| {
+                        window(
+                            "1",
+                            if position % 2 == index % 2 {
+                                *shape
+                            } else {
+                                (900, 700)
+                            },
+                        )
+                    })
+                    .collect();
+                for room in [(1200, 700), (1200, 520), (700, 900), (2400, 1400)] {
+                    let area = area(room.0, room.1);
+                    let plan = plan(&windows, area, LIMITS);
+                    let expected = (LIMITS.tile_min..=LIMITS.tile_max)
+                        .rev()
+                        .find(|height| fits(&at(&windows, *height, area, LIMITS), area, LIMITS.gap))
+                        .map(|height| at(&windows, height, area, LIMITS))
+                        .unwrap_or_else(|| at(&windows, LIMITS.tile_min, area, LIMITS));
+                    assert_eq!(plan, expected, "{count} windows of {shape:?} in {room:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_drop_is_answered_by_the_thing_under_the_pointer() {
+        let chips = [
+            Span::from_rect(0.0, 0.0, 60.0, 32.0),
+            Span::from_rect(68.0, 0.0, 60.0, 32.0),
+        ];
+        assert_eq!(under((10.0, 10.0), &chips), Some(0));
+        assert_eq!(under((70.0, 10.0), &chips), Some(1));
+        // The gap between two chips belongs to neither...
+        assert_eq!(under((64.0, 10.0), &chips), None);
+        // ...and neither does the air beside them.
+        assert_eq!(under((200.0, 10.0), &chips), None);
+        // An edge counts as inside: a drop that lands exactly on the border of a
+        // chip is a drop on that chip.
+        assert_eq!(under((68.0, 0.0), &chips), Some(1));
+        assert_eq!(under((128.0, 32.0), &chips), Some(1));
+    }
+
+    #[test]
+    fn the_last_span_wins_where_two_overlap() {
+        // Targets arrive in drawing order, so the thing in front is the answer.
+        let spans = [
+            Span::from_rect(0.0, 0.0, 100.0, 100.0),
+            Span::from_rect(50.0, 50.0, 100.0, 100.0),
+        ];
+        assert_eq!(under((25.0, 25.0), &spans), Some(0));
+        assert_eq!(under((75.0, 75.0), &spans), Some(1));
+        assert_eq!(under((150.0, 20.0), &spans), None);
     }
 }

@@ -8,24 +8,32 @@
 //!  │  SYSTEM                [15 updates] [wifi off] [bluetooth on]      │
 //!  │ ─────────────────────────────────────────────────────────────────── │
 //!  │ ┌─ resources ────────────────────┐ ┌─ controls ───────────────────┐ │
-//!  │ │  ⌗ CPU       ▤ MEM     ▒ TEMP  │ │ ⌁ NETWORK   home-wifi   ◉ ◉  │ │
-//!  │ │    11%         63%       52°C  │ │ ♪ SOUND          42%    ◉ ◉  │ │
-//!  │ │    ▬▬▬▬        ▬▬▬▬      ▬▬▬▬  │ │ ──────────────────────────── │ │
-//!  │ │                        [btop]  │ │ ⚡ POWER     [saver|bal|perf] │ │
-//!  │ └────────────────────────────────┘ │ ▷ PRESENTATION         [off] │ │
-//!  │ ┌─ bluetooth ────────────────────┐ │ ☀ BRIGHTNESS  ▬▬▬▬▬▬▬▬  100% │ │
-//!  │ │           [⌕ Scan] [❯ btctl]   │ │ ⌨ LAYOUT                  DE │ │
-//!  │ │ On · 1 connected          ◉ ◉  │ └──────────────────────────────┘ │
-//!  │ │ ▍◆ WH-1000XM4  ▂▄▆  82%   [⧗]  │ ┌─ updates ────────────────────┐ │
-//!  │ │ ▍⌨ K380        ▂▄  [⧉]  [✕]   │ │ 15 packages waiting          │ │
-//!  │ │ ▍○ MX Master   ▂▄        [+]   │ │ base, linux, firefox [Install]│ │
-//!  │ └────────────────────────────────┘ └──────────────────────────────┘ │
+//!  │ │  ⌗ CPU       ▤ MEM     ▒ TEMP  │ │ ♪ SOUND          42%    ◉ ◉  │ │
+//!  │ │    11%         63%       52°C  │ │ ──────────────────────────── │ │
+//!  │ │    ▬▬▬▬        ▬▬▬▬      ▬▬▬▬  │ │ ⚡ POWER     [saver|bal|perf] │ │
+//!  │ │                        [btop]  │ │ ▷ PRESENTATION         [off] │ │
+//!  │ └────────────────────────────────┘ │ ☀ BRIGHTNESS  ▬▬▬▬▬▬▬▬  100% │ │
+//!  │ ┌─ network ──────────────────────┐ │ ⌨ LAYOUT                  DE │ │
+//!  │ │           [⌕ Scan] [❯ nmtui]   │ └──────────────────────────────┘ │
+//!  │ │ Connected · home-wifi     ◉    │ ┌─ updates ────────────────────┐ │
+//!  │ │ ▍◆ wlan@home-5G  ▂▄▆█  [⧉] [✕] │ │ 15 packages waiting          │ │
+//!  │ │ ▍⊘ PHSG          ▂▄▆█  [⧉] [✕] │ │ base, linux, firefox [Install]│ │
+//!  │ │ ▍○ Wlan@home     ▂▄▆·  [⧉]     │ └──────────────────────────────┘ │
+//!  │ └────────────────────────────────┘                                  │ │
+//!  │ ┌─ bluetooth ────────────────────┐                                  │ │
+//!  │ │           [⌕ Scan] [❯ btctl]   │                                  │ │
+//!  │ │ On · 1 connected          ◉ ◉  │                                  │ │
+//!  │ │ ▍◆ WH-1000XM4  ▂▄▆  82%   [⧗]  │                                  │ │
+//!  │ │ ▍⌨ K380        ▂▄  [⧉]  [✕]   │                                  │ │
+//!  │ │ ▍○ MX Master   ▂▄        [+]   │                                  │ │
+//!  │ └────────────────────────────────┘                                  │ │
 //!  └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! Two columns: the machine's *load* on the left (three gauges, then the
-//! bluetooth radios with the devices they know), the machine's *controls* on the
-//! right, with the pending updates under them.
+//! Two columns: the machine's *load* on the left (three gauges, then the two
+//! radios - the wireless link with the networks it can hear, and bluetooth with
+//! the devices it knows), the machine's *controls* on the right, with the pending
+//! updates under them.
 //!
 //! The controls are a table, and the table *is* the design: a mark and a name on
 //! the left, then whatever that setting is (a reading, a switch, a slider)
@@ -37,14 +45,22 @@
 //! slider - take the rest of their row. A hairline divides the pair you *use*
 //! from the four you *set*.
 //!
-//! The bluetooth tile is built the same way, one floor down: its *heading*
-//! carries the tile's two tools ([Scan] and [bluetoothctl], where the resources
-//! and updates tiles keep btop and Install), the controller's own row is a
-//! reading plus two switches, and the device rows are a list with a fixed slot at
-//! the end for their buttons - which is what lines the link meters and the
-//! battery pills up from row to row. Because the readings sit against that slot
-//! and the buttons at the tile's right edge, a device's tail is a column like any
-//! other.
+//! The two radio tiles are built the same way, one above the other: each is a
+//! *heading* that carries the tile's two tools ([Scan] and the tool that manages
+//! the rest of it - [nmtui], [bluetoothctl] - where the resources and updates
+//! tiles keep btop and Install), then the controller's own row (a reading plus
+//! its switches), then a list with a fixed slot at the end for its rows' buttons,
+//! which is what lines the link meters, the batteries and the actions up from row
+//! to row. Because the readings sit against that slot and the buttons at the
+//! tile's right edge, a row's tail is a column like any other.
+//!
+//! The two lists say the same kind of thing about different radios, so they are
+//! the same shape on purpose: a network row is a badge (a lock on one that will
+//! ask for a password), the network's name, what it is doing, its signal, and the
+//! one button that follows from that - join, leave, or (for a network nobody has
+//! joined before, where the password has to be typed somewhere) a terminal. A
+//! stored profile that is not connected also gets the forget button, because
+//! "managing" a connection is mostly letting go of one.
 //!
 //! Everything here is *direct*: the bluetooth controller has a power switch and
 //! a visibility switch, each device row carries the one action that makes sense
@@ -76,7 +92,7 @@ use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::state;
 use hypr_osd_core::system::{Reading, TEMP_CRIT, TEMP_WARN};
 
-use crate::sources::{self, Bluetooth, Device, DeviceAction, Inhibitor};
+use crate::sources::{self, Bluetooth, Device, DeviceAction, Inhibitor, Wifi, WifiAction};
 use crate::Settings;
 
 /// The four partial blocks a device's link-quality meter fills from the left:
@@ -120,6 +136,14 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(8);
 /// it), because a smaller number is only a floor and the box grows past it.
 const DEVICE_ACTIONS: i32 = 64;
 
+/// How many characters of an SSID a network row shows before it ellipsises.
+///
+/// Less than a device name's 22, because an SSID is up to 32 bytes: it is the
+/// row that would otherwise decide the width of *both* radio tiles, and with it
+/// the card's - which is what the hover zone is derived from. The whole name is
+/// still in the row's tooltip.
+const WIFI_NAME_CHARS: i32 = 18;
+
 /// What a pairing attempt may hold its row's button for.
 ///
 /// Pairing is not one command but a conversation - pair, trust, connect - and
@@ -127,6 +151,14 @@ const DEVICE_ACTIONS: i32 = 64;
 /// so this is that with room for the rest. It is only the backstop: the chain
 /// itself says when it is over, and that answer (`pair_result`) is much sooner.
 const PAIR_PATIENCE: Duration = Duration::from_secs(45);
+
+/// What joining or leaving a network may hold its row's button for.
+///
+/// Longer than a bluetooth action because there is a DHCP handshake in it: a
+/// join that has to be given an address takes a handful of seconds, and a
+/// spinner that gave up in the middle of one would look like a button that did
+/// nothing.
+const WIFI_PATIENCE: Duration = Duration::from_secs(20);
 
 /// How long the note under the device list stays up. Long enough to be read,
 /// short enough that it is gone before it turns into furniture.
@@ -138,6 +170,15 @@ fn patience(action: DeviceAction) -> Duration {
     match action {
         DeviceAction::Pair => PAIR_PATIENCE,
         _ => ACTION_TIMEOUT,
+    }
+}
+
+/// The same question for a network's row. Forgetting is a local change to a
+/// profile and answers on its own; joining takes a lease.
+fn wifi_patience(action: WifiAction) -> Duration {
+    match action {
+        WifiAction::Connect | WifiAction::Disconnect => WIFI_PATIENCE,
+        WifiAction::Join | WifiAction::Forget => ACTION_TIMEOUT,
     }
 }
 
@@ -154,6 +195,9 @@ struct Last {
     /// rows are rebuilt from when something else changes (a click, the scan
     /// ending) without waiting for the next read.
     devices: Vec<Device>,
+    /// The networks of the last read, in the order they were listed - the same
+    /// role for the wireless tile.
+    wifi: Vec<Wifi>,
     /// Whether a scan is running, which the Scan button and the header chip say.
     scanning: bool,
     /// Whether the wireless radio is on at all - not the same thing as being
@@ -174,6 +218,13 @@ struct Pending {
     /// When to stop believing in it, whatever happened: a spinner that turns
     /// for the rest of the session is worse than a button that admits nothing
     /// happened.
+    until: Instant,
+}
+
+/// The same for a network's row, keyed by the SSID the row is drawn for.
+struct WifiPending {
+    ssid: String,
+    action: WifiAction,
     until: Instant,
 }
 
@@ -211,8 +262,21 @@ pub struct StatsView {
     /// It clears itself again after a few seconds.
     device_note: gtk::Label,
     scan: gtk::Button,
+    /// The wireless link's state, and the switch for the radio behind it.
     network_state: gtk::Label,
     radio_toggle: gtk::Button,
+    /// The network tile's Scan chip, kept so it can stop taking clicks while
+    /// there is no radio to scan with.
+    wifi_scan: gtk::Button,
+    /// Where the network rows are built. Rebuilt wholesale on every read, for
+    /// the same reason as the device list: the list is what came and went.
+    wifi_list: gtk::Box,
+    /// What that list says when it has nothing to list ("Wifi is off", the
+    /// dashed "no networks in reach" box), the hidden-row count, and the one
+    /// line about something that just happened.
+    wifi_hint: gtk::Label,
+    wifi_more: gtk::Label,
+    wifi_note: gtk::Label,
     sound_state: gtk::Label,
     mute_toggle: gtk::Button,
     /// The power profile as one button per profile, in [`sources::PROFILES`]
@@ -226,6 +290,8 @@ pub struct StatsView {
     inhibitor: RefCell<Inhibitor>,
     /// The device whose button is waiting for an answer, if any.
     pending: RefCell<Option<Pending>>,
+    /// The network row whose button is waiting for an answer, if any.
+    wifi_pending: RefCell<Option<WifiPending>>,
     /// Set while the brightness slider is being moved *by the program*: a
     /// `set_value` during a refresh is indistinguishable from a drag at the
     /// signal, and would write the backlight back to where it already is.
@@ -234,6 +300,9 @@ pub struct StatsView {
     /// the same number when it asks for the devices, so no details are read for
     /// rows that will not be drawn.
     max_devices: usize,
+    /// The same, for the networks in reach: a wifi list can be long, and the tile
+    /// is a panel rather than a window.
+    max_networks: usize,
     /// What to run shortly after an action, so the row shows the new state
     /// rather than the old one until the next heartbeat. `main` installs it.
     on_refresh: RefCell<Option<Rc<dyn Fn()>>>,
@@ -241,6 +310,15 @@ pub struct StatsView {
     /// process with a lifetime, and the element - not the view - is what keeps
     /// the clock that notices it ending.
     on_scan: RefCell<Option<Rc<dyn Fn()>>>,
+    /// What the network tile's Scan chip runs: a read that asks the card for a
+    /// fresh scan (see `sources::refresh_wifi`'s `rescan`).
+    on_wifi_scan: RefCell<Option<Rc<dyn Fn()>>>,
+    /// The terminal the buttons that need a TTY open (btop, nmtui,
+    /// bluetoothctl, pacman - and a join that has to be given a password).
+    terminal: String,
+    /// The wireless interface, for the one action that names a device rather
+    /// than a profile: letting go of the link.
+    interface: String,
     /// This view, weakly: the buttons are wired after it exists, and every one
     /// of them needs to reach back into it (see `wire`).
     me: Weak<StatsView>,
@@ -300,6 +378,73 @@ impl StatsView {
         resources_head.append(&stretch());
         resources_head.append(&btop);
 
+        // ---- network: the wireless link, and the networks in reach ----------
+        // The twin of the bluetooth tile below it, and deliberately the same
+        // shape: the same kinds of heading tool, the same controller row, the
+        // same list with a fixed slot at its rows' end - because "join this one"
+        // and "connect that one" are the same question about two radios.
+        let (network_tile, network_head) = tile("network", names::WIFI);
+
+        // The tile's two tools, in its heading where the other tiles keep
+        // theirs. Scan asks for a *fresh* scan (a plain re-read trusts
+        // NetworkManager's cache - see `sources::refresh_wifi`), and nmtui is
+        // the honest escape hatch for everything this tile does not do: a
+        // hidden network, an enterprise login, a static address.
+        let wifi_scan = glyph_chip(names::SEARCH, "Scan", || {});
+        wifi_scan.set_tooltip_text(Some("Ask the wireless card for a fresh scan"));
+        let network_open = glyph_chip(names::TERMINAL, "nmtui", {
+            let terminal = settings.terminal_command.clone();
+            move || sources::spawn(&terminal, &["-e", "nmtui"])
+        });
+        network_open.set_tooltip_text(Some("Everything else about the link, in a terminal"));
+        network_head.append(&stretch());
+        network_head.append(&wifi_scan);
+        network_head.append(&network_open);
+
+        // The controller's own row: the link's state on the left, the radio's
+        // switch in the same box every row of the bluetooth tile ends with - so
+        // a switch here is the same shape, at the same edge, as the one below.
+        // One switch only: a wireless card has nothing else to switch.
+        let network_state = gtk::Label::new(Some("Not connected"));
+        network_state.add_css_class("value");
+        network_state.set_xalign(0.0);
+        network_state.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        network_state.set_max_width_chars(22);
+        let radio_toggle = icon_button(names::WIFI_OFF, "Turn the wifi radio on");
+        let network_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        network_row.add_css_class("radio-state");
+        network_row.append(&network_state);
+        network_row.append(&stretch());
+        let network_actions = actions();
+        network_actions.append(&radio_toggle);
+        network_row.append(&network_actions);
+        network_tile.append(&network_row);
+
+        // The list, its hint, its count and its note: the device list's
+        // four-part shape (see below), because they are the same list of the
+        // same kind of thing.
+        let wifi_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        wifi_list.add_css_class("dev-list");
+        let wifi_hint = gtk::Label::new(None);
+        wifi_hint.add_css_class("dev-hint");
+        wifi_hint.set_xalign(0.5);
+        wifi_hint.set_visible(false);
+        let wifi_more = gtk::Label::new(None);
+        wifi_more.add_css_class("dev-more");
+        wifi_more.set_xalign(0.0);
+        wifi_more.set_visible(false);
+        // A join that did not take is the one thing a row cannot say by itself:
+        // it goes back to offering Connect with nothing to show for the click.
+        let wifi_note = gtk::Label::new(None);
+        wifi_note.add_css_class("dev-note");
+        wifi_note.set_xalign(0.0);
+        wifi_note.set_wrap(true);
+        wifi_note.set_visible(false);
+        network_tile.append(&wifi_list);
+        network_tile.append(&wifi_hint);
+        network_tile.append(&wifi_more);
+        network_tile.append(&wifi_note);
+
         // ---- bluetooth: the controller, and the devices it knows ------------
         // A tile of its own, because it is the one control with *content*: the
         // state of the radio, the visibility of the controller, and then a row
@@ -344,7 +489,7 @@ impl StatsView {
         );
         let bluetooth_power = icon_button(names::POWER, "Turn bluetooth on");
         let bluetooth_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        bluetooth_row.add_css_class("bt-state");
+        bluetooth_row.add_css_class("radio-state");
         bluetooth_row.append(&bluetooth_state);
         bluetooth_row.append(&stretch());
         let bluetooth_actions = actions();
@@ -400,6 +545,7 @@ impl StatsView {
         left.add_css_class("column");
         left.set_size_request(settings.left_width, -1);
         left.append(&resources);
+        left.append(&network_tile);
         left.append(&bluetooth_tile);
 
         // ---- controls: one row per setting -------------------------------
@@ -408,27 +554,9 @@ impl StatsView {
         // row, the same shape all the way down.
         let (controls, _) = tile("controls", names::CONTROLS);
 
-        // NETWORK: the access point as the reading, and the two things you can
-        // do about it as the row's own controls - the tool that manages the
-        // link, and the radio itself. The pill's wifi toggle lives here now
-        // that the pill is one handle.
-        let network_state = gtk::Label::new(Some("Not connected"));
-        network_state.add_css_class("value");
-        network_state.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        network_state.set_max_width_chars(16);
-        let (network_row, network_actions) = control_row(names::WIFI, "NETWORK", &network_state);
-        let network_open = icon_button(names::TERMINAL, "nmtui - manage the wireless link");
-        {
-            let terminal = settings.terminal_command.clone();
-            network_open.connect_clicked(move |_| sources::spawn(&terminal, &["-e", "nmtui"]));
-        }
-        // A switch shows the state it is *in* - the whole wifi mark while the
-        // radio is on, the struck-through one while it is not - and the tooltip
-        // says which way a click would take it.
-        let radio_toggle = icon_button(names::WIFI_OFF, "Turn the wifi radio on");
-        network_actions.append(&network_open);
-        network_actions.append(&radio_toggle);
-        controls.append(&network_row);
+        // (The wireless link is not a row here any more: it is a tile of its
+        // own in the column beside this one, because the networks in reach need
+        // more room than a row can give them - see the network tile above.)
 
         // SOUND: the sink's level as the reading, the mixer and the mute as the
         // controls. The volume *step* belongs to the volume element; what is
@@ -443,9 +571,9 @@ impl StatsView {
         sound_actions.append(&mute_toggle);
         controls.append(&sound_row);
 
-        // The link and the sound are the pair you *use*; the four under them
-        // are the settings you *set*. A hairline is all the separation that
-        // needs - the rows themselves are already the same shape.
+        // The sound is the one you *use*; the four under it are the settings you
+        // *set*. A hairline is all the separation that needs - the rows
+        // themselves are already the same shape.
         controls.append(&hairline());
 
         // POWER: one button per profile, the lit one being the profile in force.
@@ -515,6 +643,10 @@ impl StatsView {
         right.set_size_request(settings.right_width, -1);
         right.append(&controls);
         right.append(&updates);
+        // The right column is the shorter of the two now that the left carries
+        // both radios, so its tail takes the leftover height and the two columns
+        // end on the same line - the same reason the bluetooth tile has it.
+        updates.set_vexpand(true);
 
         // ---- the panel ------------------------------------------------------
         // The little capsule in the corner: the same grip every drawer in this
@@ -560,6 +692,11 @@ impl StatsView {
             scan,
             network_state,
             radio_toggle,
+            wifi_scan,
+            wifi_list,
+            wifi_hint,
+            wifi_more,
+            wifi_note,
             sound_state,
             mute_toggle,
             profile: profile.try_into().expect("three profiles"),
@@ -570,10 +707,15 @@ impl StatsView {
             last: RefCell::new(Last::default()),
             inhibitor: RefCell::new(Inhibitor::default()),
             pending: RefCell::new(None),
+            wifi_pending: RefCell::new(None),
             scale_guard: Cell::new(true),
             max_devices: settings.max_devices,
+            max_networks: settings.max_networks,
             on_refresh: RefCell::new(None),
             on_scan: RefCell::new(None),
+            on_wifi_scan: RefCell::new(None),
+            terminal: settings.terminal_command.clone(),
+            interface: settings.interface.clone(),
             me: me.clone(),
         });
 
@@ -599,6 +741,12 @@ impl StatsView {
     /// notices it ending.
     pub fn on_scan(&self, hook: Rc<dyn Fn()>) {
         *self.on_scan.borrow_mut() = Some(hook);
+    }
+
+    /// Install what the network tile's Scan chip runs: a fresh scan, then the
+    /// list again - `main` owns the read, so only `main` can do either.
+    pub fn on_wifi_scan(&self, hook: Rc<dyn Fn()>) {
+        *self.on_wifi_scan.borrow_mut() = Some(hook);
     }
 
     /// Ask for a re-read soon - the daemon behind a button (bluetooth,
@@ -635,6 +783,16 @@ impl StatsView {
         connect_chip(&self.radio_toggle, self.me(), move |view| {
             sources::set_radio(!view.last.borrow().radio);
             view.refresh_soon(600);
+        });
+
+        connect_chip(&self.wifi_scan, self.me(), move |view| {
+            // Cloned out of the cell first, for the same reason the bluetooth
+            // Scan button does it: the hook re-reads and repaints the panel, and
+            // that is exactly the kind of re-entry a live borrow panics on.
+            let hook = view.on_wifi_scan.borrow().clone();
+            if let Some(hook) = hook {
+                hook();
+            }
         });
 
         connect_chip(&self.mute_toggle, self.me(), move |view| {
@@ -1102,19 +1260,23 @@ impl StatsView {
             // The panel pairs with a `NoInputNoOutput` agent, so the usual reason
             // is a device that will not pair without a passkey - which only the
             // interactive `bluetoothctl` can ask for.
-            self.note("Could not pair - the device may want a passkey (try bluetoothctl)");
+            self.note(
+                &self.device_note,
+                "Could not pair - the device may want a passkey (try bluetoothctl)",
+            );
         }
         self.rebuild_devices();
         self.refresh_soon(200);
     }
 
-    /// Show the one-line note under the device list, and take it away again by
-    /// itself: it reports something that just happened, not a state.
-    fn note(&self, text: &str) {
-        self.device_note.set_text(text);
-        self.device_note.set_visible(true);
-        let note = self.device_note.clone();
-        glib::timeout_add_local_once(NOTE_TIME, move || note.set_visible(false));
+    /// Show the one-line note under a list, and take it away again by itself: it
+    /// reports something that just happened, not a state. Both radio tiles have
+    /// one, so the label is the caller's to name.
+    fn note(&self, label: &gtk::Label, text: &str) {
+        label.set_text(text);
+        label.set_visible(true);
+        let label = label.clone();
+        glib::timeout_add_local_once(NOTE_TIME, move || label.set_visible(false));
     }
 
     /// Whether this device's row is waiting for an answer.
@@ -1153,6 +1315,281 @@ impl StatsView {
         }
     }
 
+    // ---- the wireless tile ----------------------------------------------
+
+    /// The networks in reach: the rows, and the hint and count that go with
+    /// them.
+    pub fn render_wifi(&self, networks: Vec<Wifi>) {
+        self.last.borrow_mut().wifi = networks;
+        self.rebuild_wifi();
+    }
+
+    /// Rebuild the network rows from the last read.
+    ///
+    /// Rebuilt whole rather than diffed, exactly like the device list: networks
+    /// come and go, a handful of labels is cheaper to remake than to reconcile,
+    /// and this is what a click re-runs - so a button that was pressed stops
+    /// looking pressable without waiting for the next read.
+    fn rebuild_wifi(&self) {
+        self.prune_wifi_pending();
+        while let Some(child) = self.wifi_list.first_child() {
+            self.wifi_list.remove(&child);
+        }
+        let last = self.last.borrow();
+        let (radio, present) = (last.radio, last.present);
+        let networks = last.wifi.clone();
+
+        let hint = match (present, radio, networks.is_empty()) {
+            (false, ..) => Some("No wireless card"),
+            (_, false, _) => Some("Wifi is off"),
+            (true, true, true) => Some("No networks in reach - scan to look again"),
+            (true, true, false) => None,
+        };
+        self.wifi_hint.set_visible(hint.is_some());
+        if let Some(hint) = hint {
+            self.wifi_hint.set_text(hint);
+        }
+        // The dashed box is the "there is a radio and it heard nothing" state,
+        // not a frame around the plain "no card" line.
+        set_class(
+            &self.wifi_hint,
+            "empty",
+            present && radio && networks.is_empty(),
+        );
+        self.wifi_list.set_visible(present && radio);
+
+        if present && radio {
+            for network in networks.iter().take(self.max_networks) {
+                self.wifi_list.append(&self.wifi_row(network));
+            }
+            let hidden = networks.len().saturating_sub(self.max_networks);
+            self.wifi_more.set_visible(hidden > 0);
+            if hidden > 0 {
+                // The count, not the names: the list is a list, and the rest of
+                // it belongs to nmtui (one button away, in the heading).
+                self.wifi_more
+                    .set_text(&format!("+{hidden} more - see all in nmtui"));
+            }
+        } else {
+            self.wifi_more.set_visible(false);
+        }
+    }
+
+    /// One network: what it is, how strong its signal is, and the action that
+    /// follows from its state - plus a way to forget it.
+    ///
+    /// The same row shape as a device's, down to the fixed-width slot at the end,
+    /// because it answers the same question: what is here, and what can I do
+    /// with it.
+    fn wifi_row(&self, network: &Wifi) -> gtk::Box {
+        let mark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        mark.add_css_class("dev-mark");
+        mark.set_valign(gtk::Align::Center);
+        set_class(&mark, "live", network.connected);
+
+        let icon = icons::lucide(network.icon(), DEVICE_ICON);
+        icon.add_css_class("dev-icon");
+        // Both lines of the badge trick are in `device_row`; a badge has to take
+        // the slack to centre its drawing and refuse it for itself.
+        icon.set_hexpand(true);
+        let badge = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        badge.add_css_class("dev-badge");
+        badge.set_valign(gtk::Align::Center);
+        badge.set_hexpand(false);
+        badge.append(&icon);
+        set_class(&badge, "live", network.connected);
+
+        let name = gtk::Label::new(Some(&network.ssid));
+        name.add_css_class("dev-name");
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // Capped for the same reason the device names are: a long name must not
+        // set the card's width, which is what the hover zone is measured against.
+        // Tighter than a device's, because an SSID is up to 32 bytes and is
+        // therefore the row that would decide the width for both tiles - and the
+        // whole name is still in the row's tooltip.
+        name.set_max_width_chars(WIFI_NAME_CHARS);
+        let detail = gtk::Label::new(Some(&network.detail()));
+        detail.add_css_class("dev-sub");
+        detail.set_xalign(0.0);
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        text.set_valign(gtk::Align::Center);
+        text.set_hexpand(true);
+        text.append(&name);
+        text.append(&detail);
+
+        // The signal as bars, like a device's link quality: the same meter, at
+        // the same size, reading the same way.
+        let signal = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        signal.add_css_class("dev-sig");
+        signal.set_valign(gtk::Align::Center);
+        let bars = network.bars() as usize;
+        let on = gtk::Label::new(Some(&SIGNAL_BARS.chars().take(bars).collect::<String>()));
+        on.add_css_class("sig-on");
+        let off = gtk::Label::new(Some(&SIGNAL_BARS.chars().skip(bars).collect::<String>()));
+        off.add_css_class("sig-off");
+        signal.append(&on);
+        signal.append(&off);
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("dev");
+        row.append(&mark);
+        row.append(&badge);
+        row.append(&text);
+        row.append(&signal);
+
+        let action = network.action();
+        let waiting = self.wifi_pending_for(&network.ssid);
+        // The same two-button slot the device rows hold open, so a row carrying
+        // one button and a row carrying two put their meters and their buttons in
+        // the same place.
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        buttons.add_css_class("actions");
+        buttons.set_hexpand(false);
+        buttons.set_size_request(DEVICE_ACTIONS, -1);
+        buttons.set_valign(gtk::Align::Center);
+        buttons.append(&stretch());
+
+        let button = gtk::Button::new();
+        button.add_css_class("iconbtn");
+        button.set_focus_on_click(false);
+        button.set_can_focus(false);
+        if waiting {
+            let spinner = gtk::Spinner::new();
+            spinner.add_css_class("btn-spinner");
+            spinner.start();
+            button.set_child(Some(&spinner));
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some("Talking to the network…"));
+        } else {
+            button.set_child(Some(&icons::lucide(action.icon(), BUTTON_ICON)));
+            button.set_tooltip_text(Some(action.tooltip()));
+            set_class(&button, "on", network.connected);
+            let view = self.me();
+            let ssid = network.ssid.clone();
+            let profile = network.profile.clone();
+            button
+                .connect_clicked(move |_| view.run_wifi_action(&ssid, profile.as_deref(), action));
+        }
+        buttons.append(&button);
+
+        // A stored profile that is not the link right now is exactly the one
+        // worth forgetting - so the forget button lives there, beside Join, and
+        // never on the row of the network carrying the session.
+        if network.profile.is_some() && !network.connected && !waiting {
+            let forget = icon_button(WifiAction::Forget.icon(), WifiAction::Forget.tooltip());
+            forget.add_css_class("danger");
+            let view = self.me();
+            let ssid = network.ssid.clone();
+            let profile = network.profile.clone();
+            forget.connect_clicked(move |_| {
+                view.run_wifi_action(&ssid, profile.as_deref(), WifiAction::Forget)
+            });
+            buttons.append(&forget);
+        }
+        row.append(&buttons);
+
+        // The raw signal moves to the tooltip, as a device's dBm does: a number
+        // nobody can calibrate at a glance is worse than the meter.
+        row.set_tooltip_text(Some(&match &network.band {
+            Some(band) => format!("{} · {}% · {band}", network.ssid, network.signal),
+            None => format!("{} · {}%", network.ssid, network.signal),
+        }));
+        row
+    }
+
+    /// Run a network's action, and say so until the answer lands.
+    ///
+    /// `profile` is what the row knows about a stored profile - a Forget or a
+    /// disconnect acts on it when there is one, and the SSID (`ssid`) is always
+    /// the row's own name, which is what the pending spinner is keyed by.
+    fn run_wifi_action(&self, ssid: &str, profile: Option<&str>, action: WifiAction) {
+        match action {
+            WifiAction::Connect => sources::connect_wifi(ssid),
+            // The device rather than the profile: a profile can be renamed by
+            // hand, the interface cannot.
+            WifiAction::Disconnect => sources::disconnect_wifi(&self.interface),
+            WifiAction::Join => {
+                // The password has to be typed, and a pointer-driven panel has
+                // nowhere to put a field - so the join happens in a terminal,
+                // where `nmcli --ask` can ask for it. Nothing to wait for here:
+                // the terminal owns it from this point on.
+                sources::spawn(
+                    &self.terminal,
+                    &["-e", "nmcli", "--ask", "device", "wifi", "connect", ssid],
+                );
+                return;
+            }
+            WifiAction::Forget => match profile {
+                Some(profile) => sources::forget_wifi(profile),
+                // Only drawn on a row that has one; nothing to delete otherwise.
+                None => return,
+            },
+        }
+        *self.wifi_pending.borrow_mut() = Some(WifiPending {
+            ssid: ssid.to_string(),
+            action,
+            until: Instant::now() + wifi_patience(action),
+        });
+        self.rebuild_wifi();
+        self.refresh_soon(1200);
+    }
+
+    /// Whether this network's row is waiting for an answer.
+    fn wifi_pending_for(&self, ssid: &str) -> bool {
+        self.wifi_pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|pending| pending.ssid == ssid)
+    }
+
+    /// Drop a row's spinner once the network has done what was asked of it, or
+    /// once the wait has gone on long enough that the answer is clearly not
+    /// coming - and say so, because a join that quietly goes back to offering
+    /// "Connect" is what a broken button looks like.
+    fn prune_wifi_pending(&self) {
+        let expired = {
+            let mut pending = self.wifi_pending.borrow_mut();
+            let Some(waiting) = pending.as_ref() else {
+                return;
+            };
+            let network = self
+                .last
+                .borrow()
+                .wifi
+                .iter()
+                .find(|network| network.ssid == waiting.ssid)
+                .cloned();
+            let settled = match (network, waiting.action) {
+                // Out of reach (or off the air): whatever was asked of it, there
+                // is no row left to show.
+                (None, _) => true,
+                (Some(network), WifiAction::Connect) => network.connected,
+                (Some(network), WifiAction::Disconnect) => !network.connected,
+                // No stored profile left: the forget took.
+                (Some(network), WifiAction::Forget) => network.profile.is_none(),
+                (Some(_), WifiAction::Join) => true,
+            };
+            if settled {
+                *pending = None;
+                return;
+            }
+            if Instant::now() < waiting.until {
+                return;
+            }
+            // Out of patience. A join is the one that had a reason worth naming:
+            // usually a wrong password, but from here there is no way to tell,
+            // and nmtui can.
+            let note = (waiting.action == WifiAction::Connect)
+                .then(|| format!("Could not join {} - try nmtui", waiting.ssid));
+            *pending = None;
+            note
+        };
+        if let Some(note) = expired {
+            self.note(&self.wifi_note, &note);
+        }
+    }
+
     /// The wireless link and the radio behind it. `present` is whether the
     /// machine has a wireless interface at all - with none, the row says exactly
     /// that rather than a permanent "off" on hardware that is not there.
@@ -1178,9 +1615,14 @@ impl StatsView {
         if !present {
             self.network_state.set_text("no wireless card");
             self.radio_toggle.set_sensitive(false);
+            self.wifi_scan.set_sensitive(false);
+            // The list's hint is drawn from the two flags above, so it follows
+            // them rather than the (slower) network read.
+            self.rebuild_wifi();
             return;
         }
         self.radio_toggle.set_sensitive(true);
+        self.wifi_scan.set_sensitive(radio);
         self.network_state.set_text(&match (radio, network) {
             (false, _) => "radio off".to_string(),
             (true, Some(link)) => link.ssid.clone(),
@@ -1195,6 +1637,9 @@ impl StatsView {
             (true, None) => Some("Nothing joined".to_string()),
         };
         self.network_state.set_tooltip_text(tooltip.as_deref());
+        // The list is drawn from the radio's state as well as from the networks,
+        // and this is the read that says whether there is a radio at all.
+        self.rebuild_wifi();
     }
 
     pub fn render_sound(&self, volume: Option<Volume>) {

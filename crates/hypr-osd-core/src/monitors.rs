@@ -10,6 +10,7 @@ use gtk::prelude::*;
 use serde_json::Value;
 
 use crate::hyprctl;
+use crate::hypripc;
 
 /// An output, in the terms an element needs it: how big it is to draw on, and
 /// how many physical pixels make one of those.
@@ -39,8 +40,16 @@ pub fn all() -> Vec<gdk::Monitor> {
 /// focused, or `None` when hyprctl cannot be asked - a single-monitor session
 /// never needs this to work.
 pub fn focused_connector() -> Option<String> {
-    let workspace = hyprctl::json(&["activeworkspace"])?;
+    let workspace = ask("activeworkspace")?;
     workspace.get("monitor")?.as_str().map(str::to_owned)
+}
+
+/// One `j/…` question: over the compositor's socket when it has one, through
+/// `hyprctl` when it does not. Both answer the same JSON, and the socket costs no
+/// process - which matters here because the overview asks on the way into a key
+/// press.
+fn ask(command: &str) -> Option<Value> {
+    hypripc::json(&format!("j/{command}")).or_else(|| hyprctl::json(&[command]))
 }
 
 /// The GDK monitor with this connector name.
@@ -58,10 +67,22 @@ pub fn find(connector: &str) -> Option<gdk::Monitor> {
 /// division done, and needs the scale factor itself to know how much detail a
 /// capture of a window is worth asking for.
 pub fn focused_output() -> Option<Output> {
+    // One read, not two: `monitors` says which of them carries the focus
+    // (`"focused": true`), so the active workspace need not be asked about
+    // separately. The connector path stays as the fallback for an answer from a
+    // compositor that leaves the flag out.
+    let monitors = ask("monitors")?;
+    let monitors = monitors.as_array()?;
+    if let Some(monitor) = monitors.iter().find(|monitor| {
+        monitor
+            .get("focused")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        return output_of(monitor);
+    }
     let connector = focused_connector()?;
-    let monitors = hyprctl::json(&["monitors"])?;
     let monitor = monitors
-        .as_array()?
         .iter()
         .find(|monitor| monitor.get("name").and_then(Value::as_str) == Some(connector.as_str()))?;
     output_of(monitor)

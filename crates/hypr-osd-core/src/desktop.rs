@@ -226,6 +226,12 @@ fn literal(kind: Kind, value: &str) -> String {
         // how it was *chosen*. A display's scale is the one that may also be a
         // number (`scale = 2`), which Hyprland accepts either way.
         Kind::Choice(_) | Kind::Keymap(_) | Kind::Monitor(_) => quote(value),
+        // A path is a string: no Hyprland option takes one today, but if the
+        // Hyprland tab ever grows one, this is what would be written.
+        Kind::Path | Kind::PathFolder => quote(value),
+        // A colour is `#rrggbb` and a font is a family name - both strings, for the
+        // same reason.
+        Kind::Color | Kind::Font => quote(value),
         // Neither of these is ever an entry in a document: a reading is not a
         // setting, and a button writes no key. Handing the value over as text is
         // the harmless answer if one ever is, rather than dropping it silently.

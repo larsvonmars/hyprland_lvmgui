@@ -12,64 +12,70 @@
  * So: change a colour here, and everything that is drawn in this theme follows
  * after a restart of the bar:
  *
- *     pkill -x hypr-osd-bar && ~/.local/bin/hypr-osd-bar &   # the whole bar
+ *     pkill -f hypr-osd-bar && ~/.local/bin/hypr-osd-bar &   # the whole bar
  *
  * One thing is not a token and therefore lives elsewhere: the geometry (radii, the
  * font) is CSS in `base.css`, which `hypr-osd-core` carries in the binary, because
- * it is the same for every element and is not something you retheme. It is: 16px
- * for cards and the bar, 12px for tiles, 10px for flat rows, 999px for capsules,
- * and the face is "MesloLGS Nerd Font Mono" at 13px/500 - a text face only: the
- * icons are Lucide drawings inside the binaries, not characters from a font (see
+ * it is the same for every element and is not something you retheme. It is: 18px
+ * for cards and the bar, 14px for tiles, 12px for flat rows, 999px for capsules,
+ * and the face is "Cantarell" at 13px/500 - a text face only: the icons are Lucide
+ * drawings inside the binaries, not characters from a font (see
  * `crates/hypr-osd-core/icons/`).
+ *
+ * The scheme is warm: a near-black cocoa for every surface, cream for the text and
+ * a peach accent with a pale mint second - the palette of the rice this desktop's
+ * look follows. The bar and the cards use the same two browns, so a popup hanging
+ * off the bar reads as the same material.
+ *
  *
  * hyprlock cannot read CSS at all (it is not a GTK program), so its palette is not
  * mirrored by hand: `hypr-osd-lock-vars` writes these values - converted to
- * hyprlock's `rgb()`/`rgba()` - into ~/.config/hypr/hyprlock-vars.conf, which
+ * hyprlock's `rgb()`/`rgba()` - into ~/.config/hypr/hyprlock.conf, which is
  * ~/.config/hypr/hyprlock.conf sources. Change a colour here, run it (or open the
  * settings window, which does), and the lock screen follows.
  */
 
 /* ---- surfaces ---- */
-@define-color bg            rgba(11, 15, 21, 0.92);
-@define-color bg_gradient   rgba(30, 38, 48, 0.55);
+@define-color bg            rgba(26, 20, 18, 0.88);
+@define-color bg_gradient   rgba(70, 52, 45, 0.55);
 /* The pills of the bar are ~2-4 % translucent, which is invisible over a
  * wallpaper but would let a window behind a card show through its text - so
  * card_top/card_bottom are the same two colours over black, i.e. what the bar's
  * pills actually look like, and fully opaque for anything that floats over a
  * window (every OSD card, the island popup). */
-@define-color pill_top      rgba(20, 26, 34, 0.96);
-@define-color pill_bottom   rgba(6, 9, 13, 0.98);
-@define-color card_top      #131921;
-@define-color card_bottom   #06090d;
-@define-color surface       rgba(255, 255, 255, 0.045);
-@define-color surface_h     rgba(255, 255, 255, 0.10);
-@define-color hairline      rgba(255, 255, 255, 0.06);
-@define-color hairline_soft rgba(255, 255, 255, 0.07);
+@define-color pill_top      rgba(40, 31, 28, 0.96);
+@define-color pill_bottom   rgba(16, 12, 11, 0.98);
+@define-color card_top      #2a201d;
+@define-color card_bottom   #120d0c;
+@define-color surface       rgba(255, 236, 224, 0.055);
+@define-color surface_h     rgba(255, 236, 224, 0.11);
+@define-color hairline      rgba(255, 236, 224, 0.075);
+@define-color hairline_soft rgba(255, 236, 224, 0.10);
 
 /* ---- lines ---- */
-@define-color border        rgba(51, 204, 255, 0.22);
-@define-color border_soft   rgba(51, 204, 255, 0.18);
-@define-color border_h      rgba(51, 204, 255, 0.42);
+@define-color border        rgba(255, 214, 196, 0.13);
+@define-color border_soft   rgba(255, 214, 196, 0.11);
+@define-color border_h      rgba(255, 214, 196, 0.30);
 
 /* ---- text ---- */
-@define-color fg            #dde7ef;
-@define-color fg_dim        #8b98a8;
-@define-color fg_faint      #4d5661;
-@define-color on_accent     #0a1216;
+@define-color fg            #efe3d8;
+@define-color fg_dim        #b4a49a;
+@define-color fg_faint      #6f6059;
+@define-color on_accent     #2b1a14;
 
 /* ---- accents ---- */
-@define-color accent        #33ccff;
-@define-color accent2       #00ff99;
-@define-color warn          #ffcc66;
-@define-color crit          #ff5566;
+@define-color accent        #f2b49b;
+@define-color accent2       #b6e7a9;
+@define-color warn          #f0d59c;
+@define-color crit          #ee7e84;
 
 /* Accent-tinted fills (hover, chips, badges) - one value per accent, so a
  * hovered pill in the bar, a chip in a popup and a menu row tint identically. */
-@define-color accent_tint   rgba(51, 204, 255, 0.14);
-@define-color accent2_tint  rgba(0, 255, 153, 0.12);
-@define-color warn_tint     rgba(255, 204, 102, 0.14);
-@define-color crit_tint     rgba(255, 85, 102, 0.16);
+@define-color accent_tint   rgba(242, 180, 155, 0.16);
+@define-color accent2_tint  rgba(182, 231, 169, 0.15);
+@define-color warn_tint     rgba(240, 213, 156, 0.16);
+@define-color crit_tint     rgba(238, 126, 132, 0.16);
 
 /* ---- shadows ---- */
-@define-color glow          rgba(51, 204, 255, 0.25);
-@define-color shadow        rgba(0, 0, 0, 0.45);
+@define-color glow          rgba(242, 180, 155, 0.22);
+@define-color shadow        rgba(0, 0, 0, 0.55);

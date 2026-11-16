@@ -756,6 +756,484 @@ fn argv(args: &[&str]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Wireless networks (through nmcli)
+// ---------------------------------------------------------------------------
+
+/// How many stored profiles are asked about, at most.
+///
+/// One `nmcli` per profile is the only way to learn a profile's SSID - the
+/// `connection show` list verb has no such field - so a machine with a great many
+/// saved networks would turn one refresh into a burst of processes. A dozen is
+/// far more than any panel shows and keeps the read bounded.
+const MAX_PROFILES: usize = 12;
+
+/// A stored profile: the name a Forget or a Connect acts on, and the SSID it is
+/// for. The two differ often enough (a profile can be renamed by hand) that
+/// assuming one is the other would be a bug waiting to be reported.
+type Profile = (String, String);
+
+/// One access point the panel lists.
+///
+/// The list is a *choice*, so it is ordered by what a click is most likely to be
+/// for: the link that is up first, then the strongest signal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wifi {
+    /// The network's name. Never empty: a hidden access point reports none, and
+    /// a row without a name is a row nobody can pick out.
+    pub ssid: String,
+    /// Signal as NetworkManager reports it, 0–100 %.
+    pub signal: i32,
+    /// The security the access point advertises ("WPA2", "WPA1 WPA2", "WEP"),
+    /// or `None` for a network that asks for nothing.
+    pub security: Option<String>,
+    /// Whether the link is on this network right now.
+    pub connected: bool,
+    /// The stored profile's name, when NetworkManager has one for this SSID.
+    /// It is what a Connect reuses and what a Forget deletes, and it is *not*
+    /// necessarily the SSID - which is why it is read rather than assumed.
+    pub profile: Option<String>,
+    /// The frequency the access point answers on, as nmcli spells it
+    /// (`5220 MHz`) - a tooltip's detail, not a row's.
+    pub band: Option<String>,
+}
+
+impl Wifi {
+    /// Whether joining it needs a secret.
+    pub fn secure(&self) -> bool {
+        self.security.is_some()
+    }
+
+    /// The mark in the row's badge: a lock for a network that will want a
+    /// password, the wireless mark for one that will not.
+    pub fn icon(&self) -> &'static str {
+        if self.secure() {
+            names::LOCK
+        } else {
+            names::WIFI
+        }
+    }
+
+    /// The line under the name. The signal has its own meter next to this line,
+    /// so it stays out of it - the same division the bluetooth rows make.
+    pub fn detail(&self) -> String {
+        match (self.connected, &self.profile, &self.security) {
+            (true, ..) => "connected".to_string(),
+            (false, Some(_), _) => "saved".to_string(),
+            (false, None, Some(security)) => security.clone(),
+            (false, None, None) => "open".to_string(),
+        }
+    }
+
+    /// The signal as 0–4 bars, the same scale the device rows use.
+    pub fn bars(&self) -> u8 {
+        match self.signal {
+            signal if signal >= 80 => 4,
+            signal if signal >= 60 => 3,
+            signal if signal >= 40 => 2,
+            signal if signal >= 20 => 1,
+            _ => 0,
+        }
+    }
+
+    /// Which button the row carries - and the rule that decides it: a connected
+    /// network can only be let go, a secured one nobody has joined before cannot
+    /// be joined without a password, and everything else is one click.
+    pub fn action(&self) -> WifiAction {
+        match (self.connected, self.secure(), self.profile.is_some()) {
+            (true, ..) => WifiAction::Disconnect,
+            (false, true, false) => WifiAction::Join,
+            (false, ..) => WifiAction::Connect,
+        }
+    }
+}
+
+/// What the button at the end of a network's row does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiAction {
+    Connect,
+    Disconnect,
+    /// A secured network nobody has joined before. Joining it needs a password,
+    /// and a pointer-driven panel has nowhere to type one - so this opens a
+    /// terminal, where `nmcli --ask` can ask for it.
+    Join,
+    /// Delete the stored profile. Never a row's primary action: it is the
+    /// secondary button beside Connect, because the password it throws away is
+    /// the one thing here that cannot be recovered from this panel.
+    Forget,
+}
+
+impl WifiAction {
+    /// The icon at the end of a row. The tooltip says what the mark means,
+    /// because a row's button has no room for words.
+    pub fn icon(self) -> &'static str {
+        match self {
+            WifiAction::Connect | WifiAction::Join => names::LINK,
+            WifiAction::Disconnect => names::UNLINK,
+            WifiAction::Forget => names::CLOSE,
+        }
+    }
+
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            WifiAction::Connect => "Join this network",
+            WifiAction::Disconnect => "Disconnect from this network",
+            WifiAction::Join => "Needs a password - opens a terminal to type it in",
+            WifiAction::Forget => "Forget this network - its password goes with it",
+        }
+    }
+}
+
+/// Read the networks in reach *and* the stored profiles behind them, and hand
+/// both to `on_done` on the main loop, merged and ordered.
+///
+/// Three questions: what the card can hear (one `nmcli`), which profiles are
+/// stored (one `nmcli`), and what SSID each of those profiles is for (one
+/// `nmcli` per profile - see [`MAX_PROFILES`]). That is why this runs on its own
+/// slow clock and only while the panel is open, exactly like the bluetooth
+/// device list: none of it is on the pointer's path.
+///
+/// `link` is the SSID `iw` says the link is on. It is what marks a row as
+/// connected, deliberately *not* nmcli's own `IN-USE` field, which was measured
+/// pointing at the wrong access point on this machine (see this module's note on
+/// nmcli). `rescan` is the Scan button: the read then forces a scan, where the
+/// periodic one lets nmcli decide (`--rescan auto`, i.e. scan only when its cache
+/// has gone stale - a period that is longer than the panel's own clock, so it does
+/// not turn every tick into a scan).
+pub fn refresh_wifi(link: Option<String>, rescan: bool, on_done: impl FnOnce(Vec<Wifi>) + 'static) {
+    output::read(
+        "env",
+        &nmcli(&[
+            "-t",
+            "-f",
+            "IN-USE,SSID,SIGNAL,SECURITY,FREQ",
+            "device",
+            "wifi",
+            "list",
+            "--rescan",
+            if rescan { "yes" } else { "auto" },
+        ]),
+        move |list| {
+            let networks = parse_wifi_list(&text(list));
+            output::read(
+                "env",
+                &nmcli(&["-t", "-f", "NAME,TYPE", "connection", "show"]),
+                move |stored| {
+                    let profiles = parse_profile_names(&text(stored));
+                    // The profile reads share one `Fn` callback between as many
+                    // answers as there are profiles, and the answer at the end of
+                    // the chain is an `FnOnce` that owns the network list - so
+                    // both are parked here and taken out by the last call.
+                    let finish = RefCell::new(Some((on_done, networks)));
+                    read_profile_ssids(
+                        profiles,
+                        Vec::new(),
+                        Rc::new(move |profiles| {
+                            if let Some((on_done, networks)) = finish.borrow_mut().take() {
+                                on_done(merge_profiles(networks, &profiles, link.as_deref()));
+                            }
+                        }),
+                    );
+                },
+            );
+        },
+    );
+}
+
+/// The same answer as [`refresh_wifi`], asked and *waited for* - what the
+/// `status` verb prints.
+pub fn wifi_now(interface: &str) -> Vec<Wifi> {
+    let link = hardware::network(interface)
+        .ok()
+        .flatten()
+        .map(|link| link.ssid);
+    let networks = parse_wifi_list(
+        &capture(
+            "env",
+            &[
+                "LC_ALL=C",
+                "nmcli",
+                "-t",
+                "-f",
+                "IN-USE,SSID,SIGNAL,SECURITY,FREQ",
+                "device",
+                "wifi",
+                "list",
+                "--rescan",
+                "auto",
+            ],
+        )
+        .unwrap_or_default(),
+    );
+    let profiles = parse_profile_names(
+        &capture(
+            "env",
+            &[
+                "LC_ALL=C",
+                "nmcli",
+                "-t",
+                "-f",
+                "NAME,TYPE",
+                "connection",
+                "show",
+            ],
+        )
+        .unwrap_or_default(),
+    )
+    .into_iter()
+    .filter_map(|name| {
+        let answer = capture(
+            "env",
+            &[
+                "LC_ALL=C",
+                "nmcli",
+                "-t",
+                "-f",
+                "802-11-wireless.ssid",
+                "connection",
+                "show",
+                &name,
+            ],
+        )?;
+        parse_profile_ssid(&answer).map(|ssid| (name, ssid))
+    })
+    .collect::<Vec<_>>();
+    merge_profiles(networks, &profiles, link.as_deref())
+}
+
+/// The argument list for `nmcli`, in a fixed locale.
+///
+/// **`LC_ALL=C` is not optional.** nmcli translates its *values*: `ACTIVE` reads
+/// `yes` in English and `ja` in German, and `device status` says
+/// `connected (externally)` - so a parser that looks for English words reads the
+/// wrong answer on any machine that is not set to English. The kernel tools this
+/// module leans on (`iw`, `rfkill`) have no such problem, which is why this is
+/// the only reader here that pins a locale. The variable is handed over by
+/// starting `env`, because [`output::read`] runs one program with arguments and
+/// nothing else.
+fn nmcli(args: &[&str]) -> Vec<String> {
+    let mut argv = vec!["LC_ALL=C".to_string(), "nmcli".to_string()];
+    argv.extend(args.iter().map(|arg| (*arg).to_string()));
+    argv
+}
+
+/// One line of `nmcli -t` output as its fields.
+///
+/// Terse mode escapes `\` and `:` inside a value with a backslash - a network
+/// called `Wlan:guest` arrives as `Wlan\:guest` - so this cannot be a
+/// `str::split`.
+fn terse(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            ':' => fields.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+/// One `device wifi list` answer: `IN-USE:SSID:SIGNAL:SECURITY:FREQ`.
+///
+/// One row per *network*, not per access point: a mesh, or a house with a
+/// repeater, answers several times under one name, and the row shows the best of
+/// them. Hidden access points (no name) are dropped - there is nothing to show.
+fn parse_wifi_list(text: &str) -> Vec<Wifi> {
+    let mut networks: Vec<Wifi> = Vec::new();
+    for line in text.lines() {
+        let fields = terse(line);
+        let [in_use, ssid, signal, security, freq] = fields.as_slice() else {
+            continue;
+        };
+        if ssid.is_empty() {
+            continue;
+        }
+        let Ok(signal) = signal.trim().parse::<i32>() else {
+            continue;
+        };
+        let security = match security.trim() {
+            // `--` is how nmcli spells "nothing", and an open network is
+            // exactly a network whose security is nothing.
+            "" | "--" => None,
+            words => Some(words.to_string()),
+        };
+        let wifi = Wifi {
+            ssid: ssid.clone(),
+            signal: signal.clamp(0, 100),
+            security,
+            connected: in_use.trim() == "*",
+            profile: None,
+            band: Some(freq.trim().to_string()).filter(|band| !band.is_empty()),
+        };
+        match networks.iter_mut().find(|known| known.ssid == wifi.ssid) {
+            Some(known) => {
+                known.connected |= wifi.connected;
+                if wifi.signal > known.signal {
+                    known.signal = wifi.signal;
+                    known.band = wifi.band.clone();
+                }
+            }
+            None => networks.push(wifi),
+        }
+    }
+    networks
+}
+
+/// The names of the stored wireless profiles, from `connection show`.
+///
+/// The type is the technical `802-11-wireless`, not a translated word, but the
+/// locale is pinned anyway (see [`nmcli`]) because the *same* call in another
+/// mode reports translated state.
+fn parse_profile_names(text: &str) -> VecDeque<String> {
+    text.lines()
+        .filter_map(|line| {
+            let fields = terse(line);
+            // The first two fields only: the same verb is asked for more of them
+            // elsewhere, and a trailing column cannot be mistaken for a type.
+            let [name, kind, ..] = fields.as_slice() else {
+                return None;
+            };
+            (kind.trim() == "802-11-wireless" && !name.is_empty()).then(|| name.clone())
+        })
+        .take(MAX_PROFILES)
+        .collect()
+}
+
+/// A profile's SSID, from `connection show <name>`.
+fn parse_profile_ssid(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| {
+            let fields = terse(line);
+            match fields.as_slice() {
+                [key, ssid] if key.trim() == "802-11-wireless.ssid" => Some(ssid.clone()),
+                _ => None,
+            }
+        })
+        .filter(|ssid| !ssid.is_empty())
+}
+
+/// Ask for each stored profile's SSID, one at a time - `nmcli` answers one
+/// command per process, so every step is the previous read's callback, exactly
+/// like the bluetooth device details.
+fn read_profile_ssids(
+    mut queue: VecDeque<String>,
+    mut known: Vec<Profile>,
+    on_done: Rc<dyn Fn(Vec<Profile>)>,
+) {
+    let Some(name) = queue.pop_front() else {
+        on_done(known);
+        return;
+    };
+    let profile = name.clone();
+    output::read(
+        "env",
+        &nmcli(&[
+            "-t",
+            "-f",
+            "802-11-wireless.ssid",
+            "connection",
+            "show",
+            &profile,
+        ]),
+        move |answer| {
+            if let Some(ssid) = parse_profile_ssid(&text(answer)) {
+                known.push((name, ssid));
+            }
+            read_profile_ssids(queue, known, on_done);
+        },
+    );
+}
+
+/// Attach the stored profiles to the networks, mark the one the link is on, and
+/// order the list the way the panel draws it.
+fn merge_profiles(mut networks: Vec<Wifi>, profiles: &[Profile], link: Option<&str>) -> Vec<Wifi> {
+    for network in networks.iter_mut() {
+        network.profile = profiles
+            .iter()
+            .find(|(_, ssid)| ssid == &network.ssid)
+            .map(|(name, _)| name.clone());
+        // The link `iw` reports is the truth about what is connected. nmcli's
+        // `IN-USE` column is only a hint about the access point in use, and it
+        // is wrong often enough to matter on this machine - so it is read (it
+        // still marks a *duplicate* access point of the same network) but not
+        // believed.
+        network.connected = link == Some(network.ssid.as_str());
+    }
+    // The link first, then the strongest: this list is a choice, and the row a
+    // click is most likely to be for belongs at the top.
+    networks.sort_by(|a, b| {
+        b.connected
+            .cmp(&a.connected)
+            .then(b.signal.cmp(&a.signal))
+            .then(a.ssid.cmp(&b.ssid))
+    });
+    networks
+}
+
+/// Join a network. NetworkManager reuses the stored profile when it has one for
+/// this SSID - which is what makes a second join password-free - and creates one
+/// otherwise, which only succeeds on an open network.
+pub fn connect_wifi(ssid: &str) {
+    spawn("nmcli", &["device", "wifi", "connect", ssid]);
+}
+
+/// Let go of the link. The *device* is named rather than the profile: a profile
+/// can be renamed by hand, the interface cannot.
+pub fn disconnect_wifi(interface: &str) {
+    spawn("nmcli", &["device", "disconnect", interface]);
+}
+
+/// Forget a stored network - the password it holds goes with it.
+pub fn forget_wifi(profile: &str) {
+    spawn("nmcli", &["connection", "delete", profile]);
+}
+
+/// The stored profile whose SSID is `ssid`, for the verbs that are given a
+/// network's name rather than a row's knowledge of its profile.
+pub fn profile_for(ssid: &str) -> Option<String> {
+    parse_profile_names(
+        &capture(
+            "env",
+            &[
+                "LC_ALL=C",
+                "nmcli",
+                "-t",
+                "-f",
+                "NAME,TYPE",
+                "connection",
+                "show",
+            ],
+        )
+        .unwrap_or_default(),
+    )
+    .into_iter()
+    .find(|name| {
+        capture(
+            "env",
+            &[
+                "LC_ALL=C",
+                "nmcli",
+                "-t",
+                "-f",
+                "802-11-wireless.ssid",
+                "connection",
+                "show",
+                name,
+            ],
+        )
+        .and_then(|answer| parse_profile_ssid(&answer))
+        .is_some_and(|known| known == ssid)
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Power profile (power-profiles-daemon)
 // ---------------------------------------------------------------------------
 
@@ -1277,5 +1755,138 @@ mod tests {
         assert_eq!(layout_code("German"), "DE");
         assert_eq!(layout_code("Klingon (Qo'noS)"), "Klingon (Qo'noS)");
         assert_eq!(layout_code(""), "?");
+    }
+
+    #[test]
+    fn a_terse_line_splits_on_unescaped_colons_only() {
+        assert_eq!(terse("a:b:c"), vec!["a", "b", "c"]);
+        // nmcli escapes `:` and `\` inside a value with a backslash, so a
+        // network called `Wlan:guest` is one field, not two.
+        assert_eq!(
+            terse("*:Wlan\\:guest:90:WPA2:5220 MHz"),
+            vec!["*", "Wlan:guest", "90", "WPA2", "5220 MHz"]
+        );
+        assert_eq!(terse("C:\\\\temp"), vec!["C", "\\temp"]);
+        // A trailing empty field is still a field.
+        assert_eq!(terse("a:"), vec!["a", ""]);
+    }
+
+    #[test]
+    fn the_wifi_list_is_one_row_per_network() {
+        let list = "*:wlan@home-5G:90:WPA2:5220 MHz\n\
+                    \x20:Wlan@home:99:WPA2:2417 MHz\n\
+                    \x20:wlan@home-5G:74:WPA2:2412 MHz\n\
+                    \x20:Guest:40:--:2417 MHz\n\
+                    \x20::20:WPA2:2462 MHz\n";
+        let networks = parse_wifi_list(list);
+        // The hidden network has no name to show, and the repeated SSID is one
+        // row carrying its strongest access point.
+        assert_eq!(networks.len(), 3);
+        let home = networks
+            .iter()
+            .find(|network| network.ssid == "wlan@home-5G")
+            .expect("the connected network");
+        assert_eq!(home.signal, 90);
+        assert!(home.connected);
+        assert_eq!(home.band.as_deref(), Some("5220 MHz"));
+        // `--` is how nmcli spells "nothing": an open network, not a secured
+        // one with a strange name.
+        let guest = networks
+            .iter()
+            .find(|network| network.ssid == "Guest")
+            .expect("the open network");
+        assert!(!guest.secure());
+        assert_eq!(guest.icon(), names::WIFI);
+        assert!(home.secure());
+        assert_eq!(home.icon(), names::LOCK);
+    }
+
+    #[test]
+    fn a_row_says_what_clicking_it_would_do() {
+        let network = |connected, security: Option<&str>, profile: Option<&str>| Wifi {
+            ssid: "home".to_string(),
+            signal: 70,
+            security: security.map(str::to_owned),
+            connected,
+            profile: profile.map(str::to_owned),
+            band: None,
+        };
+        assert_eq!(
+            network(true, Some("WPA2"), Some("home")).action(),
+            WifiAction::Disconnect
+        );
+        // A stored profile is reused by nmcli, so that join needs no password.
+        assert_eq!(
+            network(false, Some("WPA2"), Some("home")).action(),
+            WifiAction::Connect
+        );
+        // Neither is an open network.
+        assert_eq!(network(false, None, None).action(), WifiAction::Connect);
+        // Only a secured network nobody has joined before needs a terminal.
+        assert_eq!(
+            network(false, Some("WPA2"), None).action(),
+            WifiAction::Join
+        );
+        assert_eq!(network(false, Some("WPA2"), Some("home")).detail(), "saved");
+        assert_eq!(network(false, Some("WPA2"), None).detail(), "WPA2");
+        assert_eq!(network(false, None, None).detail(), "open");
+        assert_eq!(network(true, None, None).detail(), "connected");
+    }
+
+    #[test]
+    fn the_signal_reads_as_bars() {
+        let with = |signal| Wifi {
+            ssid: "home".to_string(),
+            signal,
+            security: None,
+            connected: false,
+            profile: None,
+            band: None,
+        };
+        assert_eq!(with(100).bars(), 4);
+        assert_eq!(with(80).bars(), 4);
+        assert_eq!(with(65).bars(), 3);
+        assert_eq!(with(45).bars(), 2);
+        assert_eq!(with(25).bars(), 1);
+        assert_eq!(with(5).bars(), 0);
+    }
+
+    #[test]
+    fn the_stored_profiles_come_out_of_the_connection_list() {
+        // Only the wireless ones: a profile is what a Connect reuses and a
+        // Forget deletes, and an ethernet profile is neither.
+        let list = "wlan@home-5G:802-11-wireless:wlan0:yes\n\
+                    Kabelgebundene Verbindung 1:802-3-ethernet::no\n\
+                    PHSG:802-11-wireless::no\n";
+        assert_eq!(
+            parse_profile_names(list).into_iter().collect::<Vec<_>>(),
+            vec!["wlan@home-5G".to_string(), "PHSG".to_string()]
+        );
+        assert_eq!(
+            parse_profile_ssid("802-11-wireless.ssid:wlan@home-5G\n").as_deref(),
+            Some("wlan@home-5G")
+        );
+        // A profile whose SSID is not set is not a match for anything.
+        assert_eq!(parse_profile_ssid("802-11-wireless.ssid:\n"), None);
+        assert_eq!(parse_profile_ssid("no such field\n"), None);
+    }
+
+    #[test]
+    fn the_connected_network_comes_first_and_the_profile_is_attached() {
+        let list = "\x20:Wlan@home:99:WPA2:2417 MHz\n\
+                    \x20:wlan@home-5G:60:WPA2:5220 MHz\n\
+                    \x20:Guest:40:--:2417 MHz\n";
+        let profiles = vec![("wlan@home-5G".to_string(), "wlan@home-5G".to_string())];
+        let networks = merge_profiles(parse_wifi_list(list), &profiles, Some("wlan@home-5G"));
+        // The strongest is not first; the one the link is on is.
+        assert_eq!(networks[0].ssid, "wlan@home-5G");
+        assert!(networks[0].connected);
+        assert_eq!(networks[0].profile.as_deref(), Some("wlan@home-5G"));
+        assert_eq!(networks[1].ssid, "Wlan@home");
+        assert_eq!(networks[1].profile, None);
+        // With nothing joined, the order is the signal's.
+        let none = merge_profiles(parse_wifi_list(list), &profiles, None);
+        assert_eq!(none[0].ssid, "Wlan@home");
+        assert!(none.iter().all(|network| !network.connected));
     }
 }

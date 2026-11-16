@@ -14,6 +14,14 @@ four deliberate exceptions (the switcher, the overview, the launcher and the
 applications panel, which are driven by keys - or, for the last two, typed into).
 Hyprland drives them through `scripts/hyprland/osd.lua`.
 
+A touchscreen is an addition, never a mode: a finger tap must open the same card
+a hover or a click opens (`tap` verbs on the finger-driven panels), a long press
+must do what button 3 does (`touch::on_secondary`), and touch-sized rules belong
+under a `window.osd.touch` selector in the element's own CSS - the shell adds the
+`touch` class when the machine is a tablet, and the shared `base.css` covers the
+pieces every element shares. See `crates/hypr-osd-core/src/touch.rs` and the
+README's Touch section.
+
 The **bar** is the exception to "one surface": it belongs on every screen, so it
 owns one surface per output, reconciled against GDK's monitor list. The element
 hands the shell a `Content::PerOutput` factory and the shell calls it once per
@@ -27,7 +35,8 @@ bar or a chip changes what it shows; its notification hub is read in two halves:
 the *state* from `swaync-client -swb`, and the notifications themselves -
 application, summary, icon - off the bus with `busctl --user --json=short monitor
 org.freedesktop.Notifications`, because swaync publishes no list of them),
-`-stats` (the system popup), `-switcher` and `-overview` (the two window cards),
+`-stats` (the system popup), `-bluetooth` (the manager card the system popup's
+bluetooth tile opens), `-switcher` and `-overview` (the two window cards),
 `-launcher` (the search card on SUPER + SPACE, which took over from the separate
 `linux-launchpad` Tauri app) and `-apps` (that app's *main window* - the grid of
 everything installed - rebuilt as a card that unfolds from the bar's left-end
@@ -50,7 +59,11 @@ button on hover, like the island and the system popup).
 - `crates/hypr-osd-core/` — shared: `css.rs` (the runtime palette from
   `~/.config/hypr-osd/theme.css`, plus the `base.css` recipes), `osd.rs` (the
   layer surfaces, cards, auto-hide, `on_shutdown`, `run()` — and the bar's one
-  surface per output), `hardware.rs` (the volume/battery/network reads, `run` for
+  surface per output; a card opened by a *finger* gets `tap_catcher()`, a dimmed
+  full-screen layer surface with a hole over the card, because a touchscreen has
+  no pointer to leave and no Escape to press; its placement/width are mutable
+  (`set_placement`/`set_width`) so the bar can grow when the keyboard is folded
+  away), `hardware.rs` (the volume/battery/network reads, `run` for
   a command that answers once, `launch` for one that must not be waited for),
   `follow.rs` (run a long-lived command and deliver its lines to the main loop),
   `output.rs` (run a command that answers once **with bytes**), `hypripc.rs`
@@ -59,23 +72,56 @@ button on hover, like the island and the system popup).
   the player's own volume, seeking, and `Player` for aiming a command at one
   player), `art.rs` (`mpris:artUrl` → texture: `file://` decoded, `http(s)://`
   through `curl`), `system.rs`,
-  `hover.rs` (a popup's hot zone and dwell), `monitors.rs` (the focused output,
-  and every output), `apps.rs` (installed applications: the `.desktop` parser,
+  `hover.rs` (a popup's hot zone and dwell), `bluetooth.rs` (the controller, the
+  devices BlueZ knows and the actions a card can take on them - the model, the
+  parser, the async read chain, the pair/trust/connect chain and the
+  timeout-bounded scan, shared by the system popup's compact tile and the manager
+  card), `monitors.rs` (the focused output,
+  and every output), `touch.rs` (the finger and the tablet: whether the machine
+  has a touchscreen, whether it is folded into a tablet right now - the
+  compositor's tablet-mode switch is only reachable as a *bind*, so the binds
+  write a flag in `$XDG_RUNTIME_DIR` and this watches it - `is_touch()` for a
+  gesture's device, `on_click()`/`on_secondary()` (long press = right click), the
+  `touch.conf` reader, and `Osk`: the on-screen keyboard, which the bar starts and
+  stops with the tablet and whose daemon kind (squeekboard) raises itself from a
+  focused `gtk::Entry`), `apps.rs` (installed applications: the `.desktop` parser,
   the category map, the scoring ladder and `gio launch` - shared by the launcher
   and the panel), `timer.rs` (one-shot timers that cannot fire after a cancel),
   `config.rs` (`~/.config/hypr-osd/<element>.conf`),
   `energy.rs` (the power profile and the compositor effects worth dropping while
   the machine is saving - the policy the settings window's System tab edits and
   the `hypr-osd-energy` daemon enforces: `EFFECTS`, `Policy`, `Baseline`,
-  `desired`/`agrees`/`document`, and the live readings for the page).
+  `desired`/`agrees`/`document`, and the live readings for the page),
+  `lock.rs` (the **whole** lock screen, generated from `lock.conf` + the palette
+  into `~/.config/hypr/hyprlock.conf` - general/auth/animations/background and the
+  shape, label and input-field widgets), `wallpaper.rs` (hyprpaper's config,
+  generated from `wallpaper.conf`, plus the IPC argument that applies a picture at
+  once), `login.rs` (SDDM's `theme.conf` and the `magick` rendering of the
+  greeter's background, from `login.conf`; its palette keys fall back to
+  `theme.css` when the file leaves one unset, like the lock screen's, and
+  `install_script()` is the installer the page runs through sudo).
 - `crates/hypr-osd-bar/` — the bar: `main.rs` (verbs, settings, and one
-  `BarView` per monitor painted from one set of readings), `view.rs` (the pills),
+  `BarView` per monitor painted from one set of readings), `view.rs` (the pills,
+  and the workspace row's accent capsule, which glides to the new pill from a
+  tick callback because GTK CSS cannot animate a widget's position),
   `hypr.rs` (the workspace row and title, from the event socket), `tray.rs` (the
   StatusNotifier host), `bar.css`. Its far-left pill is the applications button:
   the pointer arriving on it (or a click) runs `apps_command` with `open`, the
   connector and the measured pill rectangle (`hardware::launch`, never a wait),
   and the pill wears `panel-open` while the flag in `state::apps_panel` says the
   panel is up.
+- `crates/hypr-osd-stats/` — the system popup: `main.rs` (verbs, the readings
+  and the heartbeat), `sources.rs` (the wifi, power and volume reads; bluetooth
+  comes from `core::bluetooth`), `view.rs` (the gauges, the controls table and
+  the two radio tiles) and `stats.css`. Its bluetooth tile's **Manage** chip is
+  the manager card below.
+- `crates/hypr-osd-bluetooth/` — element #10, the bluetooth manager: a card of
+  its own because a device list needs room, a filter and a way to sit still
+  through a pairing handshake.
+  `main.rs` (verbs, the periodic read, the idle watchdog), `view.rs` (the hero,
+  the filter, the Paired/Nearby lists, the selectable rows) and `bluetooth.css`.
+  Its **Manage** chip in the system popup's bluetooth tile runs
+  `bluetooth_command` (default `hypr-osd-bluetooth`) with `toggle`.
 - `crates/hypr-osd-volume/` — element #1: `main.rs` (verbs, settings),
   `sink.rs` (wpctl), `view.rs` (widgets), `volume.css`. Owns the volume step.
 - `crates/hypr-osd-media/` — element #2: `main.rs` (verbs, settings, trigger
@@ -110,7 +156,21 @@ button on hover, like the island and the system popup).
   OSD tab ends with a **Shortcuts** page (`Applies::Shortcuts`), a list built from
   `core::settings::SHORTCUTS`; a test reads `scripts/hyprland/osd.lua` at compile
   time and requires its binds and the page's bound rows to name each other, so a
-  key added to the template can never be missing from the window.
+  key added to the template can never be missing from the window. The third tab,
+  **Appearance**, holds the desktop's three faces - `Applies::Wallpaper`
+  (`core::wallpaper`), `Applies::Lock` (`core::lock`) and `Applies::Login`
+  (`core::login`) - whose rows are `Kind::Path`/`Kind::PathFolder` (a text field
+  with GTK's file chooser, plus a folder picker for hyprpaper's slideshow) where
+  the value is a picture, and whose runtime `Kind::Actions` rows point the lock
+  and login screens at the wallpaper in one click. The Login screen page's
+  **Install** action runs the theme's `install.sh` (from `core::login::install_script`)
+  through `sudo` in a terminal - `terminal_command` on the Settings page, since a
+  layer surface has no TTY to ask for a password on - and holds the window open so
+  a refused password or a missing `magick` can be read. The two picture pages open with
+  a `GtkPicture` banner of the image (first frame for a slideshow directory), the
+  Lock screen page groups its ~80 rows under `Heading`s, and its **Check** action
+  runs hyprlock's parser with `ulimit -c 0` (the check ends in an abort, so it is
+  a button, never a page-render reading).
 - `crates/hypr-osd-energy/` — element #9, the energy-saving daemon: `main.rs`
   (the poll loop, `tick`/`set_state`/`remember`, the verbs `status|apply|save|
   restore|refresh|tick`). **Headless** - it hands `run()` a widget it never shows,
@@ -128,8 +188,10 @@ button on hover, like the island and the system popup).
 - **Styling rule:** the palette lives in this repo as `configs/theme.css`,
   installed to `~/.config/hypr-osd/theme.css` and read at runtime by `core::css` —
   the one source of truth for every element (a waybar `style.css` used to play
-  that role). `configs/hyprlock.conf` mirrors it by hand, because hyprlock cannot
-  read CSS. Never hard-code a colour in an element's CSS — use the `@tokens`
+  that role). The lock screen's palette is generated (`core::lock`) and the login
+  screen's falls back to the theme for any colour `login.conf` leaves unset
+  (`core::login::PALETTE`), because neither hyprlock nor a Qt greeter can read CSS.
+  Never hard-code a colour in an element's CSS — use the `@tokens`
   (`@accent`, `@card_top`, `@fg_dim`, …).
 - **Icons are Lucide SVGs, bundled — never a font glyph.** `core::icons::lucide`
   draws one from `crates/hypr-osd-core/icons/`, which `core/build.rs` bakes into
@@ -170,6 +232,7 @@ cargo clippy --all-targets
 ./target/release/hypr-osd-volume up     # first invocation becomes the daemon
 ./target/release/hypr-osd-media         # watch for tracks (needs an MPRIS player)
 ./target/release/hypr-osd-session toggle  # the session card
+./target/release/hypr-osd-bluetooth show  # the bluetooth manager
 ./target/release/hypr-osd-apps status   # applications, drawers, pins, size, open?
 ./target/release/hypr-osd-apps show     # the applications panel, without the bar
 pkill -x hypr-osd-volume                # stop a daemon (also stops its followers)
@@ -213,6 +276,12 @@ pkill -f 'hypr-osd-app[s]'              # a bracket: the pattern matches the
   `hypr-osd-media status` prints the current track without a card;
   `hypr-osd-session status` prints what each session action would run
   (and, on this machine, that Lock is unavailable: no hyprlock/swaylock/gtklock).
+- `hypr-osd-bluetooth status` prints the controller, every device (with the
+  address a verb takes), the card's state and its measured size, without a card.
+  `power`/`discoverable`/`connect`/`disconnect`/`pair`/`remove` mirror the
+  buttons, and `show [filter]` opens the card with the filter filled in. The
+  system popup's tile and the manager share `core::bluetooth`, so a parsing
+  question is answered once, for both.
 - `hypr-osd-launcher status` prints the application count, the file roots it
   found and whether the card is open; `hypr-osd-launcher search <query>` prints
   the ranking *without* a card, which is how "why is that row first" is answered.
@@ -242,11 +311,21 @@ pkill -f 'hypr-osd-app[s]'              # a bracket: the pattern matches the
   live value next to it.
 - `hypr-osd-settings command <id>` runs the shown page's own button exactly as a
   click would (the System tab's `apply`/`restore`), because a layer surface cannot
-  be clicked from a script. `sections` now lists three tabs; `keys energy` prints
+  be clicked from a script. `sections` lists four tabs; `keys energy` prints
   the policy rows. `drop <output> <dx> <dy>` answers what a drag on the Display
   page's arrangement would write - the same `frame`/`placed` arithmetic the
   gesture uses, in canvas pixels - which is how the drag is checked without a
   pointer.
+- `hypr-osd-overview move <window> <workspace>` is the drop without a pointer: the
+  window is named by its address (or by its position in the tile order `status`
+  prints), and it ends in the same `Overview::assign` a dragged tile does - move
+  it, correct the card's own picture, repaint from the thumbnails it already
+  holds. A throwaway window (`kitty --title hypr-osd-probe sleep 900`) moved to
+  another workspace and back exercises the whole path without disturbing the
+  desktop; `hyprctl -j clients` is the check. The **gesture** itself (a press
+  that moves is a drag, a press that does not is a click) still has to be tried
+  by hand - `GtkGestureDrag` claims the press, so the tile's `GtkButton` never
+  activates.
 - **A click cannot be scripted.** This Hyprland's Lua API moves the pointer
   (`hyprctl dispatch 'hl.dsp.cursor.move({ x = 100, y = 20 })'`) but has no
   press/click dispatcher, and `send_shortcut` with a mouse key (`mouse:272`) goes

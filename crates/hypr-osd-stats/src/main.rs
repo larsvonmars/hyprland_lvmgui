@@ -45,6 +45,12 @@
 //!                        has to *read* `rfkill` before it can flip it (see
 //!                        `sources`), and this is the element that owns that
 //!                        reading.
+//!   wifi <verb>          the wireless controls for a script - `on`, `off`,
+//!                        `scan` (a fresh scan, not a cached one),
+//!                        `connect <ssid>`, `disconnect`, and `forget <ssid>`
+//!                        (deletes the stored profile, password included). The
+//!                        card's own rows do not come through here: they *are*
+//!                        this element, so they call `sources` directly.
 //!   bluetooth <verb>     the bluetooth controls for a script - `on`, `off`,
 //!                        `scan`, and `connect|disconnect|pair|remove <address>`
 //!                        (the addresses `status` prints). The card's own
@@ -126,6 +132,19 @@ const DEFAULT_SCAN_SECONDS: u64 = 12;
 /// window - and a popup that scrolls under the pointer would scroll itself away
 /// from the pointer.
 const DEFAULT_MAX_DEVICES: i32 = 5;
+/// How often the networks in reach are re-read while the panel is open.
+///
+/// It sits between the two clocks above: one `nmcli` for the list, one for the
+/// stored profiles and one per profile (see `sources::refresh_wifi`) - a handful
+/// of quick processes, not one per row. Fifteen seconds is also about how often
+/// NetworkManager's own background scan refreshes the cache the list is read
+/// from, so a shorter clock would only re-read the same answer.
+const DEFAULT_NETWORKS_EVERY_MS: u64 = 15_000;
+/// How many network rows the wireless tile shows before it switches to a count.
+/// The same number as the bluetooth list, and for the same reason: the two tiles
+/// sit one above the other, and a popup that scrolled would scroll itself away
+/// from the pointer.
+const DEFAULT_MAX_NETWORKS: i32 = 5;
 /// How often a stale update count is refreshed. `checkupdates` syncs a pacman
 /// database in a temporary directory, and the count only changes when somebody
 /// syncs anyway - so half an hour, which is also how long a count is believed
@@ -151,6 +170,10 @@ struct Settings {
     /// reads at, so no details are read for rows that will not be drawn.
     scan_seconds: u64,
     max_devices: usize,
+    /// How often the networks in reach are re-read while the panel is open, and
+    /// how many of them the tile lists before it switches to a count.
+    networks_every: u64,
+    max_networks: usize,
     /// The wireless interface the NETWORK row reports on.
     interface: String,
     /// Where the buttons that open something put it, and where `pacman` runs.
@@ -197,6 +220,10 @@ impl Settings {
                 .i32("scan_seconds", DEFAULT_SCAN_SECONDS as i32)
                 .max(1) as u64,
             max_devices: config.i32("max_devices", DEFAULT_MAX_DEVICES).max(1) as usize,
+            networks_every: config
+                .millis("networks_every_ms", DEFAULT_NETWORKS_EVERY_MS)
+                .as_millis() as u64,
+            max_networks: config.i32("max_networks", DEFAULT_MAX_NETWORKS).max(1) as usize,
             interface: config.string("network_interface", "wlan0"),
             terminal_command: config.string("terminal_command", "kitty"),
             settings_command: config.string("settings_command", "hypr-osd-settings"),
@@ -250,6 +277,11 @@ struct Panel {
     reading: RefCell<Option<system::Reading>>,
     updates: Cell<i32>,
     names: RefCell<Vec<String>>,
+    /// The SSID `iw` says the wireless link is on, as last read. It is what
+    /// marks a row in the network tile as connected - nmcli's own `IN-USE` field
+    /// is only a hint and was measured pointing at the wrong access point (see
+    /// `sources`), so the list is drawn against this instead.
+    link: RefCell<Option<String>>,
     /// The bluetooth scan the Scan button started, if it is still running. The
     /// scanner knows when it ends, and `main` holds it because the panel's own
     /// state is what the button and the header chip are drawn from.
@@ -326,6 +358,18 @@ fn main() -> glib::ExitCode {
             // is written on show/hide and a `kill` reaches neither.
             state::write(&state::stats_panel(), false);
 
+            // The network tile's own Scan. It needs no scanner: the read *is* the
+            // scan (`nmcli --rescan yes`), it answers on the main loop like every
+            // other read here, and the list it hands back is the fresh one.
+            node.on_wifi_scan({
+                let panel = panel.clone();
+                Rc::new(move || {
+                    if let Some(state) = panel.get() {
+                        refresh_wifi(state, true);
+                    }
+                })
+            });
+
             let state = Rc::new(RefCell::new(Panel {
                 machine: Machine::default(),
                 node: node.clone(),
@@ -335,6 +379,7 @@ fn main() -> glib::ExitCode {
                 reading: RefCell::new(None),
                 updates: Cell::new(0),
                 names: RefCell::new(Vec::new()),
+                link: RefCell::new(None),
                 scanner,
             }));
             let _ = panel.set(state.clone());
@@ -370,6 +415,12 @@ fn main() -> glib::ExitCode {
                             // The device list, on its own slower clock: it is
                             // the one read here that costs a process per row.
                             refresh_devices(&state, &settings);
+                        }
+                        if every(count, settings.networks_every, settings.tick) {
+                            // The networks in reach, on the same kind of clock
+                            // and for the same reason - a handful of `nmcli`
+                            // processes nobody asked for while the panel is shut.
+                            refresh_wifi(&state, false);
                         }
                         if every(count, settings.updates_every, settings.tick)
                             && system::cached_updates().is_none()
@@ -463,15 +514,48 @@ fn main() -> glib::ExitCode {
                         act(panel, osd, &settings, Action::Show);
                         Ok(String::new())
                     }
+                    // The wireless controls. With no argument this is the radio
+                    // switch the bar's status pill runs on a right click: it has
+                    // to *read* `rfkill` before it can flip it (see `sources`),
+                    // and this is the element that owns that reading. The rest
+                    // name a network by its SSID, which `status` prints - they
+                    // are a script's way of asking, because the card's own rows
+                    // call `sources` directly (they *are* this element).
                     "wifi" => {
-                        sources::set_radio(!sources::radio_on());
-                        // The radio takes a moment to come up (or down) - the
-                        // row is re-read after it has, so the button's own word
-                        // is right by the time anyone looks at it.
+                        match args.get(1).map(String::as_str) {
+                            None => sources::set_radio(!sources::radio_on()),
+                            Some("on") => sources::set_radio(true),
+                            Some("off") => sources::set_radio(false),
+                            Some("scan") => {
+                                // The read *is* the scan (`--rescan yes`), and it
+                                // answers on its own when the card has looked.
+                                refresh_wifi(panel, true);
+                                return Ok(String::new());
+                            }
+                            Some("connect") => match args.get(2) {
+                                Some(ssid) => sources::connect_wifi(ssid),
+                                None => return Err(wifi_usage()),
+                            },
+                            // By device, not by profile: a profile can be renamed
+                            // by hand, the interface cannot.
+                            Some("disconnect") => sources::disconnect_wifi(&settings.interface),
+                            Some("forget") => {
+                                match args.get(2).and_then(|ssid| sources::profile_for(ssid)) {
+                                    Some(profile) => sources::forget_wifi(&profile),
+                                    None => return Err(wifi_usage()),
+                                }
+                            }
+                            Some(_) => return Err(wifi_usage()),
+                        }
+                        // Whatever it was, it takes a moment to take hold - the
+                        // radio comes up, a join gets its lease, a profile is
+                        // deleted - so both reads are repeated once it has had
+                        // one.
                         let panel = panel.clone();
                         let settings = settings.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(800), move || {
+                        glib::timeout_add_local_once(Duration::from_millis(900), move || {
                             render_slow(&panel, &settings);
+                            refresh_wifi(&panel, false);
                         });
                         Ok(String::new())
                     }
@@ -520,7 +604,8 @@ fn main() -> glib::ExitCode {
                     "status" => Ok(status(&panel.borrow(), &settings)),
                     other => Err(format!(
                         "unknown command `{other}` \
-                         (open [connector] [connector] [x y w h] | close | toggle | show | wifi | \
+                         (open [connector] [connector] [x y w h] | close | toggle | show | \
+                         wifi [on|off|scan|connect|disconnect|forget] | \
                          bluetooth on|off|scan | bluetooth connect|disconnect|pair|remove <address> | \
                          status)"
                     )),
@@ -538,16 +623,17 @@ fn main() -> glib::ExitCode {
 /// and nowhere else, so the two programs cannot disagree about whether the panel
 /// is up.
 ///
-/// Showing is also when the bluetooth devices are read: the list is the one thing
-/// in the panel that costs a process per row, so it is asked for when somebody is
-/// about to look at it rather than on the heartbeat.
+/// Showing is also when everything that costs a process is read: both radio
+/// lists and the readings behind the rows. They are asked for when somebody is
+/// about to look at them rather than on the heartbeat, so a panel opened after a
+/// minute of being shut is not a minute out of date.
 fn act(panel: &Rc<RefCell<Panel>>, osd: &Rc<Osd>, settings: &Rc<Settings>, action: Action) {
     match action {
         Action::None => {}
         Action::Show => {
             osd.show();
             state::write(&state::stats_panel(), true);
-            refresh_devices(panel, settings);
+            refresh(panel, settings);
         }
         Action::Hide => {
             osd.hide();
@@ -579,6 +665,23 @@ fn ask_for_updates(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
         let panel = panel.clone();
         let settings = settings.clone();
         move |_| render_readings(&panel, &settings)
+    });
+}
+
+/// Read the networks in reach and the profiles behind them, and repaint the tile
+/// when the answer lands.
+///
+/// The link comes from the panel's own last reading of `iw` rather than from the
+/// async answer, because a row is "connected" when the *link* is on it - see
+/// [`Panel::link`] - and only one read in this program knows that.
+fn refresh_wifi(panel: &Rc<RefCell<Panel>>, rescan: bool) {
+    let link = panel.borrow().link.borrow().clone();
+    sources::refresh_wifi(link, rescan, {
+        let panel = panel.clone();
+        move |networks| {
+            let state = panel.borrow();
+            state.node.render_wifi(networks);
+        }
     });
 }
 
@@ -710,6 +813,12 @@ fn parse_rect(args: &[String]) -> Option<Rect> {
     }
 }
 
+/// What the `wifi` verb accepts - one string, so an unknown sub-verb and a
+/// missing network name cannot describe two different sets of verbs.
+fn wifi_usage() -> String {
+    "usage: wifi [on|off|scan|connect <ssid>|disconnect|forget <ssid>]".to_string()
+}
+
 /// The readings that are cheap enough for the heartbeat: the three sensors and
 /// the update count (a file read - *asking* for a new count is what is slow, and
 /// that only ever happens in the background).
@@ -749,13 +858,22 @@ fn render_readings(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
 /// The rows that each cost a command: the wireless link and its radio, the sink,
 /// the power profile, the backlight and the keyboard layout. None of them change
 /// faster than a person can click a button, so they sit on the slower interval -
-/// and the one that is genuinely slow (the bluetooth device list) is not here at
-/// all: it has its own clock (see [`refresh_devices`]).
+/// and the two that are genuinely slow (the bluetooth device list and the
+/// networks in reach) are not here at all: they have their own clocks (see
+/// [`refresh_devices`] and [`refresh_wifi`]).
 fn render_slow(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
     let network = hardware::network(&settings.interface);
     let radio = sources::radio_on();
     {
-        let state = panel.borrow();
+        let state = panel.borrow_mut();
+        // The link's SSID, remembered for the network list: `iw` is the one read
+        // that knows what is connected (`nmcli`'s own `IN-USE` is not reliable -
+        // see `sources`), and the list is drawn against it.
+        *state.link.borrow_mut() = network
+            .as_ref()
+            .ok()
+            .and_then(|link| link.as_ref())
+            .map(|link| link.ssid.clone());
         state.node.render_network(
             network.clone().ok().flatten().as_ref(),
             network.is_ok(),
@@ -775,6 +893,7 @@ fn refresh(panel: &Rc<RefCell<Panel>>, settings: &Rc<Settings>) {
     render_readings(panel, settings);
     render_slow(panel, settings);
     refresh_devices(panel, settings);
+    refresh_wifi(panel, false);
 }
 
 /// Whether this tick is the one for an interval (the bar's `every`, which this
@@ -948,6 +1067,37 @@ fn status(panel: &Panel, settings: &Settings) -> String {
             } else {
                 format!("  {readings}")
             }
+        ));
+    }
+
+    // The networks in reach, as the tile draws them - and the profile behind
+    // each one, which is what `wifi forget` deletes (the command itself takes the
+    // SSID, because that is what the row shows).
+    let networks = sources::wifi_now(&settings.interface);
+    lines.push(format!(
+        "wifi       {} in reach, {} shown at a time{}",
+        networks.len(),
+        settings.max_networks,
+        if networks.is_empty() {
+            " (none - the radio is off, or nothing answered)"
+        } else {
+            ""
+        }
+    ));
+    for network in &networks {
+        let profile = match network.profile.as_deref() {
+            Some(profile) => format!("  profile {profile}"),
+            None => String::new(),
+        };
+        let band = match &network.band {
+            Some(band) => format!("  {band}"),
+            None => String::new(),
+        };
+        lines.push(format!(
+            "           {}  {}  {}%{profile}{band}",
+            network.ssid,
+            network.detail(),
+            network.signal
         ));
     }
     lines.join("\n")

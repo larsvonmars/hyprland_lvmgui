@@ -17,8 +17,16 @@
 //! one result left a card 566 px tall and one row of text - measured). A fixed
 //! list height gives the card a stable size, which is also calmer to type into:
 //! the thing you are reading does not slide up and down under the pointer.
+//!
+//! The padded list sits in a **scroller** for the same reason, one step further:
+//! the rows are taller on a tablet (the `.touch` rules in `launcher.css`), and a
+//! finger scrolls a list by dragging it. The viewport keeps the height the list
+//! had when it was first painted (`calibrate`), so the card stays the size it
+//! always is and the taller rows scroll instead of stretching it off the screen;
+//! the arrow keys move the selection *and* the scroller (`scroll_to`), which is
+//! what keeps keyboard navigation working across that change.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::gdk;
@@ -63,6 +71,12 @@ pub struct LauncherView {
     /// keyboard into it when the card opens.
     pub entry: gtk::Entry,
     list: gtk::Box,
+    /// The list's viewport: the height is pinned by [`LauncherView::calibrate`]
+    /// so the card keeps its size while the rows under a finger get taller.
+    scroller: gtk::ScrolledWindow,
+    /// The height the viewport was pinned to (`0` until it has been measured).
+    /// Shared, because the one retry after a first frame has to write it too.
+    list_height: Rc<Cell<i32>>,
     empty: gtk::Label,
     rows: RefCell<Vec<gtk::Button>>,
     /// How wide a row's text may be before it is ellipsised. An ellipsised label
@@ -78,7 +92,9 @@ pub struct LauncherView {
     on_click: Rc<RefCell<Option<ClickHandler>>>,
     on_changed: Rc<RefCell<Option<ChangeHandler>>>,
     on_activate: Rc<RefCell<Option<SignalHandler>>>,
-    on_motion: Rc<RefCell<Option<SignalHandler>>>,
+    /// What counts as "not idle on this card": the pointer moving over it, and -
+    /// on a touchscreen, where a pointer does not move - a tap or a scroll.
+    on_activity: Rc<RefCell<Option<SignalHandler>>>,
 }
 
 impl LauncherView {
@@ -107,6 +123,18 @@ impl LauncherView {
         list.add_css_class("results");
         list.set_halign(gtk::Align::Fill);
 
+        // The viewport the results scroll in. Its height is *not* the list's
+        // natural height at every instant - it is the padded list's height when
+        // it was first painted (see the module comment and `calibrate`).
+        let scroller = gtk::ScrolledWindow::new();
+        scroller.add_css_class("results-view");
+        scroller.set_child(Some(&list));
+        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroller.set_propagate_natural_height(false);
+        // A touchscreen scrolls by dragging the list; the fling after the lift is
+        // the only scrolling there is, so it has to be kinetic.
+        scroller.set_kinetic_scrolling(true);
+
         let empty = gtk::Label::new(Some("No matches"));
         empty.add_css_class("empty");
         empty.set_visible(false);
@@ -120,7 +148,7 @@ impl LauncherView {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
         root.add_css_class("launcher");
         root.append(&search_row);
-        root.append(&list);
+        root.append(&scroller);
         root.append(&empty);
         root.append(&hint);
 
@@ -132,6 +160,8 @@ impl LauncherView {
             root,
             entry,
             list,
+            scroller,
+            list_height: Rc::new(Cell::new(0)),
             empty,
             rows: RefCell::new(Vec::new()),
             title_width,
@@ -140,7 +170,7 @@ impl LauncherView {
             on_click: Rc::new(RefCell::new(None)),
             on_changed: Rc::new(RefCell::new(None)),
             on_activate: Rc::new(RefCell::new(None)),
-            on_motion: Rc::new(RefCell::new(None)),
+            on_activity: Rc::new(RefCell::new(None)),
         };
         view.install_signals();
         view
@@ -170,7 +200,7 @@ impl LauncherView {
 
         // Pointer movement over the card is the element's sign of life (it
         // re-arms its idle timer), the same signal the overview watches for.
-        let motion_handler = self.on_motion.clone();
+        let motion_handler = self.on_activity.clone();
         let motion = gtk::EventControllerMotion::new();
         motion.connect_motion(move |_, _, _| {
             if let Some(handler) = motion_handler.borrow().as_ref() {
@@ -178,6 +208,38 @@ impl LauncherView {
             }
         });
         self.root.add_controller(motion);
+
+        // A finger has no pointer to move, so the two signals a touchscreen
+        // gives instead are a press and a scroll. Both are *observed* and let
+        // through: the rows' own clicks and the list's drag-to-scroll still do
+        // their work, this only counts them as activity. The press gesture runs
+        // in the bubble phase, like the one `Osd::stay_open_while_hovered` puts
+        // on a card's content: a button-0 click gesture on an ancestor does not
+        // steal a child button's press, it only sees it.
+        let press_handler = self.on_activity.clone();
+        let press = gtk::GestureClick::new();
+        // Button 0 is every button: a row click, a long press and a two-finger
+        // scroll's touch all count.
+        press.set_button(0);
+        press.connect_pressed(move |_, _, _, _| {
+            if let Some(handler) = press_handler.borrow().as_ref() {
+                handler();
+            }
+        });
+        self.root.add_controller(press);
+
+        let scroll_handler = self.on_activity.clone();
+        let scroll = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::HORIZONTAL,
+        );
+        scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        scroll.connect_scroll(move |_, _, _| {
+            if let Some(handler) = scroll_handler.borrow().as_ref() {
+                handler();
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        self.root.add_controller(scroll);
     }
 
     /// What to do when the query changes (the element searches and redraws).
@@ -197,10 +259,13 @@ impl LauncherView {
         *self.on_click.borrow_mut() = Some(Rc::new(handler));
     }
 
-    /// What to do when the pointer moves over the card (the element counts that
-    /// as "not idle").
-    pub fn on_motion(&self, handler: impl Fn() + 'static) {
-        *self.on_motion.borrow_mut() = Some(Rc::new(handler));
+    /// What to do when the card is *used*: the pointer moves over it, a finger
+    /// taps it, a wheel or the list scrolls under it. The element counts every
+    /// one of those as "not idle", because a card that closed itself while
+    /// somebody was reading it - which is what motion-only counting did on a
+    /// touchscreen - is the bug this exists to prevent.
+    pub fn on_activity(&self, handler: impl Fn() + 'static) {
+        *self.on_activity.borrow_mut() = Some(Rc::new(handler));
     }
 
     /// Draw `rows`, with `selected` wearing the accent, and fill the rest of the
@@ -221,10 +286,55 @@ impl LauncherView {
         }
         drop(buttons);
         self.empty.set_visible(rows.is_empty());
+        // The padded list is complete now, so this is the frame its height can be
+        // measured from - the one thing that pins the card's size.
+        self.calibrate();
         self.select(selected);
     }
 
-    /// Put the accent on one row.
+    /// Pin the list's viewport to the height of the padded list, once.
+    ///
+    /// The list always holds `capacity` rows (see the module comment), so its
+    /// natural height is the card's result height - and it is measured *after*
+    /// the padding rows are in, which is what makes it the whole list rather than
+    /// one row. Taking it once and keeping it is the point: when the `.touch`
+    /// rules make the rows taller, the content grows past this viewport and
+    /// scrolls instead of making the card taller than the screen has room for.
+    ///
+    /// A widget that has never been laid out still measures - GTK's measure phase
+    /// needs no allocation - so the first paint has a number; the idle callback
+    /// is only for the pathological case of a display with no fonts resolved yet.
+    fn calibrate(&self) {
+        if self.list_height.get() > 0 {
+            return;
+        }
+        let natural = self.natural_list_height();
+        if natural > 0 {
+            self.list_height.set(natural);
+            self.scroller.set_size_request(-1, natural);
+            return;
+        }
+        let list = self.list.clone();
+        let scroller = self.scroller.clone();
+        let height = self.list_height.clone();
+        gtk::glib::idle_add_local_once(move || {
+            if height.get() > 0 {
+                return;
+            }
+            let (_, natural, _, _) = list.measure(gtk::Orientation::Vertical, -1);
+            if natural > 0 {
+                height.set(natural);
+                scroller.set_size_request(-1, natural);
+            }
+        });
+    }
+
+    /// The padded list's natural height, or `0` when it cannot be measured yet.
+    fn natural_list_height(&self) -> i32 {
+        self.list.measure(gtk::Orientation::Vertical, -1).1
+    }
+
+    /// Put the accent on one row, and make sure it is on screen.
     pub fn select(&self, index: usize) {
         for (position, button) in self.rows.borrow().iter().enumerate() {
             if position == index {
@@ -233,6 +343,47 @@ impl LauncherView {
                 button.remove_css_class("selected");
             }
         }
+        self.scroll_to(index);
+    }
+
+    /// Move the viewport so row `index` is visible, moving as little as possible.
+    ///
+    /// This is what keeps the arrow keys working when the viewport is shorter
+    /// than the padded list - which is the normal state on a tablet, where the
+    /// rows are finger-sized and the card is not. A row that is already on screen
+    /// is left alone, so walking two rows down does not jump the list around.
+    fn scroll_to(&self, index: usize) {
+        let height = f64::from(self.list_height.get());
+        if height <= 0.0 {
+            return;
+        }
+        let row = height / self.capacity.max(1) as f64;
+        let top = index as f64 * row;
+        let bottom = top + row;
+        let adjustment = self.scroller.vadjustment();
+        let value = adjustment.value();
+        let page = adjustment.page_size();
+        if top < value {
+            adjustment.set_value(top);
+        } else if bottom > value + page {
+            adjustment.set_value(bottom - page);
+        }
+    }
+
+    /// The sizes the card actually came out at: the content widget, and the
+    /// result viewport inside it. `status` prints them, which is how a list that
+    /// grew the card - the thing the padded height and the touch rules exist to
+    /// prevent - is found without measuring a screenshot.
+    pub fn measured(&self) -> String {
+        if self.root.width() == 0 {
+            return "not drawn yet".to_string();
+        }
+        format!(
+            "content {}x{}, results viewport {}px tall",
+            self.root.width(),
+            self.root.height(),
+            self.list_height.get(),
+        )
     }
 
     /// Put the keyboard into the field. Called when the card opens, so that the

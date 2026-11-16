@@ -32,6 +32,14 @@
 //!   mark and reports it, so the element can hang the per-output editor (mode,
 //!   scale, rotation, mirror) off the box as a popover. A drag chooses its box
 //!   too - but quietly, without opening anything.
+//! * **A finger works it too.** A box is only as big as its screen's share of
+//!   the picture, and a stacked layout can draw one smaller than a fingertip -
+//!   so the *hit* area (never the drawn rectangle, which is the information) is
+//!   grown to [`touch::TARGET`] when the press came from a finger, and the
+//!   nearest box's centre wins where two grown areas overlap. The mouse keeps
+//!   the exact rectangle, because a pointer can be aimed. A drag also reports
+//!   itself as activity, so the element's idle-close watchdog cannot take the
+//!   window away while one is in progress.
 //!
 //! The editor is *persistent*: the element keeps the [`Arranger`] across page
 //! re-renders and calls [`Arranger::update`] with the compositor's fresh answer,
@@ -48,6 +56,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use hypr_osd_core::monitors;
 use hypr_osd_core::text;
+use hypr_osd_core::touch;
 
 /// The air a screen keeps from the canvas edge.
 const PAD: i32 = 10;
@@ -78,13 +87,17 @@ type MoveHandler = Rc<dyn Fn(&str, &str)>;
 /// hang the per-output editor off it as a popover.
 type SelectHandler = Rc<dyn Fn(&str, &gtk::Widget)>;
 
-/// What the editor tells its element: where a drop landed, and which box a
-/// click chose.
+/// What the editor tells its element: where a drop landed, which box a click
+/// chose, and that the user is still working the picture.
 pub struct Handlers {
     /// A drop: the connector, and the position it landed on (`1903x1440`).
     pub on_move: MoveHandler,
     /// A click: the connector, and its box.
     pub on_select: SelectHandler,
+    /// Somebody pressed, dragged or let go of the canvas. The element re-arms
+    /// its idle-close watchdog with it: a drag is the longest a finger ever
+    /// stays on this window without a key or a scroll.
+    pub on_activity: Rc<dyn Fn()>,
 }
 
 /// A rectangle in layout coordinates: where an output sits and how large it is.
@@ -542,6 +555,57 @@ fn rectangles(displays: &[monitors::Display]) -> Vec<Rect> {
         .collect()
 }
 
+/// The rectangle a press may land in to mean the cell `cell`.
+///
+/// For a pointer this is the cell itself - a mouse can be aimed, and a click a
+/// few pixels off a screen is meant for the canvas, not for the screen. For a
+/// finger it is the cell *grown around its centre* until both sides reach
+/// [`touch::TARGET`]: a screen in a stacked layout is drawn smaller than its
+/// share of the canvas, and "the laptop is the little box underneath" cannot
+/// require a 20px-accurate tap. A cell that is already big enough is not touched,
+/// so a layout of two large screens behaves exactly as it did.
+fn reachable(cell: Rect, sloppy: bool) -> Rect {
+    if !sloppy {
+        return cell;
+    }
+    let grow_x = (touch::TARGET - cell.w).max(0) / 2;
+    let grow_y = (touch::TARGET - cell.h).max(0) / 2;
+    Rect {
+        x: cell.x - grow_x,
+        y: cell.y - grow_y,
+        w: cell.w + 2 * grow_x,
+        h: cell.h + 2 * grow_y,
+    }
+}
+
+/// The screen a press at `(x, y)` means: the one whose (grown) cell holds the
+/// point, or `None` on the bare canvas.
+///
+/// The grown areas of two neighbouring screens overlap - they are flush, that is
+/// the point of the picture - so the nearest *centre* decides which one a finger
+/// meant. With a pointer the cells do not overlap at all, and the answer is
+/// exactly the box that was clicked.
+fn hit_of(cells: &[Rect], x: f64, y: f64, sloppy: bool) -> Option<usize> {
+    let mut best: Option<(f64, usize)> = None;
+    for (index, cell) in cells.iter().enumerate() {
+        let area = reachable(*cell, sloppy);
+        let inside = x >= f64::from(area.x)
+            && x < f64::from(area.x + area.w)
+            && y >= f64::from(area.y)
+            && y < f64::from(area.y + area.h);
+        if !inside {
+            continue;
+        }
+        let centre_x = f64::from(cell.x) + f64::from(cell.w) / 2.0;
+        let centre_y = f64::from(cell.y) + f64::from(cell.h) / 2.0;
+        let distance = (x - centre_x).powi(2) + (y - centre_y).powi(2);
+        if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+            best = Some((distance, index));
+        }
+    }
+    best.map(|(_, index)| index)
+}
+
 /// The canvas a set of layout rectangles is drawn in: the map from layout pixels
 /// to canvas pixels, and the canvas's own width and height.
 ///
@@ -747,7 +811,11 @@ impl Arranger {
         let gesture = gtk::GestureDrag::new();
         {
             let shared = shared.clone();
-            gesture.connect_drag_begin(move |_, x, y| shared.drag_begin(x, y));
+            // Whether the press came from a finger decides whether the hit
+            // areas grow; a mouse keeps the exact rectangle it always had.
+            gesture.connect_drag_begin(move |gesture, x, y| {
+                shared.drag_begin(x, y, touch::is_touch(gesture));
+            });
         }
         {
             let shared = shared.clone();
@@ -834,11 +902,17 @@ impl Arranger {
                 screen.cell.set(cell);
                 let (logical_w, logical_h) = display.logical_size();
                 screen.logical.set((logical_w, logical_h));
-                screen.size.set_text(&format!("{logical_w} \u{d7} {logical_h}"));
-                screen.item.set_size_request((cell.w - 2 * GAP).max(8), (cell.h - 2 * GAP).max(8));
-                shared
-                    .canvas
-                    .move_(&screen.item, f64::from(cell.x + GAP), f64::from(cell.y + GAP));
+                screen
+                    .size
+                    .set_text(&format!("{logical_w} \u{d7} {logical_h}"));
+                screen
+                    .item
+                    .set_size_request((cell.w - 2 * GAP).max(8), (cell.h - 2 * GAP).max(8));
+                shared.canvas.move_(
+                    &screen.item,
+                    f64::from(cell.x + GAP),
+                    f64::from(cell.y + GAP),
+                );
                 if display.focused {
                     screen.item.add_css_class("focused");
                 } else {
@@ -874,20 +948,14 @@ impl Arranger {
 }
 
 impl Shared {
-    /// The box a press landed on: its index, and its record.
-    fn hit(&self, x: f64, y: f64) -> Option<(usize, Rc<Screen>)> {
-        self.screens
-            .borrow()
-            .iter()
-            .enumerate()
-            .find_map(|(index, screen)| {
-                let cell = screen.cell.get();
-                (x >= f64::from(cell.x)
-                    && x < f64::from(cell.x + cell.w)
-                    && y >= f64::from(cell.y)
-                    && y < f64::from(cell.y + cell.h))
-                .then(|| (index, screen.clone()))
-            })
+    /// The box a press landed on: its index, and its record. `sloppy` grows the
+    /// hit areas to a fingertip (see [`reachable`]); a pointer keeps the exact
+    /// rectangle.
+    fn hit(&self, x: f64, y: f64, sloppy: bool) -> Option<(usize, Rc<Screen>)> {
+        let screens = self.screens.borrow();
+        let cells: Vec<Rect> = screens.iter().map(|screen| screen.cell.get()).collect();
+        let index = hit_of(&cells, x, y, sloppy)?;
+        Some((index, screens.get(index)?.clone()))
     }
 
     /// Mark one box as the chosen one - the only place the `selected` class
@@ -937,8 +1005,12 @@ impl Shared {
         (pointer, landing)
     }
 
-    fn drag_begin(&self, x: f64, y: f64) {
-        let Some((index, screen)) = self.hit(x, y) else {
+    fn drag_begin(&self, x: f64, y: f64, sloppy: bool) {
+        // A drag is a person working the picture, whichever box it started on
+        // (or on none): the element's watchdog is re-armed before anything else
+        // can decide the press was a miss.
+        (self.handlers.on_activity)();
+        let Some((index, screen)) = self.hit(x, y, sloppy) else {
             self.held.set(None);
             return;
         };
@@ -954,11 +1026,15 @@ impl Shared {
         // Lifted above its siblings for the journey: re-appending puts it last
         // on the Fixed, so it draws over everything it crosses.
         self.canvas.remove(&screen.item);
-        self.canvas
-            .put(&screen.item, f64::from(cell.x + GAP), f64::from(cell.y + GAP));
+        self.canvas.put(
+            &screen.item,
+            f64::from(cell.x + GAP),
+            f64::from(cell.y + GAP),
+        );
     }
 
     fn drag_update(&self, dx: f64, dy: f64) {
+        (self.handlers.on_activity)();
         let Some((index, from_x, from_y, _)) = self.held.get() else {
             return;
         };
@@ -990,8 +1066,11 @@ impl Shared {
         } else {
             self.ghost
                 .set_size_request((shown.w - 2 * GAP).max(8), (shown.h - 2 * GAP).max(8));
-            self.canvas
-                .move_(&self.ghost, f64::from(shown.x + GAP), f64::from(shown.y + GAP));
+            self.canvas.move_(
+                &self.ghost,
+                f64::from(shown.x + GAP),
+                f64::from(shown.y + GAP),
+            );
             self.ghost.set_visible(true);
         }
         // The lines the snap answered to: a shared edge, an adjacency, a centre,
@@ -1020,6 +1099,7 @@ impl Shared {
     }
 
     fn drag_end(&self, dx: f64, dy: f64) {
+        (self.handlers.on_activity)();
         let Some((index, from_x, from_y, was)) = self.held.take() else {
             return;
         };
@@ -1489,7 +1569,10 @@ mod tests {
             h: 912,
         };
         let under = placed(laptop, &[desk], Axis::Vertical, 1, 64, true, false);
-        assert_eq!((under.rect.x, under.rect.y), (1368 + (1440 - 1368) / 2, 2560));
+        assert_eq!(
+            (under.rect.x, under.rect.y),
+            (1368 + (1440 - 1368) / 2, 2560)
+        );
         assert!(!overlaps(under.rect, desk));
     }
 
@@ -1670,7 +1753,14 @@ mod tests {
 
     /// A `monitors::Display` for the tests: a 2x panel is twice the pixels but
     /// not twice the layout, which is exactly what the picture must get right.
-    fn display(name: &str, width: i32, height: i32, x: i32, y: i32, scale: f64) -> monitors::Display {
+    fn display(
+        name: &str,
+        width: i32,
+        height: i32,
+        x: i32,
+        y: i32,
+        scale: f64,
+    ) -> monitors::Display {
         monitors::Display {
             name: name.to_string(),
             width,
@@ -1746,5 +1836,63 @@ mod tests {
         assert!(!same_outputs(&["DP-1", "eDP-1"], &both));
         assert!(!same_outputs(&["eDP-1"], &both));
         assert!(!same_outputs(&["eDP-1", "DP-2"], &both));
+    }
+
+    /// A box drawn smaller than a fingertip (a stacked layout can do that) is
+    /// hittable from a strip of canvas around it - but only for a finger: a
+    /// pointer keeps the exact rectangle it has always had, so a click beside a
+    /// screen is still a click on the canvas.
+    #[test]
+    fn a_fingertip_can_land_beside_a_box_drawn_smaller_than_a_target() {
+        let small = Rect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 16,
+        };
+        // Twelve pixels to the right of it: no part of the drawn box.
+        assert_eq!(hit_of(&[small], 40.0, 20.0, false), None);
+        // The grown area is TARGET wide and tall, centred on the cell.
+        let grown = reachable(small, true);
+        assert_eq!((grown.w, grown.h), (touch::TARGET, touch::TARGET));
+        assert_eq!(grown.x + grown.w / 2, small.x + small.w / 2);
+        assert_eq!(grown.y + grown.h / 2, small.y + small.h / 2);
+        assert_eq!(hit_of(&[small], 40.0, 20.0, true), Some(0));
+        // A box that is already big enough is left exactly alone.
+        let big = Rect {
+            x: 0,
+            y: 0,
+            w: 300,
+            h: 200,
+        };
+        assert_eq!(reachable(big, true), big);
+    }
+
+    /// Two grown hit areas overlap because the boxes are flush - the nearest
+    /// centre decides, so a finger picks the screen it is really over rather than
+    /// whichever happened to be built first.
+    #[test]
+    fn the_nearest_centre_wins_where_two_grown_areas_overlap() {
+        let left = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 20,
+        };
+        let right = Rect {
+            x: 20,
+            y: 0,
+            w: 20,
+            h: 20,
+        };
+        // Both grown cells cover x = 18..22; the point decides.
+        assert_eq!(hit_of(&[left, right], 22.0, 10.0, true), Some(1));
+        assert_eq!(hit_of(&[left, right], 18.0, 10.0, true), Some(0));
+        // With a pointer the cells do not overlap and the box is the answer.
+        assert_eq!(hit_of(&[left, right], 20.0, 10.0, false), Some(1));
+        assert_eq!(hit_of(&[left, right], 19.0, 10.0, false), Some(0));
+        // The bare canvas is nobody's box.
+        assert_eq!(hit_of(&[left, right], 100.0, 100.0, true), None);
+        assert_eq!(hit_of(&[], 0.0, 0.0, true), None);
     }
 }

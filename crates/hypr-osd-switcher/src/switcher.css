@@ -53,3 +53,31 @@ label.hint {
     font-size: 11px;
     color: @fg_faint;
 }
+
+/* ---- touch: a fingertip instead of a pointer ------------------------------ */
+/* The shell adds `window.osd.touch` while the machine is a tablet (see
+ * core::touch), and these rules only then apply. The tiles are already big enough
+ * to hit - 132px - but the *selection* has to be readable at arm's length, so the
+ * padding and the two lines of title grow, and the hint line grows with them
+ * because on a tablet it says "tap a window" instead of naming keys that are not
+ * there. A mouse session looks exactly as it always did: none of this applies
+ * without the class. */
+window.osd.touch button.tile {
+    padding: 16px 10px;
+}
+
+window.osd.touch label.tile-title {
+    font-size: 13px;
+}
+
+window.osd.touch label.hint {
+    font-size: 12px;
+}
+
+/* Holding a finger on a tile shows the same pressed fill a mouse button shows;
+ * a touchscreen has no hover, so the selected tile's accent is the only
+ * "where am I" signal and it must not be washed out by an :active state. */
+window.osd.touch button.tile:active {
+    background-color: @accent_tint;
+    border-color: @accent;
+}

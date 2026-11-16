@@ -1,12 +1,12 @@
-//! `hypr-osd-lock-vars` — rewrite the lock screen's generated variables.
+//! `hypr-osd-lock-vars` — rewrite the lock screen's generated config.
 //!
-//! hyprlock cannot read CSS, so the palette and the lock screen's knobs are
-//! written into `~/.config/hypr/hyprlock-vars.conf`, and the hand-written
-//! `~/.config/hypr/hyprlock.conf` sources it (see [`hypr_osd_core::lock`]). This
-//! is that write without a window:
+//! hyprlock cannot read CSS, so the whole lock screen — the palette from
+//! `~/.config/hypr-osd/theme.css` and the knobs of `~/.config/hypr-osd/lock.conf`
+//! — is generated into `~/.config/hypr/hyprlock.conf` (see
+//! [`hypr_osd_core::lock`]). This is that write without a window:
 //!
-//! * the installer runs it right after installing the structure, so a fresh
-//!   machine has a lock screen that reads theme.css;
+//! * the installer runs it after installing the binaries, so a fresh machine has
+//!   a lock screen that reads theme.css;
 //! * it is worth running by hand after retinting `~/.config/hypr-osd/theme.css`,
 //!   since the generated file is cut from the palette - the settings window also
 //!   writes it when it opens, and on every change on its Lock screen page.
@@ -27,7 +27,7 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
-    match lock::write_vars() {
+    match lock::write() {
         Ok(path) => {
             println!("wrote {}", path.display());
             std::process::ExitCode::SUCCESS

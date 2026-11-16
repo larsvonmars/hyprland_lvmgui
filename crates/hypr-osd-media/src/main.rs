@@ -18,6 +18,20 @@
 //!   status               print "Title — Artist", no card
 //!   (no verb)            start the daemon and wait for something to play
 //! ```
+//!
+//! # On a tablet
+//!
+//! The card appears by itself (a track started), so unlike the switcher it needs
+//! no new entry point - but it still has to be leaveable by finger: while the
+//! machine is a tablet, every reveal arms a tap catcher around the card, so a tap
+//! anywhere else closes it before the duration does. The two skip buttons are
+//! icons explained by tooltips, which a touchscreen cannot reach; on a tablet the
+//! card therefore shows a line under them saying what they do and how it closes
+//! (see [`view::MediaView::apply_touch`]), the controls grow to 44px under
+//! `.touch`, and the text column gives up exactly the width they grew by so the
+//! card stays the width the config asked for. The default duration is longer on a
+//! tablet - the title, the artist and the cover are all read at arm's length; a
+//! `duration_ms` in the config is used on both and is never overruled.
 
 mod view;
 
@@ -28,6 +42,7 @@ use std::time::Duration;
 use gtk::glib;
 use gtk::prelude::*;
 use hypr_osd_core::mpris::{self, Direction, Player};
+use hypr_osd_core::touch;
 use hypr_osd_core::{css, run, Config, Content, Opts, Osd};
 
 use view::MediaView;
@@ -46,13 +61,18 @@ const ELEMENT: &str = "media";
 // The card is shown for longer than the volume card on purpose: there is a
 // title and an artist to read, and often a cover to look at.
 const DEFAULT_DURATION_MS: u64 = 4000;
+/// The same default on a tablet: a finger is not as quick as a keypress, and the
+/// cover and the title are what the card is for. Config always wins (see
+/// [`Settings::duration`]).
+const DEFAULT_TOUCH_DURATION_MS: u64 = 7000;
 const DEFAULT_WIDTH: i32 = 400;
 const DEFAULT_BOTTOM_MARGIN: f64 = 0.12;
 
 /// What the config file resolved to.
 struct Settings {
-    /// How long the card stays after the last change.
-    duration: Duration,
+    /// How long the card stays after the last change, when the config says.
+    /// `None` means the element's own default, which is longer on a tablet.
+    duration: Option<Duration>,
     /// Only show the card for something that is actually *playing*. A player
     /// that loads a track while paused (a queue, a browser restoring tabs) is
     /// not "a new medium starting to be played".
@@ -66,11 +86,32 @@ struct Settings {
 impl Settings {
     fn load(config: &Config) -> Self {
         Settings {
-            duration: config.millis("duration_ms", DEFAULT_DURATION_MS),
+            // `get` rather than `millis`: the typed getter cannot tell a value
+            // that was written down from the default it would have supplied, and
+            // the two modes have different defaults.
+            duration: config
+                .get("duration_ms")
+                .and_then(|raw| raw.trim().parse::<u64>().ok())
+                .map(Duration::from_millis),
             only_when_playing: config.bool("only_when_playing", true),
             width: config.i32("width", DEFAULT_WIDTH),
             bottom_margin: config.float("bottom_margin", DEFAULT_BOTTOM_MARGIN),
         }
+    }
+
+    /// How long a reveal should last, on the machine as it is right now.
+    ///
+    /// Asked when the card is shown rather than at start-up: a session that
+    /// started with the cover attached can be folded into a tablet, and the card
+    /// revealed then should get the tablet's reading time.
+    fn duration(&self) -> Duration {
+        self.duration.unwrap_or_else(|| {
+            Duration::from_millis(if touch::tablet() {
+                DEFAULT_TOUCH_DURATION_MS
+            } else {
+                DEFAULT_DURATION_MS
+            })
+        })
     }
 }
 
@@ -99,8 +140,26 @@ fn main() -> glib::ExitCode {
         let view = view.clone();
         let settings = settings.clone();
         Box::new(move |osd: &Rc<Osd>| {
-            let media = Rc::new(MediaView::new(settings.width));
+            let media = Rc::new(MediaView::new(settings.width, settings.bottom_margin));
+            // The daemon starts in whatever mode the machine is in, and the shell
+            // only calls the tablet handlers on a *change*: the starting answer
+            // has to be applied by hand.
+            media.apply_touch(touch::tablet());
             media.hook(osd);
+
+            // The machine can be folded (or unfolded) under the card: the CSS
+            // follows the window's `touch` class on its own, but the width split
+            // and the way out do not.
+            let watch = osd.clone();
+            let watched = media.clone();
+            osd.on_tablet_change(move |tablet| {
+                watched.apply_touch(tablet);
+                if watch.is_visible() {
+                    watched.arm_touch(&watch);
+                } else {
+                    watch.tap_catcher(None, || {});
+                }
+            });
 
             // The card's trigger. Everything it needs to know arrives on this
             // one callback, so the rules for "is this worth showing?" live in
@@ -120,7 +179,10 @@ fn main() -> glib::ExitCode {
                         return;
                     }
                     media.render(&event.track);
-                    osd.reveal(settings.duration);
+                    osd.reveal(settings.duration());
+                    // A card that appeared by itself still needs a way out on a
+                    // tablet - a tap anywhere outside it.
+                    media.arm_touch(&osd);
                 }
             });
             // The follower is a child process; it outlives its parent unless it
@@ -163,7 +225,8 @@ fn main() -> glib::ExitCode {
                             return Err("nothing is loaded in the player".to_string());
                         }
                         view.render(&event.track);
-                        osd.reveal(settings.duration);
+                        osd.reveal(settings.duration());
+                        view.arm_touch(osd);
                         Ok(String::new())
                     }
                     "status" => {

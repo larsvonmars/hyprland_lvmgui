@@ -107,7 +107,9 @@ button.drawer.selected label.drawer-count {
 
 /* ---- the grid: the applications ----------------------------------------- */
 scrolledwindow.tiles,
-scrolledwindow.tiles viewport {
+scrolledwindow.tiles viewport,
+scrolledwindow.sidebar-view,
+scrolledwindow.sidebar-view viewport {
     background: none;
     border: none;
 }
@@ -186,4 +188,57 @@ label.tile-letter {
 image.pin {
     color: @accent2;
     padding: 2px 4px 0 0;
+}
+
+/* ---- touch: a fingertip instead of a pointer ---------------------------- */
+/* `window.osd.touch` is added by the shell while the machine is folded into a
+ * tablet (see `core::touch`), so none of this applies to a laptop. The shared
+ * recipes in base.css already grow the chips, the tile padding and the
+ * scrollbar; what is specific to this panel is the two things a finger needs
+ * that a pointer did not: a row it can hit, and words it can read at arm's
+ * length.
+ *
+ * The tile *size* is deliberately not touched here: it comes from the config and
+ * the grid is laid out around it (`Settings::columns`), and a CSS width would
+ * disagree with the arithmetic the arrow keys use. A tile is 100x96 already,
+ * which is a fingertip target; what grows is the letter that stands in for an
+ * icon and the hint under the grid. Where a label is capped in code
+ * (`text::cap_width`), the size stays as it was: the cap is measured against the
+ * laptop face and a bigger one would widen the tile it was meant to protect. */
+window.osd.touch box.search-row {
+    padding: 12px 14px;
+    border-radius: 14px;
+}
+
+/* `* { font-size: 13px }` in base.css beats inheritance, so the size has to be
+ * set on the node that draws the characters rather than on the entry. */
+window.osd.touch entry.search text {
+    font-size: 17px;
+}
+
+/* A drawer is the sidebar's only way from one category to another without
+ * typing, so it is a row rather than a line of text in tablet mode. GTK's
+ * min-height is the *border box* - padding included - so 44 is the whole row.
+ * The sidebar itself scrolls when a machine has more categories than fit beside
+ * the grid. */
+window.osd.touch button.drawer {
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 10px;
+}
+
+window.osd.touch label.drawer-count {
+    font-size: 11px;
+}
+
+/* The stand-in letter, which is the one thing in a tile with a font size of its
+ * own (the name is capped in code - see the note above). */
+window.osd.touch label.tile-letter {
+    font-size: 32px;
+}
+
+/* The keys hint is a sentence to a mouse user and a legend to a finger: it is
+ * the only place the panel says a tile opens on a tap and pins on a hold. */
+window.osd.touch label.hint {
+    font-size: 12px;
 }

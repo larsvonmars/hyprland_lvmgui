@@ -127,3 +127,72 @@ label.empty {
     color: @fg_faint;
     padding: 10px 4px;
 }
+
+/* ---- touch: a fingertip instead of a pointer ---------------------------- */
+/* `window.osd.touch` is added by the shell while the machine is folded into a
+ * tablet (see `core::touch`), so none of this applies to a laptop. The shared
+ * recipes in base.css already grow the chips and the scrollbar; what is specific
+ * to this card is that its list is the one thing a finger has to *scroll* and
+ * its rows the one thing it has to hit.
+ *
+ * The title and subtitle sizes are deliberately left alone: they are capped in
+ * code against the laptop face (`text::cap_width`), and a bigger font would make
+ * a capped label wider than the cap it was given - one long file name would then
+ * decide the width of the whole card. The rows grow in height instead. */
+window.osd.touch box.search-row {
+    padding: 12px 14px;
+    border-radius: 14px;
+}
+
+/* `* { font-size: 13px }` in base.css beats inheritance, so the size has to be
+ * set on the node that draws the characters rather than on the entry. */
+window.osd.touch entry.search text {
+    font-size: 17px;
+}
+
+/* A result is a row you hit with a fingertip: 56 logical pixels - a title and a
+ * subtitle already take 30 of them, and a target that is only exactly 44 leaves
+ * no room for the finger to be imprecise - rather than the pointer-sized line it
+ * is on a laptop. GTK's min-height is the *border box*, so this is the whole row.
+ * The list keeps its viewport height (`view::LauncherView::calibrate`) and
+ * scrolls. */
+window.osd.touch button.result {
+    min-height: 56px;
+    padding: 9px 10px;
+    border-radius: 12px;
+}
+
+window.osd.touch label.empty {
+    font-size: 13px;
+}
+
+window.osd.touch label.hint {
+    font-size: 12px;
+}
+
+/* ---- the results viewport ------------------------------------------------ */
+/* A scroller arrived with the touch work: the list scrolls, so the theme's
+ * document-scrollbar has to be told it is a bar in a card. Only colours are
+ * changed, and the geometry is restated beside them: the theme's slider is
+ * drawn with a transparent border and a matching negative margin, and taking the
+ * border away without the rest leaves GTK complaining that the slider's minimum
+ * size is negative (the same lesson as the applications panel's grid). */
+scrolledwindow.results-view,
+scrolledwindow.results-view viewport {
+    background: none;
+    border: none;
+}
+
+scrolledwindow.results-view scrollbar slider {
+    background-color: @surface_h;
+    background-clip: padding-box;
+    border: 8px solid transparent;
+    border-radius: 99px;
+    min-width: 8px;
+    min-height: 8px;
+    margin: -8px;
+}
+
+scrolledwindow.results-view scrollbar slider:hover {
+    background-color: @accent_tint;
+}

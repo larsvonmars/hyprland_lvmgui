@@ -38,12 +38,18 @@
 //! * [`energy`] - the power profile the machine is in and the compositor effects
 //!   worth dropping while it is set to save, shared by the settings window's
 //!   System tab and the `hypr-osd-energy` daemon that enforces it.
+//! * [`bluetooth`] - the controller, the devices BlueZ knows and the actions a
+//!   card can take on them, shared by the system popup's compact tile and the
+//!   `hypr-osd-bluetooth` manager.
 //! * [`lock`] - the lock screen's generated half: the palette and the knobs, as
 //!   the variables `hyprlock.conf` is written in terms of.
 //! * [`icons`] - a window's class turned into the application's icon.
 //! * [`hyprctl`] - asking Hyprland itself (the focused output, the window list,
 //!   a dispatch) the same way audio goes through `wpctl`.
 //! * [`Osd`] - the layer surface, its card and the auto-hide timer.
+//! * [`touch`] - the finger and the tablet: which events came from a
+//!   touchscreen, whether the machine is folded into a tablet right now, the
+//!   long press behind a right click, and the on-screen keyboard.
 //! * [`run`] - the application shell: GTK4 + `GApplication`, single instance,
 //!   command line forwarding, so `element up` in a keybinding talks to the
 //!   already-running instance and never opens a second window.
@@ -55,6 +61,7 @@
 
 pub mod apps;
 pub mod art;
+pub mod bluetooth;
 pub mod config;
 pub mod css;
 pub mod desktop;
@@ -67,6 +74,7 @@ pub mod hypripc;
 pub mod icons;
 pub mod keymap;
 pub mod lock;
+pub mod login;
 pub mod monitors;
 pub mod mpris;
 mod osd;
@@ -76,9 +84,12 @@ pub mod state;
 pub mod system;
 pub mod text;
 pub mod timer;
+pub mod touch;
+pub mod wallpaper;
 pub mod windows;
 
 pub use config::Config;
 pub use osd::{
-    run, Build, Content, Handle, Keyboard, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y, SHADOW_PAD,
+    run, Build, Content, Handle, Hole, Keyboard, Opts, Osd, Placement, CARD_PAD_X, CARD_PAD_Y,
+    SHADOW_PAD,
 };

@@ -17,7 +17,10 @@
 //!   with its content but does not shrink with it (measured - the launcher hit the
 //!   same wall), so a grid that sized itself to its tiles would leave the panel as
 //!   tall as the largest drawer of the session. A pinned scroller makes the panel
-//!   one size, always - which is also why picking a drawer does not move it.
+//!   one size, always - which is also why picking a drawer does not move it. The
+//!   sidebar is pinned to the same height for the same reason: a tablet's drawer
+//!   rows are finger-sized, and a machine with a dozen categories would otherwise
+//!   let the sidebar decide the card's height instead of the grid.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -27,6 +30,7 @@ use gtk::gdk;
 use gtk::prelude::*;
 use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::text;
+use hypr_osd_core::touch;
 
 use crate::Settings;
 
@@ -44,7 +48,7 @@ pub const BODY_GAP: i32 = 10;
 /// The keys, said once. The element restores this line after having replaced it
 /// with an answer ("nothing here matches that").
 pub const KEYS_HINT: &str = "\u{21b5} open \u{b7} arrows walk \u{b7} tab changes drawer \u{b7} \
-     right-click pins \u{b7} esc close";
+     right-click / hold pins \u{b7} esc close";
 
 /// One entry in the sidebar: a drawer, how many applications are in it, and
 /// whether it is the one being shown.
@@ -122,7 +126,9 @@ pub struct AppsView {
     on_drawer: Rc<RefCell<Option<ClickHandler>>>,
     on_tile: Rc<RefCell<Option<ClickHandler>>>,
     on_pin: Rc<RefCell<Option<ClickHandler>>>,
-    on_motion: Rc<RefCell<Option<SignalHandler>>>,
+    /// What counts as "not idle on this card": the pointer moving over it, and -
+    /// on a touchscreen, where a pointer does not move - a tap or a scroll.
+    on_activity: Rc<RefCell<Option<SignalHandler>>>,
 }
 
 impl AppsView {
@@ -151,6 +157,21 @@ impl AppsView {
         sidebar.set_size_request(settings.sidebar_width, -1);
         sidebar.set_valign(gtk::Align::Start);
 
+        // The sidebar scrolls, and is pinned to the grid's height - the same
+        // reason the grid is: the card is one size, always (see the module
+        // comment). It matters most in tablet mode, where a drawer is a 44px
+        // target and a machine with a dozen categories would otherwise make the
+        // panel as tall as the sidebar instead of as tall as the grid.
+        let sidebar_scroller = gtk::ScrolledWindow::new();
+        sidebar_scroller.add_css_class("sidebar-view");
+        sidebar_scroller.set_child(Some(&sidebar));
+        sidebar_scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        sidebar_scroller.set_size_request(settings.sidebar_width, settings.grid_height);
+        sidebar_scroller.set_propagate_natural_height(false);
+        // A finger scrolls by dragging, and the fling after the lift is the only
+        // scrolling there is on a touchscreen.
+        sidebar_scroller.set_kinetic_scrolling(true);
+
         let grid = gtk::Grid::new();
         grid.add_css_class("grid");
         // The tile gap, not the bar's: this is the spacing `Settings::columns`
@@ -172,10 +193,15 @@ impl AppsView {
         // the panel one size whatever the drawer holds (see the module comment).
         scroller.set_size_request(settings.grid_width(), settings.grid_height);
         scroller.set_propagate_natural_height(false);
+        // A finger scrolls by dragging the grid, not by turning a wheel: the
+        // fling after the lift is the only scrolling there is on a touchscreen,
+        // so kinetic scrolling is what makes the pane usable at all when it is
+        // taller than the card in tablet mode (the `.touch` rules in `apps.css`).
+        scroller.set_kinetic_scrolling(true);
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, BODY_GAP);
         body.add_css_class("body");
-        body.append(&sidebar);
+        body.append(&sidebar_scroller);
         body.append(&scroller);
 
         let hint = gtk::Label::new(Some(KEYS_HINT));
@@ -208,7 +234,7 @@ impl AppsView {
             on_drawer: Rc::new(RefCell::new(None)),
             on_tile: Rc::new(RefCell::new(None)),
             on_pin: Rc::new(RefCell::new(None)),
-            on_motion: Rc::new(RefCell::new(None)),
+            on_activity: Rc::new(RefCell::new(None)),
         };
         view.install_signals();
         view
@@ -225,7 +251,7 @@ impl AppsView {
             }
         });
 
-        let motion_handler = self.on_motion.clone();
+        let motion_handler = self.on_activity.clone();
         let motion = gtk::EventControllerMotion::new();
         motion.connect_motion(move |_, _, _| {
             if let Some(handler) = motion_handler.borrow().as_ref() {
@@ -233,6 +259,38 @@ impl AppsView {
             }
         });
         self.root.add_controller(motion);
+
+        // A finger has no pointer to move, so the two signals a touchscreen
+        // gives instead are a press and a scroll. Both are *observed* and let
+        // through: the tiles' own clicks and the grid's drag-to-scroll still do
+        // their work, this only counts them as activity. The press gesture runs
+        // in the bubble phase, like the one `Osd::stay_open_while_hovered` puts
+        // on a card's content: a button-0 click gesture on an ancestor does not
+        // steal a child button's press, it only sees it.
+        let press_handler = self.on_activity.clone();
+        let press = gtk::GestureClick::new();
+        // Button 0 is every button: a tile's primary click, a long press and a
+        // two-finger scroll's touch all count.
+        press.set_button(0);
+        press.connect_pressed(move |_, _, _, _| {
+            if let Some(handler) = press_handler.borrow().as_ref() {
+                handler();
+            }
+        });
+        self.root.add_controller(press);
+
+        let scroll_handler = self.on_activity.clone();
+        let scroll = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::HORIZONTAL,
+        );
+        scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        scroll.connect_scroll(move |_, _, _| {
+            if let Some(handler) = scroll_handler.borrow().as_ref() {
+                handler();
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        self.root.add_controller(scroll);
     }
 
     /// What to do when the query changes (the element filters and redraws).
@@ -255,10 +313,13 @@ impl AppsView {
         *self.on_pin.borrow_mut() = Some(Rc::new(handler));
     }
 
-    /// What to do when the pointer moves over the panel (the element counts that
-    /// as "not idle").
-    pub fn on_motion(&self, handler: impl Fn() + 'static) {
-        *self.on_motion.borrow_mut() = Some(Rc::new(handler));
+    /// What to do when the panel is *used*: the pointer moves over it, a finger
+    /// taps it, a wheel or a list scrolls under it. The element counts every one
+    /// of those as "not idle", because a panel that closed itself while somebody
+    /// was reading it - which is what motion-only counting did on a touchscreen -
+    /// is the bug this exists to prevent.
+    pub fn on_activity(&self, handler: impl Fn() + 'static) {
+        *self.on_activity.borrow_mut() = Some(Rc::new(handler));
     }
 
     /// How many tiles fit in a row - the number the element's arrow keys need.
@@ -494,23 +555,29 @@ impl AppsView {
         {
             let on_tile = self.on_tile.clone();
             let position = position.clone();
-            button.connect_clicked(move |_| {
+            // `touch::on_click` rather than the button's own `clicked`: a tile
+            // also has a *long press* (pin/unpin), and only the shared helper
+            // knows that a long press has already handled the gesture - the
+            // button's `clicked` would fire as well and open the very application
+            // the user was holding to pin.
+            touch::on_click(&button, move |_| {
                 if let Some(handler) = on_tile.borrow().as_ref() {
                     handler(position.get());
                 }
             });
         }
         {
+            // `touch::on_secondary` is both gestures at once: a right click for
+            // the mouse, and the long press a finger has instead of one. They are
+            // deliberately one action - "the other thing a tile can do" - rather
+            // than two, so the touchscreen path cannot drift from the pointer's.
             let on_pin = self.on_pin.clone();
             let position = position.clone();
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(gdk::BUTTON_SECONDARY);
-            gesture.connect_pressed(move |_, _, _, _| {
+            touch::on_secondary(&button, move || {
                 if let Some(handler) = on_pin.borrow().as_ref() {
                     handler(position.get());
                 }
             });
-            button.add_controller(gesture);
         }
 
         TileWidgets {

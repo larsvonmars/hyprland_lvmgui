@@ -123,3 +123,77 @@ label.hint {
     font-size: 11px;
     color: @fg_faint;
 }
+
+/* ── dragging a window onto a workspace ──────────────────────────────────── */
+
+/* The tile being carried. It stays where it was picked up (the pointer carries
+ * it, in effect), but it steps back so that the thing it is *over* is what the
+ * eye follows. */
+button.tile.dragging {
+    background-color: @surface;
+    border-color: @border;
+    opacity: 0.55;
+}
+
+/* What the drop would land on, tile or chip: the same accent the selection
+ * wears, because it is the same statement - "this is what the gesture is
+ * about". Declared after `button.chip.current` so that a chip which is both the
+ * current workspace and the drop target reads as the target. */
+button.tile.drop-target,
+button.chip.drop-target {
+    background-color: @accent_tint;
+    border-color: @accent;
+    color: @fg;
+}
+
+button.tile.drop-target label.tile-title {
+    color: @fg;
+}
+
+/* The Recapture chip: the one action in the strip that is not a workspace, and
+ * the R key's hand on a touchscreen. It keeps the chip's capsule shape but wears
+ * the dimmer text, so a glance still says "these are workspaces, that is a
+ * button". It is drawn from `view.rs` (icon + word) rather than a plain label. */
+button.chip.action {
+    color: @fg_faint;
+}
+
+button.chip.action:hover {
+    background-color: @accent_tint;
+    color: @accent;
+}
+
+label.action-label {
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* ---- touch: a fingertip instead of a pointer ------------------------------ */
+/* The shell adds `window.osd.touch` while the machine is a tablet (see
+ * core::touch). The pointer chip is a 2px-padded capsule - a 20px-tall target
+ * that a mouse finds and a fingertip does not - so on a tablet the chips grow to
+ * the 44px the shared touch rules use (24px of content plus 10px of padding a
+ * side, the height `view::TOUCH_STRIP` gives the strip), and the type with them.
+ * The tiles are already large; only their titles and the badge grow. */
+window.osd.touch button.chip {
+    min-height: 24px;
+    padding: 10px 14px;
+    font-size: 13px;
+}
+
+window.osd.touch button.chip label {
+    font-size: 13px;
+}
+
+window.osd.touch label.hint {
+    font-size: 12px;
+}
+
+window.osd.touch label.ws-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+}
+
+window.osd.touch label.tile-title {
+    font-size: 12px;
+}

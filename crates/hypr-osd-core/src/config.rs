@@ -54,11 +54,20 @@ impl Config {
         let mut values = HashMap::new();
         if let Ok(text) = fs::read_to_string(&path) {
             for line in text.lines() {
-                // `#` starts a comment, including at the end of a line.
-                let line = line.split('#').next().unwrap_or_default().trim();
-                if let Some((key, value)) = line.split_once('=') {
-                    values.insert(key.trim().to_string(), value.trim().to_string());
+                let line = line.trim();
+                // A line whose first character is `#` is a comment, including a
+                // commented-out key (`# width = 300`), which must not be read as a
+                // key called `# width`.
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
                 }
+                let Some((key, rest)) = line.split_once('=') else {
+                    continue;
+                };
+                values.insert(
+                    key.trim().to_string(),
+                    strip_comment(rest).trim().to_string(),
+                );
             }
         }
         Config { path, values }
@@ -81,10 +90,11 @@ impl Config {
 
     /// A text setting, e.g. `clock_format = %H:%M`.
     ///
-    /// An empty value means "the default", like every other key. Note that the
-    /// reader strips everything after a `#`, so a value cannot contain one - a
-    /// format string that needs a literal `#` would have to spell it `%H`-style
-    /// (none of the presets here do).
+    /// An empty value means "the default", like every other key. A value may
+    /// begin with `#` (a colour: `accent = #33ccff`) - a `#` only starts an
+    /// inline comment once there is a value before it, so the theme's colours can
+    /// be written in their own spelling. A value that needs a literal ` #` still
+    /// cannot have one.
     pub fn string(&self, key: &str, default: &str) -> String {
         self.values
             .get(key)
@@ -206,12 +216,40 @@ pub fn edit_value(path: &Path, key: &str, value: Option<&str>) -> std::io::Resul
     fs::write(path, body)
 }
 
+/// The value part of a line, without an inline comment.
+///
+/// A `#` is only a comment once there is a value in front of it: the first one in
+/// `accent = #33ccff` has nothing before it and is the colour's own spelling,
+/// while the one in `height = 40  # tall` follows a value and ends the line. A
+/// second `#` after a colour (`accent = #33ccff  # blue`) is therefore still a
+/// comment.
+fn strip_comment(value: &str) -> &str {
+    let mut from = 0;
+    while let Some(position) = value[from..].find('#') {
+        let at = from + position;
+        if !value[..at].trim().is_empty() {
+            return &value[..at];
+        }
+        from = at + 1;
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(text: &str) -> Config {
-        let path = std::env::temp_dir().join("hypr-osd-config-test.conf");
+        // A file of its own per call: the tests run in parallel, and two of them
+        // sharing one path made this flaky.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+
+        let path = std::env::temp_dir().join(format!(
+            "hypr-osd-config-test-{}-{}.conf",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::write(&path, text).unwrap();
         Config::load_from(path)
     }
@@ -233,6 +271,20 @@ mod tests {
         assert_eq!(cfg.i32("broken", 7), 7);
         assert_eq!(cfg.i32("missing", 7), 7);
         assert!(!cfg.bool("missing", false));
+    }
+
+    /// A colour is a value that begins with `#`, which used to be indistinguishable
+    /// from a comment - so the login screen's palette could not be written at all.
+    #[test]
+    fn a_value_may_begin_with_a_hash() {
+        let cfg = parse(
+            "accent = #33ccff\n\
+             fg = #dde7ef  # a trailing comment still ends the line\n\
+             # height = 40\n",
+        );
+        assert_eq!(cfg.get("accent"), Some("#33ccff"));
+        assert_eq!(cfg.get("fg"), Some("#dde7ef"));
+        assert_eq!(cfg.get("height"), None);
     }
 
     #[test]

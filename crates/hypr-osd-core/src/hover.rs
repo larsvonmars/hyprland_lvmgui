@@ -1,11 +1,11 @@
 //! Where the pointer is, and what that means for a panel.
 //!
 //! Three of this desktop's surfaces unfold from the bar: the island popup from
-//! the clock, in the middle; the system popup from the status pill at the right
-//! end; and the applications panel from the button at the left end. All work the
-//! same way - the bar's pill *asks* for the panel when the pointer arrives, and
-//! the panel decides when to go away again, because leaving it means moving
-//! somewhere the bar cannot see: onto the panel itself.
+//! the clock at the bar's right end; the system popup from the status pill just
+//! left of it; and the applications panel from the button at the left end. All
+//! work the same way - the bar's pill *asks* for the panel when the pointer
+//! arrives, and the panel decides when to go away again, because leaving it means
+//! moving somewhere the bar cannot see: onto the panel itself.
 //!
 //! Two things are worth knowing about the sampling:
 //!
@@ -154,15 +154,18 @@ pub enum Side {
     /// rectangle with `open` (see `hypr-osd-apps`). This side is where a
     /// hand-typed `open` puts its fallback strip.
     Left,
-    /// The middle of the bar - the clock, and the island popup under it. The
-    /// clock is the bar's centre child, so its hot zone can be *derived* from
-    /// the monitor's centre without the bar saying anything.
+    /// The middle of the bar, for a pill that is the bar's centre child. No
+    /// element uses this any more - the player is the centre child now and it
+    /// owns no panel - but it is the exact case of "derive the zone from the
+    /// monitor" and the other two are the lesson that you usually cannot.
     Centre,
-    /// The right end of the bar - the status pill, and the system popup under
-    /// it, its right edge flush with the bar's. There is no deriving this one:
-    /// the tray and the power button sit to its right, so how far from the edge
-    /// it starts depends on what else is in the bar. The bar hands the pill's
-    /// rectangle over instead (see `hypr-osd-stats`).
+    /// The right end of the bar - the clock and the island popup under it, and
+    /// the status pill with the system popup under it, each with its right edge
+    /// flush with the bar's. There is no deriving these: the tray and the power
+    /// button sit between the two, so how far from the edge either one starts
+    /// depends on what else is in the bar. The bar hands the status pill's
+    /// rectangle over (see `hypr-osd-stats`); the clock is the bar's last child,
+    /// so its zone is simply the right end `hot_width` wide.
     Right,
 }
 
@@ -172,12 +175,12 @@ const SLACK: f64 = 4.0;
 
 /// The hot zone of the pill a panel belongs to, as far as it can be derived.
 ///
-/// For [`Side::Centre`] this is exact (the clock is centred); for
-/// [`Side::Left`] and [`Side::Right`] it is a fallback for a panel that was
-/// asked to open without being told where its pill is - a strip at the bar's
-/// end, `hot_width` wide, which at least keeps the panel open while the pointer
-/// is anywhere near it. The bar normally measures the button and sends the
-/// rectangle instead (`hypr-osd-apps`, `hypr-osd-stats`).
+/// For [`Side::Centre`] this is exact (the pill is the bar's centre child); for
+/// [`Side::Left`] and [`Side::Right`] it is a strip at the bar's end, `hot_width`
+/// wide. The applications panel and the system popup are told the pill's exact
+/// rectangle instead (`hypr-osd-apps`, `hypr-osd-stats`); the island popup uses
+/// this form, because its clock really is the last thing in the bar and the
+/// strip is therefore the pill plus the power button beside it.
 pub fn pill_rect(monitor: Rect, bar: BarGeometry, hot_width: f64, side: Side) -> Rect {
     let top = monitor.y + bar.margin_top;
     let right = monitor.x + monitor.width - bar.margin_x;

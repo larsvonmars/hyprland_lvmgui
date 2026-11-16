@@ -12,6 +12,15 @@
 //! output - see [`Content`]) and a command handler; the shell takes care of where
 //! the card goes, when it disappears, and how a second invocation of the binary
 //! reaches the running instance.
+//!
+//! A **finger** is not a pointer, and the shell answers for that too: while the
+//! machine is a tablet (see [`crate::touch`]) every window wears the `touch` CSS
+//! class, so the stylesheet can grow its targets; and a card that was opened by a
+//! tap rather than by hovering gets a **tap catcher** ([`Osd::tap_catcher`]) -
+//! a dimmed, full-screen layer surface with a hole over the card, which turns a
+//! tap anywhere else into "close this". That is the only way a popup can be
+//! dismissed on a screen that has neither an Escape key nor a pointer to move
+//! away.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
@@ -26,6 +35,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::css;
 use crate::monitors;
+use crate::touch;
 
 /// Space kept around the card inside the surface, so its box-shadow and glow
 /// are not clipped by the surface edge. `Opts::bottom_margin` measures the
@@ -188,12 +198,60 @@ type KeyReleaseHandler = Rc<dyn Fn(&gdk::Key)>;
 /// with the connector it is building for (see [`Content::PerOutput`]).
 type OutputContent = Rc<dyn Fn(&str) -> gtk::Widget>;
 
+/// What an element wants to run when the machine becomes (or stops being) a
+/// tablet (see [`Osd::on_tablet_change`]).
+type TabletHandler = Rc<dyn Fn(bool)>;
+
 struct Surface {
     window: gtk::Window,
     card: gtk::Box,
     /// Connector of the monitor this surface sits on, so a command can tell
     /// whether it has to be rebuilt for a different output.
     monitor: Option<String>,
+}
+
+/// The card's rectangle on its own monitor, in logical pixels - the shape of the
+/// hole the tap catcher leaves open.
+///
+/// The element knows this rectangle, not the shell: it is the card it built, at
+/// the size it asked for, at the placement its config names. It is measured from
+/// the monitor's top-left corner (so the bar's `margin_x`/`margin_top` and the
+/// panel's own gap are already in it), because that is the coordinate space a
+/// layer surface on that monitor is drawn in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hole {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl Hole {
+    /// The same rectangle grown by `pad` on every side - what a fingertip needs:
+    /// a card with a shadow should not be dimmed by its own shadow.
+    fn grown(self, pad: i32) -> Hole {
+        Hole {
+            x: self.x - pad,
+            y: self.y - pad,
+            width: self.width + pad * 2,
+            height: self.height + pad * 2,
+        }
+    }
+}
+
+/// The dimmed, full-screen surface that catches taps outside a card.
+///
+/// Four strips around the hole rather than one surface with a transparent window
+/// in it, for two reasons: a GTK widget tree can say "here is a box" but not
+/// "here is a hole", and `ignore_alpha` only makes a *transparent* pixel
+/// click-through - so the strips have to be the parts that swallow the tap, not
+/// the hole that must not. Each strip carries its own click gesture, which is
+/// also what makes it work no matter which side of the card the compositor
+/// stacks this surface on.
+struct Catcher {
+    window: gtk::Window,
+    /// The four strips, re-laid out every time the card moves.
+    strips: Vec<gtk::Box>,
 }
 
 pub struct Osd {
@@ -225,12 +283,37 @@ pub struct Osd {
     /// "whatever is focused" - starts as [`Opts::pin_output`] and can be changed
     /// afterwards with [`Osd::pin_output`].
     pin: RefCell<Option<String>>,
+    /// Where the card sits, and how wide it is. Both start as [`Opts`] says and
+    /// can change at runtime ([`Osd::set_placement`], [`Osd::set_width`]) - a
+    /// tablet grows the bar, and a bar whose height was frozen at start-up would
+    /// be a target too small to hit for the rest of the session.
+    placement: RefCell<Placement>,
+    width: Cell<i32>,
+    /// The dimmed tap catcher around a card opened by a finger (see
+    /// [`Osd::tap_catcher`]).
+    catcher: RefCell<Option<Catcher>>,
+    /// What a tap outside the card runs - the element's own "close it".
+    tap_outside: RefCell<Option<Rc<dyn Fn()>>>,
+    /// The hole the catcher was last laid out for, so an element that re-fits it
+    /// on every tick (the card can grow while it is up) does not rebuild the
+    /// bands when nothing has moved. `None` whenever the catcher is hidden.
+    catcher_hole: RefCell<Option<Hole>>,
+    /// The element's handlers for a machine becoming (or stopping being) a
+    /// tablet (see [`Osd::on_tablet_change`]).
+    tablet_handlers: RefCell<Vec<TabletHandler>>,
+    /// The subscription that keeps the tablet answer live, while the element is
+    /// running.
+    tablet_watch: RefCell<Option<crate::touch::TabletWatch>>,
+    /// Whether the live watch has been started (see [`Osd::begin_touch`]).
+    watching_tablet: Cell<bool>,
 }
 
 impl Osd {
     fn new(app: &gtk::Application, opts: Opts) -> Rc<Self> {
         let hold = app.hold();
         let pin = RefCell::new(opts.pin_output.clone());
+        let placement = opts.placement;
+        let width = opts.width;
         Rc::new_cyclic(|me| Osd {
             opts,
             app: app.clone(),
@@ -245,6 +328,14 @@ impl Osd {
             stay_open: RefCell::new(None),
             keys: RefCell::new(None),
             pin,
+            placement: RefCell::new(placement),
+            width: Cell::new(width),
+            catcher: RefCell::new(None),
+            tap_outside: RefCell::new(None),
+            catcher_hole: RefCell::new(None),
+            tablet_handlers: RefCell::new(Vec::new()),
+            tablet_watch: RefCell::new(None),
+            watching_tablet: Cell::new(false),
         })
     }
 
@@ -301,11 +392,47 @@ impl Osd {
             return;
         }
         *self.pin.borrow_mut() = wanted;
-        if matches!(self.opts.placement, Placement::Bar { .. }) {
+        if matches!(self.placement(), Placement::Bar { .. }) {
             self.sync_outputs();
         } else {
             self.ensure_surface();
         }
+    }
+
+    /// Where the card sits right now - [`Opts::placement`] unless an element
+    /// changed it at runtime.
+    pub fn placement(&self) -> Placement {
+        *self.placement.borrow()
+    }
+
+    /// The card's width right now - [`Opts::width`] unless an element changed it.
+    pub fn width(&self) -> i32 {
+        self.width.get()
+    }
+
+    /// Move (or resize) the card, rebuilding the surfaces so the change is on
+    /// screen.
+    ///
+    /// This exists for a change no stylesheet can express: the bar's height, a
+    /// card's width and where a card hangs are numbers the shell gives
+    /// layer-shell when it makes the surface, not CSS lengths. A machine folding
+    /// into a tablet grows the bar - and a bar whose height had been frozen at
+    /// start-up would be a row of 30-pixel targets for the rest of the session -
+    /// so the element asks for the new numbers and the shell makes the surfaces
+    /// again.
+    ///
+    /// The element's widgets survive it: a card re-parents its same content
+    /// widget, and a bar asks its factory for each output's content again, which
+    /// is the same path a monitor change takes.
+    pub fn set_placement(&self, placement: Placement) {
+        *self.placement.borrow_mut() = placement;
+        self.rebuild();
+    }
+
+    /// Resize the card without moving it (see [`Osd::set_placement`]).
+    pub fn set_width(&self, width: i32) {
+        self.width.set(width);
+        self.rebuild();
     }
 
     /// Run `callback` when the application shuts down.
@@ -349,6 +476,215 @@ impl Osd {
         }
     }
 
+    // -----------------------------------------------------------------
+    // Touch: the tablet, and the tap that dismisses a panel
+    // -----------------------------------------------------------------
+
+    /// Watch the machine being folded into (and out of) a tablet, and run
+    /// `handler` when the answer changes.
+    ///
+    /// The shell already does the two things every element wants on its own: it
+    /// adds or removes the `touch` CSS class on every surface it owns, and it
+    /// keeps the shared tablet flag up to date (see [`crate::touch::tablet`]).
+    /// This is for the elements that have a size or a layout of their own to
+    /// change with it - the bar, whose height is a number rather than a CSS
+    /// length, is the one that needs it.
+    ///
+    /// The live watch starts with [`Osd::begin_touch`], which `run` calls; an
+    /// element never has to.
+    pub fn on_tablet_change(&self, handler: impl Fn(bool) + 'static) {
+        self.tablet_handlers.borrow_mut().push(Rc::new(handler));
+    }
+
+    /// Start reacting to the machine becoming a tablet: the `touch` class, the
+    /// shared flag, and [`Osd::on_tablet_change`]'s handlers.
+    ///
+    /// Called once by `run`, after the element has built its widgets. On a
+    /// machine with no touchscreen this does nothing at all - not even open the
+    /// compositor's event socket.
+    pub fn begin_touch(&self) {
+        if self.watching_tablet.replace(true) || !touch::usable() {
+            return;
+        }
+        let me = self.me.clone();
+        let watch = touch::watch_tablet(move |tablet| {
+            if let Some(osd) = me.upgrade() {
+                osd.set_tablet(tablet);
+            }
+        });
+        *self.tablet_watch.borrow_mut() = Some(watch);
+        // Hand the element the answer it is starting with, so a bar that comes
+        // up on an already-folded machine starts its keyboard instead of waiting
+        // for the next fold.
+        self.set_tablet(touch::tablet());
+    }
+
+    /// Put the `touch` class where it belongs after the tablet answer changed.
+    fn set_tablet(&self, tablet: bool) {
+        {
+            let single = self.surface.borrow();
+            let bars = self.bars.borrow();
+            for surface in single.iter().chain(bars.iter()) {
+                apply_touch_class(&surface.window, tablet);
+            }
+            if let Some(catcher) = self.catcher.borrow().as_ref() {
+                apply_touch_class(&catcher.window, tablet);
+            }
+        }
+        // Handlers run with no borrow of the surfaces held: a handler may
+        // rebuild them (the bar does, because its height is not a CSS length).
+        let handlers = self.tablet_handlers.borrow().clone();
+        for handler in handlers {
+            handler(tablet);
+        }
+    }
+
+    /// Rebuild every surface this element owns, from the same widgets.
+    ///
+    /// For a change that cannot be expressed in CSS: a placement's own numbers
+    /// (the bar's height, a card's width) are set when the surface is made, so a
+    /// session that changes how big the shell should be has to make the surface
+    /// again. A card's widgets come back with it - the shell re-parents the same
+    /// widget rather than asking the element to build a new one - and a bar asks
+    /// its factory for each output's content again, exactly as a monitor change
+    /// does.
+    pub fn rebuild(&self) {
+        if matches!(self.placement(), Placement::Bar { .. }) {
+            let mut bars = self.bars.borrow_mut();
+            for bar in bars.drain(..) {
+                bar.window.destroy();
+            }
+            drop(bars);
+            self.sync_outputs();
+            return;
+        }
+        let content = self.detach_content();
+        if let Some(surface) = self.surface.borrow_mut().take() {
+            surface.window.destroy();
+        }
+        self.ensure_surface();
+        if let Some(content) = content {
+            self.attach_content(&content);
+        }
+    }
+
+    /// Catch taps outside `hole` and run `on_outside` when one lands there; `None`
+    /// takes the catcher away.
+    ///
+    /// This is the way out for a card that was opened by a *finger*. A hover popup
+    /// closes when the pointer leaves it, which is a thing no touchscreen can do:
+    /// the finger lifts, the pointer is wherever it last touched, and the panel
+    /// would either stay up forever or close the moment it opened. So the element
+    /// asks for the catcher while the panel is up, and the catcher - a dimmed,
+    /// full-screen layer surface on the overlay layer with a hole over the card -
+    /// turns a tap anywhere else into the element's own "close it".
+    ///
+    /// `hole` is the card's rectangle on its monitor, in logical pixels, measured
+    /// from the monitor's top-left corner. The shadow the shell keeps around a
+    /// card is added here, so pass the card *as drawn*.
+    ///
+    /// The catcher never takes the keyboard: a card that wants to be typed into
+    /// keeps it, and the on-screen keyboard stays available above the dim.
+    pub fn tap_catcher(&self, hole: Option<Hole>, on_outside: impl Fn() + 'static) {
+        *self.tap_outside.borrow_mut() = Some(Rc::new(on_outside));
+        if hole.is_none() {
+            *self.catcher_hole.borrow_mut() = None;
+            if let Some(catcher) = self.catcher.borrow().as_ref() {
+                catcher.window.set_visible(false);
+            }
+            return;
+        }
+        self.ensure_catcher();
+        let hole = hole.expect("checked above");
+        // The card can be re-fitted on every tick; only the ticks that moved it
+        // are worth laying the bands out again.
+        let visible = self
+            .catcher
+            .borrow()
+            .as_ref()
+            .is_some_and(|catcher| catcher.window.is_visible());
+        if visible && *self.catcher_hole.borrow() == Some(hole) {
+            return;
+        }
+        let geometry = self.monitor_size();
+        {
+            let catcher = self.catcher.borrow();
+            let Some(catcher) = catcher.as_ref() else {
+                return;
+            };
+            place_strips(catcher, hole, geometry);
+            catcher.window.set_visible(true);
+        }
+        *self.catcher_hole.borrow_mut() = Some(hole);
+    }
+
+    /// Build the catcher surface, once.
+    fn ensure_catcher(&self) {
+        if self.catcher.borrow().is_some() {
+            return;
+        }
+        let window = gtk::Window::new();
+        window.add_css_class("osd");
+        apply_touch_class(&window, touch::tablet());
+        window.init_layer_shell();
+        window.set_namespace(Some(self.opts.namespace.as_str()));
+        window.set_layer(Layer::Overlay);
+        // It catches a tap, never a keystroke: the card under it may be waiting
+        // for typing (a launcher's filter) or for nothing at all.
+        window.set_keyboard_mode(KeyboardMode::None);
+        window.set_exclusive_zone(-1);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(edge, true);
+        }
+        let monitor = self
+            .surface
+            .borrow()
+            .as_ref()
+            .and_then(|surface| surface.window.monitor())
+            .or_else(monitors::first);
+        if let Some(monitor) = &monitor {
+            window.set_monitor(Some(monitor));
+        }
+        let fixed = gtk::Fixed::new();
+        window.set_child(Some(&fixed));
+
+        let mut strips = Vec::with_capacity(4);
+        for _ in 0..4 {
+            let strip = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            strip.add_css_class("tap-catcher");
+            // The four strips are laid out around the hole; a hidden one is a
+            // side the card reaches the screen edge on.
+            strip.set_visible(false);
+            fixed.put(&strip, 0.0, 0.0);
+            let me = self.me.clone();
+            let click = gtk::GestureClick::new();
+            click.connect_pressed(move |_, _, _, _| {
+                if let Some(osd) = me.upgrade() {
+                    let callback = osd.tap_outside.borrow().clone();
+                    if let Some(callback) = callback {
+                        callback();
+                    }
+                }
+            });
+            strip.add_controller(click);
+            strips.push(strip);
+        }
+        *self.catcher.borrow_mut() = Some(Catcher { window, strips });
+    }
+
+    /// The logical size of the monitor the card is on - the space the catcher's
+    /// strips are laid out in.
+    fn monitor_size(&self) -> Option<(i32, i32)> {
+        let monitor = self
+            .surface
+            .borrow()
+            .as_ref()
+            .and_then(|surface| surface.window.monitor())
+            .or_else(monitors::first)?;
+        let geometry = monitor.geometry();
+        Some((geometry.width(), geometry.height()))
+    }
+
     /// Put the element's content into the card, on the focused monitor.
     ///
     /// Called by `run` for a [`Content::Single`] element, right after the
@@ -373,7 +709,7 @@ impl Osd {
         let Some(card) = card else {
             return;
         };
-        put_content(&card, content, &self.opts.placement);
+        put_content(&card, content, &self.placement());
         *self.content.borrow_mut() = Some(content.clone());
     }
 
@@ -426,7 +762,7 @@ impl Osd {
     /// surface and [`Osd::ensure_surface`] owns it), and before the element has
     /// handed its content over.
     pub fn sync_outputs(&self) {
-        if !matches!(self.opts.placement, Placement::Bar { .. }) {
+        if !matches!(self.placement(), Placement::Bar { .. }) {
             return;
         }
         let Some(factory) = self.bar_factory.borrow().clone() else {
@@ -503,7 +839,7 @@ impl Osd {
             .collect::<Vec<_>>();
         let mut bars = self.bars.borrow_mut();
         for (surface, content) in built {
-            put_content(&surface.card, &content, &self.opts.placement);
+            put_content(&surface.card, &content, &self.placement());
             bars.push(surface);
         }
     }
@@ -520,6 +856,13 @@ impl Osd {
     pub fn hide(&self) {
         if let Some(source) = self.hide.borrow_mut().take() {
             source.remove();
+        }
+        // A card cannot be gone while its tap catcher still dims the screen, so
+        // closing the card is also what takes the catcher away. Elements do not
+        // have to remember to do both.
+        *self.catcher_hole.borrow_mut() = None;
+        if let Some(catcher) = self.catcher.borrow().as_ref() {
+            catcher.window.set_visible(false);
         }
         self.set_every_surface_visible(false);
     }
@@ -564,10 +907,21 @@ impl Osd {
         }
     }
 
-    /// Keep the card up while the pointer rests on `widget`.
+    /// Keep the card up while the pointer rests on `widget` - or, on a
+    /// touchscreen, while a finger is *down* on it.
     ///
     /// A card with buttons must not disappear while you are aiming at one - the
     /// auto-hide would otherwise be a race against the pointer.
+    ///
+    /// A finger is not a pointer here, and treating it as one is the bug this
+    /// method exists to avoid in two directions. GDK turns a tap into an
+    /// emulated pointer that *enters* the widget and then never leaves it (the
+    /// cursor stays where the finger lifted), so a hover hold would keep the card
+    /// up for the whole session after one tap. A press, on the other hand, is
+    /// exactly as long as the finger is: it begins on the way down and ends on
+    /// the way up. So the hold is the pointer's hover *while the machine is a
+    /// laptop*, and the finger's press when it is a tablet (checked on every
+    /// tick, because a session can be folded mid-card).
     pub fn stay_open_while_hovered(&self, widget: &impl IsA<gtk::Widget>) {
         let hovered = Rc::new(Cell::new(false));
         let motion = gtk::EventControllerMotion::new();
@@ -580,7 +934,32 @@ impl Osd {
             motion.connect_leave(move |_| hovered.set(false));
         }
         widget.add_controller(motion);
-        self.set_stay_open_when(move || hovered.get());
+
+        // Every button, and therefore a finger's emulated button 1: the count is
+        // what keeps the card up from the moment the finger lands until it
+        // lifts, including a drag that started on the card.
+        let pressed = Rc::new(Cell::new(0_i32));
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        // Capture, so a press that a child button claims is still seen here: a
+        // card must stay up while the finger is on *any* part of it, not only
+        // on the parts nobody handles.
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let pressed = pressed.clone();
+            click.connect_pressed(move |_, _, _, _| pressed.set(pressed.get() + 1));
+        }
+        {
+            let pressed = pressed.clone();
+            click.connect_released(move |_, _, _, _| pressed.set((pressed.get() - 1).max(0)));
+        }
+        {
+            let pressed = pressed.clone();
+            click.connect_stopped(move |_| pressed.set(0));
+        }
+        widget.add_controller(click);
+
+        self.set_stay_open_when(move || pressed.get() > 0 || (hovered.get() && !touch::tablet()));
     }
 
     /// Keep the card up while `predicate` returns true, instead of hiding it
@@ -668,7 +1047,7 @@ impl Osd {
     fn retarget(&self) {
         // A bar owns a surface per output and is reconciled by `sync_outputs`;
         // there is no single surface here for `ensure_surface` to move.
-        if !matches!(self.opts.placement, Placement::Bar { .. }) {
+        if !matches!(self.placement(), Placement::Bar { .. }) {
             self.ensure_surface();
         }
     }
@@ -681,13 +1060,17 @@ impl Osd {
     fn make_surface(&self, monitor: Option<gdk::Monitor>, connector: Option<String>) -> Surface {
         let window = gtk::Window::new();
         window.add_css_class("osd");
+        // The stylesheet's touch rules hang off this class: they are off while
+        // the machine is a laptop, and come on the moment its keyboard is folded
+        // away (see the module comment and `crate::touch`).
+        apply_touch_class(&window, touch::tablet());
         window.init_layer_shell();
         window.set_namespace(Some(self.opts.namespace.as_str()));
         // A bar lives on the *top* layer, not the overlay one: a fullscreen
         // window is supposed to cover it, exactly as it covers everything else.
         // Cards keep the overlay layer, which is what draws them above a
         // fullscreen window - the whole point of an OSD.
-        window.set_layer(match self.opts.placement {
+        window.set_layer(match self.placement() {
             Placement::Bar { .. } => Layer::Top,
             _ => Layer::Overlay,
         });
@@ -708,7 +1091,7 @@ impl Osd {
         // and every edge stretches it over the output ([`Placement::Fill`]).
         // Three edges ([`Placement::Bar`]) give a full-width strip of a fixed
         // height, which is what a bar is.
-        match self.opts.placement {
+        match self.placement() {
             Placement::Bottom => window.set_anchor(Edge::Bottom, true),
             Placement::TopCard { .. } => window.set_anchor(Edge::Top, true),
             Placement::TopRight { .. } => {
@@ -751,7 +1134,7 @@ impl Osd {
         }
 
         let card = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        match self.opts.placement {
+        match self.placement() {
             // The CSS asks for this too (a card with no edge takes no rounding
             // and no border); the class is what makes that possible to target.
             Placement::Fill => {
@@ -774,7 +1157,7 @@ impl Osd {
             }
             Placement::TopCard { margin_top } => {
                 card.add_css_class("card");
-                card.set_size_request(self.opts.width, -1);
+                card.set_size_request(self.width(), -1);
                 card.set_margin_top(margin_top);
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(SHADOW_PAD);
@@ -785,7 +1168,7 @@ impl Osd {
                 margin_right,
             } => {
                 card.add_css_class("card");
-                card.set_size_request(self.opts.width, -1);
+                card.set_size_request(self.width(), -1);
                 card.set_margin_top(margin_top);
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(SHADOW_PAD);
@@ -793,7 +1176,7 @@ impl Osd {
             }
             Placement::Bottom | Placement::Center => {
                 card.add_css_class("card");
-                card.set_size_request(self.opts.width, -1);
+                card.set_size_request(self.width(), -1);
                 card.set_margin_top(SHADOW_PAD);
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(SHADOW_PAD);
@@ -804,7 +1187,7 @@ impl Osd {
                 margin_left,
             } => {
                 card.add_css_class("card");
-                card.set_size_request(self.opts.width, -1);
+                card.set_size_request(self.width(), -1);
                 card.set_margin_top(margin_top);
                 card.set_margin_bottom(SHADOW_PAD);
                 card.set_margin_start(margin_left);
@@ -815,7 +1198,7 @@ impl Osd {
         // A bar is furniture, not a notification: it is up from the moment the
         // process has a surface, and it comes back up by itself after a rebuild
         // (`Osd::hide` is still how a `hide` verb takes it away).
-        if matches!(self.opts.placement, Placement::Bar { .. }) {
+        if matches!(self.placement(), Placement::Bar { .. }) {
             window.set_visible(true);
         }
 
@@ -823,7 +1206,7 @@ impl Osd {
         // is the only one that has to be recomputed when a monitor changes under
         // the card (docking, rotating, a new scale factor).
         if let Some(monitor) = &monitor {
-            if self.opts.placement != Placement::Bottom {
+            if self.placement() != Placement::Bottom {
                 return Surface {
                     window,
                     card,
@@ -895,6 +1278,13 @@ impl Osd {
             self.arm_hide(Duration::from_millis(150));
             return;
         }
+        // The auto-hide is a close, so it has to take the tap catcher with it:
+        // a card that faded out under a dimmed full-screen surface would leave
+        // the screen dim with nothing behind it. `hide` does the same, and an
+        // element must not have to remember both.
+        if let Some(catcher) = self.catcher.borrow().as_ref() {
+            catcher.window.set_visible(false);
+        }
         if let Some(surface) = self.surface.borrow().as_ref() {
             surface.window.set_visible(false);
         }
@@ -917,9 +1307,53 @@ fn wanted_outputs(available: &[String], pinned: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// Add or remove the `touch` class, which is what the stylesheet's fingertip
+/// rules hang off (see [`crate::touch`]). Removing it when it is not there, or
+/// adding it twice, is a no-op in GTK - which is why the caller does not have to
+/// know which state the window is in.
+fn apply_touch_class(window: &gtk::Window, touch: bool) {
+    if touch {
+        window.add_css_class("touch");
+    } else {
+        window.remove_css_class("touch");
+    }
+}
+
+/// Lay the catcher's four strips out around the hole.
+///
+/// Top, bottom, left and right, each the full width or height of its band and
+/// each hidden when the card reaches that edge of the screen (a strip of zero
+/// size would not catch anything anyway, but a hidden one cannot be painted over
+/// the card either).
+fn place_strips(catcher: &Catcher, hole: Hole, geometry: Option<(i32, i32)>) {
+    let Some((width, height)) = geometry else {
+        return;
+    };
+    let hole = hole.grown(SHADOW_PAD);
+    let left = hole.x.clamp(0, width);
+    let top = hole.y.clamp(0, height);
+    let right = (hole.x + hole.width).clamp(0, width);
+    let bottom = (hole.y + hole.height).clamp(0, height);
+    // (x, y, width, height) for the four bands.
+    let bands = [
+        (0, 0, width, top),
+        (0, bottom, width, height - bottom),
+        (0, top, left, bottom - top),
+        (right, top, width - right, bottom - top),
+    ];
+    for (strip, (x, y, band_width, band_height)) in catcher.strips.iter().zip(bands) {
+        let band_width = band_width.max(0);
+        let band_height = band_height.max(0);
+        strip.set_visible(band_width > 0 && band_height > 0);
+        strip.set_size_request(band_width, band_height);
+        if let Some(parent) = strip.parent().and_downcast::<gtk::Fixed>() {
+            parent.move_(strip, x as f64, y as f64);
+        }
+    }
+}
+
 /// Put a surface's content widget into its card, with whatever the placement
 /// wants around it.
-///
 /// Free rather than a method because both of the shell's two shapes need it: a
 /// card re-attaches the element's widget to a rebuilt surface, and a bar fills
 /// each fresh per-output surface as it is made. The widget is only appended if it
@@ -1051,6 +1485,11 @@ pub fn run(opts: Opts, build: Build, handle: Handle) -> glib::ExitCode {
                     Content::PerOutput(factory) => osd.set_output_content(factory),
                 }
             }
+            // The widgets exist and their surfaces are up, so the tablet watch
+            // can start: it is what moves the `touch` class when the machine is
+            // folded, and what the elements that own a size of their own listen
+            // to (see `Osd::on_tablet_change`).
+            osd.begin_touch();
             *state.borrow_mut() = Some(osd.clone());
             osd
         }

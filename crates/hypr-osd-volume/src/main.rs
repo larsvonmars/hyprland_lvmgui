@@ -17,6 +17,17 @@
 //!   status          print the level and exit (no card)
 //!   (no verb)       start the daemon and wait for the first key press
 //! ```
+//!
+//! # On a tablet
+//!
+//! Nothing about the verbs changes: the card is opened by whatever reaches it -
+//! a key on the Type Cover, the bar's volume path, a system gesture - and the
+//! notification is *dismissed* by a tap. While the machine is a tablet every
+//! reveal arms a tap catcher around the card (see [`view::VolumeView::arm_touch`]),
+//! and picking up the machine's mode while the card is up re-arms it. The slider
+//! is a touch drag already (`GtkScale` handles one natively), and the stylesheet
+//! grows the trough and the thumb to fingertip size under `.touch`; the mouse
+//! card is unchanged in both look and behaviour.
 
 mod sink;
 mod view;
@@ -104,6 +115,22 @@ fn main() -> glib::ExitCode {
         Box::new(move |osd: &Rc<Osd>| {
             let volume = Rc::new(VolumeView::new(&settings));
             volume.hook(osd);
+
+            // The machine can be folded (or unfolded) while the card is up: the
+            // stylesheet's `.touch` rules follow the window class on their own,
+            // but the way out does not - a card that opened as a laptop
+            // notification and is now a tablet notification must grow a tap
+            // catcher, and one that stopped being one must lose it.
+            let watch = osd.clone();
+            let watched = volume.clone();
+            osd.on_tablet_change(move |_| {
+                if watch.is_visible() {
+                    watched.arm_touch(&watch);
+                } else {
+                    watch.tap_catcher(None, || {});
+                }
+            });
+
             let _ = view.set(volume.clone());
             Content::Single(volume.root.clone().upcast::<gtk::Widget>())
         })
@@ -158,6 +185,9 @@ fn main() -> glib::ExitCode {
 
                 view.render(&sink);
                 osd.reveal(settings.duration);
+                // On a tablet the notification gets its way out: a tap anywhere
+                // outside the card closes it before the timer would.
+                view.arm_touch(osd);
                 Ok(String::new())
             },
         )

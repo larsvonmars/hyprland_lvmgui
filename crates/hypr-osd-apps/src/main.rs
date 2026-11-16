@@ -12,9 +12,15 @@
 //!
 //! ```text
 //!   open [connector] [x y w h]
-//!                        what the bar's left-end button runs: the pointer has
-//!                        arrived, so start watching for the dwell (see
+//!                        what the bar's left-end button runs when the pointer
+//!                        arrives: start watching for the dwell (see
 //!                        `core::hover`)
+//!   tap [connector] [x y w h]
+//!                        what the same button runs when a *finger* taps it: open
+//!                        at once (a dwell is a thing a fingertip cannot wait
+//!                        out - it has already lifted), pinned, with a tap
+//!                        catcher around the card as the way out. A second tap
+//!                        closes it. Same trailing arguments as `open`.
 //!   close | hide         take it away
 //!   toggle               open the panel (pinned), or close it again
 //!   show [query]         open it (pinned), with an empty filter or the one given
@@ -27,7 +33,7 @@
 //!   (no verb)            start the daemon and wait for the button
 //! ```
 //!
-//! Three things about how it behaves are deliberate:
+//! Four things about how it behaves are deliberate:
 //!
 //! * **It unfolds from the button, like the island and the system popup.** The
 //!   pointer arriving on the bar's left-end button *asks* the panel to open;
@@ -35,18 +41,28 @@
 //!   panel away once it has left both the button and the panel. The bar can only
 //!   ever ask - a pinned panel is not watched, so a bar that sent `toggle` could
 //!   leave it up for good.
+//! * **A finger gets a *different* way out.** There is no hover on a touchscreen
+//!   and no Escape key either, so a panel a finger opened would have no way to
+//!   close. `tap` therefore opens it pinned and puts a **tap catcher**
+//!   (`Osd::tap_catcher`) around the card's measured rectangle: a tap anywhere
+//!   else closes the panel, and so does a second tap on the button that opened
+//!   it. The hole follows the card as it is laid out (`watch_hole`), because the
+//!   `touch` class can resize it under the finger.
 //! * **It takes the keyboard while it is up.** The filter has to be typed into,
 //!   and a layer-shell surface has no other way to be typed into (see
 //!   `Keyboard::Exclusive`). Escape and the arrows are therefore the panel's own
 //!   keys, and - like the launcher - it lets go of the keyboard by itself after
 //!   `idle_close_ms` of silence, which is what makes that safe across a screen
-//!   lock.
+//!   lock. On a tablet the field is focused when the panel opens, which is what
+//!   raises the on-screen keyboard (`touch::osk()`); with none installed the
+//!   panel says so once on stderr instead of failing silently.
 //! * **The card is one size, always.** The grid lives in a fixed-height scroller,
 //!   so picking a different drawer cannot change the panel's height - see `view`.
 //!
 //! Pinned applications are the old launcher's favourites, in a plain text file
-//! rather than JSON (see `pins`): right-click a tile to pin it, and the sidebar
-//! grows a "Pinned" drawer to hold them.
+//! rather than JSON (see `pins`): right-click a tile to pin it - or long-press it
+//! on a touchscreen, which is the same action (`touch::on_secondary`) - and the
+//! sidebar grows a "Pinned" drawer to hold them.
 
 mod pins;
 mod view;
@@ -63,8 +79,8 @@ use hypr_osd_core::apps::{self, App};
 use hypr_osd_core::hover::{self, Action, BarGeometry, Delays, Machine, Rect, Side};
 use hypr_osd_core::timer::Timer;
 use hypr_osd_core::{
-    css, icons, run, state, text, Config, Content, Keyboard, Opts, Osd, Placement, CARD_PAD_X,
-    CARD_PAD_Y,
+    css, icons, run, state, text, touch, Config, Content, Hole, Keyboard, Opts, Osd, Placement,
+    CARD_PAD_X, CARD_PAD_Y,
 };
 
 use view::{AppsView, Row, Tile};
@@ -100,6 +116,17 @@ const DEFAULT_OPEN_DELAY_MS: u64 = 120;
 const DEFAULT_CLOSE_DELAY_MS: u64 = 300;
 const DEFAULT_POLL_MS: u64 = 50;
 const DEFAULT_IDLE_CLOSE_MS: u64 = 60_000;
+
+/// How often a tap-opened panel re-measures the card it leaves open in the tap
+/// catcher.
+///
+/// A timer rather than a frame callback: the catcher is asked for from the
+/// command that opened the panel, which can run before the card's window has a
+/// frame clock - and a tick scheduled then is never called at all (measured:
+/// the catcher simply never appeared). A timer runs on the main loop whatever
+/// the surface is doing, and sixty milliseconds is fast enough that the catcher
+/// is around the card by the time the finger has lifted off the pill.
+const HOLE_POLL: Duration = Duration::from_millis(60);
 
 /// What the config file resolved to.
 struct Settings {
@@ -256,6 +283,15 @@ struct Panel {
     icon_cache: RefCell<HashMap<String, Option<gdk::Paintable>>>,
     /// The idle-close watchdog (see [`Panel::arm_idle`]).
     idle: Rc<Timer>,
+    /// Whether this panel was opened by a *finger* (`tap`) rather than by the
+    /// bar's hover - the flag the tap catcher and its hole follow.
+    tap_opened: Cell<bool>,
+    /// Whether a frame callback is currently keeping the catcher around the
+    /// card. There is at most one, however often `tap` and `open` arrive.
+    watching_hole: Cell<bool>,
+    /// The hole the catcher was last given, so a frame that finds the card where
+    /// it already was does not touch the shell at all.
+    last_hole: Cell<Option<Hole>>,
 }
 
 impl Panel {
@@ -276,6 +312,9 @@ impl Panel {
             selected: Cell::new(0),
             icon_cache: RefCell::new(HashMap::new()),
             idle: Rc::new(Timer::new()),
+            tap_opened: Cell::new(false),
+            watching_hole: Cell::new(false),
+            last_hole: Cell::new(None),
         })
     }
 
@@ -319,6 +358,78 @@ impl Panel {
         self.act(action);
     }
 
+    /// A finger tapped the bar's button: open the panel now, pinned, and leave a
+    /// way out.
+    ///
+    /// This is the touchscreen's half of [`Panel::ask`], and it is a *different*
+    /// verb because the interaction is different in every part: a hover has a
+    /// dwell to wait out (a fingertip has already lifted by the time it would
+    /// elapse), a hover ends when the pointer leaves (a finger has no pointer to
+    /// leave with), and a hover therefore keeps the panel *unpinned* so the
+    /// machine can close it. A finger gets a panel that is pinned and a
+    /// **tap catcher** around it instead: a tap outside the card closes it, and
+    /// so does tapping the button again.
+    ///
+    /// `connector` and `pill` are the same two things the bar sends with `open`:
+    /// which screen the bar is on (the panel is drawn on, and measured against,
+    /// that one) and where the button is inside the bar's card. The button's
+    /// rectangle is unused here - the hover is what needed it - but the connector
+    /// is not, and a hand-typed `tap` may omit either.
+    fn tap(self: &Rc<Self>, connector: Option<&str>, pill: Option<Rect>) {
+        // A second tap on the button closes what the first one opened. The
+        // `tap` verb and `toggle` are then the same gesture from opposite ends.
+        if self.machine.borrow().is_open() {
+            self.close();
+            return;
+        }
+        if let Some(connector) = connector {
+            self.osd.pin_output(Some(connector));
+            *self.monitor.borrow_mut() = Some(connector.to_string());
+        }
+        *self.pill.borrow_mut() = pill;
+        self.machine.borrow_mut().pin();
+        self.present(None);
+        self.tap_opened.set(true);
+        self.act(Action::Show);
+        self.watch_hole();
+    }
+
+    /// Keep the tap catcher's hole around the card while it is open.
+    ///
+    /// A frame callback rather than one measurement, because the card's
+    /// rectangle is not a constant: it is measured for the first time a frame
+    /// after the surface is shown, the `touch` class can resize it when the
+    /// machine folds, and the tile pane changes when the filter does. Comparing
+    /// the hole with the last one placed keeps all of that free of shell calls
+    /// until the card has really moved - and it is what makes a stale hole (a
+    /// catcher leaving a strip of screen open beside the card) impossible.
+    fn watch_hole(self: &Rc<Self>) {
+        if self.watching_hole.replace(true) {
+            return;
+        }
+        self.last_hole.set(None);
+        let me = Rc::clone(self);
+        glib::timeout_add_local(HOLE_POLL, move || {
+            // Closing the panel from anywhere - a tap outside, Escape, the idle
+            // watchdog - ends this watch without having to find its id.
+            if !me.tap_opened.get() || !me.osd.is_visible() {
+                me.watching_hole.set(false);
+                me.last_hole.set(None);
+                return glib::ControlFlow::Break;
+            }
+            let Some(hole) = catcher_hole(&me.settings, &me.view.root) else {
+                // Not laid out yet: the next pass measures again.
+                return glib::ControlFlow::Continue;
+            };
+            if me.last_hole.get() != Some(hole) {
+                me.last_hole.set(Some(hole));
+                let close = Rc::clone(&me);
+                me.osd.tap_catcher(Some(hole), move || close.close());
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
     /// Open the panel (pinned) on the "All" drawer with an empty filter, or the
     /// one given - the `show <query>` verb.
     fn show(self: &Rc<Self>, query: Option<&str>) {
@@ -327,11 +438,23 @@ impl Panel {
         self.act(Action::Show);
     }
 
-    /// Take the panel away - `close`/`hide`, Escape, the idle watchdog and the
-    /// pointer leaving it all end up here, so there is one way out.
+    /// Take the panel away - `close`/`hide`, Escape, the idle watchdog, the
+    /// pointer leaving it and a tap outside all end up here, so there is one way
+    /// out.
     fn close(self: &Rc<Self>) {
         let action = self.machine.borrow_mut().dismiss();
         self.act(action);
+        // A catcher behind a closed panel would dim the screen with nothing in
+        // it, so going away is always also "take the catcher away" - even when
+        // the machine thought there was nothing to hide.
+        self.clear_catcher();
+    }
+
+    /// Stop watching the card's rectangle and take the catcher away.
+    fn clear_catcher(self: &Rc<Self>) {
+        self.tap_opened.set(false);
+        self.last_hole.set(None);
+        self.osd.tap_catcher(None, || {});
     }
 
     /// Paint the panel: reset to the "All" drawer with the filter given, and put
@@ -372,10 +495,21 @@ impl Panel {
                 // surface can refuse focus until it has been allocated.
                 let view = self.view.clone();
                 glib::timeout_add_local_once(Duration::ZERO, move || view.focus_entry());
+                // A tablet is typed into by the on-screen keyboard, and what
+                // raises it is the focus the line above put in the field (see
+                // `view`'s reader and `core::touch`). Saying so once beats a
+                // focused field that cannot be typed into.
+                if touch::tablet() {
+                    warn_missing_osk();
+                }
                 self.arm_idle();
             }
             Action::Hide => {
                 self.idle.cancel();
+                // A card cannot be gone while its tap catcher still dims the
+                // screen: `Osd::hide` takes the catcher down as a backstop, and
+                // this makes sure the flags agree with what is on screen.
+                self.clear_catcher();
                 state::write(&state::apps_panel(), false);
                 self.osd.hide();
             }
@@ -776,6 +910,55 @@ fn zones(panel: &Panel, settings: &Settings) -> Option<(Rect, Rect)> {
     Some((pill, panel_rect))
 }
 
+/// The card's rectangle on its monitor - the hole the tap catcher leaves open.
+///
+/// Measured rather than planned: the shell wraps the element's content in
+/// `CARD_PAD_*`, and a `TopLeft` card's visible corner is exactly its own
+/// margins (its shadow inset is only below and to the right), so the rectangle
+/// follows from the content's allocation and the bar's margins. Both are already
+/// monitor-relative, which is the space [`Hole`] is in - no monitor position has
+/// to be asked for, which also means the catcher works when `hyprctl` does not
+/// answer.
+fn catcher_hole(settings: &Settings, root: &gtk::Box) -> Option<Hole> {
+    let (width, height) = (root.width(), root.height());
+    // A card that has never been allocated has no rectangle to leave open; the
+    // caller's frame callback measures again on the next frame.
+    (width > 0 && height > 0).then(|| {
+        hole_at(
+            settings.bar.margin_x as i32,
+            settings.margin_top(),
+            (width + 2 * CARD_PAD_X, height + 2 * CARD_PAD_Y),
+        )
+    })
+}
+
+/// The arithmetic of [`catcher_hole`], split out so the rectangle can be tested
+/// without a display.
+fn hole_at(margin_x: i32, margin_top: i32, size: (i32, i32)) -> Hole {
+    Hole {
+        x: margin_x,
+        y: margin_top,
+        width: size.0,
+        height: size.1,
+    }
+}
+
+/// Say once, on stderr, that this tablet is being typed into with no on-screen
+/// keyboard installed.
+///
+/// The panel still focuses the field and still takes the keyboard - there is
+/// just nothing that can put a character in it, and a user tapping keys on a
+/// screen that ignores them deserves better than silence. Once per process: the
+/// panel opens many times, and the same complaint on every open would be noise.
+fn warn_missing_osk() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        if let Some(message) = touch::warn_missing(touch::osk()) {
+            eprintln!("hypr-osd-apps: {message}");
+        }
+    });
+}
+
 /// The `open` arguments: the connector the bar is on, and the button's rectangle
 /// inside the bar's card.
 ///
@@ -975,12 +1158,23 @@ fn main() -> glib::ExitCode {
                 let panel = panel.clone();
                 move |index| panel.toggle_pin(index)
             });
-            // Moving the pointer over the panel is looking at it, and looking at
-            // it is not being idle.
-            view.on_motion({
+            // Moving the pointer over the panel is looking at it, a tap on it is
+            // using it and a scroll is reading it: none of those is being idle
+            // (see `view::AppsView::on_activity`). Without this the panel would
+            // close itself after `idle_close_ms` while a finger is still moving
+            // through the grid.
+            view.on_activity({
                 let panel = panel.clone();
                 move || panel.arm_idle()
             });
+
+            // The filter is the one thing here that is typed into: a focused
+            // field is what raises the on-screen keyboard on a tablet (the daemon
+            // is started and stopped by the bar, see `core::touch`), and the
+            // attach is what makes the focus do it.
+            if touch::usable() {
+                touch::osk().attach(&view.entry);
+            }
 
             // The pointer, on its own faster clock - and only while the panel is
             // being tracked. An idle panel asks the compositor for nothing at
@@ -1032,6 +1226,13 @@ fn main() -> glib::ExitCode {
                         let (connector, rect) = parse_open(&args[1..]);
                         panel.ask(connector.as_deref(), rect);
                     }
+                    // The same button under a finger: no dwell is possible, so
+                    // the panel opens at once, pinned, with a tap catcher as the
+                    // way out (see [`Panel::tap`]).
+                    "tap" => {
+                        let (connector, rect) = parse_open(&args[1..]);
+                        panel.tap(connector.as_deref(), rect);
+                    }
                     "toggle" => panel.toggle(),
                     "show" => panel.show(args.get(1).map(String::as_str)),
                     "hide" | "close" => panel.close(),
@@ -1048,9 +1249,9 @@ fn main() -> glib::ExitCode {
                     "status" => return Ok(panel.status_lines()),
                     other => {
                         return Err(format!(
-                            "unknown verb `{other}` (open [connector] [x y w h] | toggle | \
-                             show [query] | hide | refresh | drawer <name> | pin <id> | \
-                             unpin <id> | apps | status)"
+                            "unknown verb `{other}` (open [connector] [x y w h] | \
+                             tap [connector] [x y w h] | toggle | show [query] | hide | \
+                             refresh | drawer <name> | pin <id> | unpin <id> | apps | status)"
                         ))
                     }
                 }
@@ -1152,5 +1353,23 @@ mod tests {
 
         // Neither: nothing to place, nothing to measure.
         assert_eq!(parse_open(&[]), (None, None));
+    }
+
+    /// The tap catcher's hole is the *card* as it is drawn: its top-left corner
+    /// is the bar's own left margin and the panel's gap below the bar, and the
+    /// size is the content the shell pads. Getting this wrong leaves a finger of
+    /// the card either dimmed by its own catcher or a strip of screen that
+    /// swallows taps beside it.
+    #[test]
+    fn the_catcher_hole_is_the_card_at_the_bars_left_end() {
+        assert_eq!(
+            hole_at(12, 54, (728, 460)),
+            Hole {
+                x: 12,
+                y: 54,
+                width: 728,
+                height: 460,
+            }
+        );
     }
 }

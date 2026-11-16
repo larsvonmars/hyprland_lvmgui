@@ -8,9 +8,10 @@
  * other OSD here.
  *
  * The layout is two columns of tiles: the machine's *load* on the left (three
- * gauges, then the bluetooth radios with one row per device), the machine's
- * *controls* on the right (icon and name on the left, value or control on the
- * right), with the pending updates under them.
+ * gauges, then the two radios - the wireless link with the networks in reach, and
+ * bluetooth with the devices it knows), the machine's *controls* on the right
+ * (icon and name on the left, value or control on the right), with the pending
+ * updates under them.
  *
  * The hierarchy is carried by type size, not by rules and boxes: the gauges are
  * the only large numbers in the panel, values are one size, and headings and
@@ -234,11 +235,12 @@ separator.rule {
     margin: 1px 0;
 }
 
-/* ---- the bluetooth tile --------------------------------------------------- */
-/* The controller's row: the reading on the left, its two switches in the box
- * every row of the controls tile ends with. Same height as one of those rows, so
- * the two tiles have one rhythm rather than two. */
-box.bt-state {
+/* ---- the radio tiles ------------------------------------------------------ */
+/* A controller's row - the link's state and the radio's switch, or the bluetooth
+ * controller's state and its two switches: the reading on the left, the switches
+ * in the box every row of the controls tile ends with. Same height as one of
+ * those rows, so the three tiles have one rhythm rather than three. */
+box.radio-state {
     min-height: 28px;
     margin-bottom: 4px;
 }
@@ -315,10 +317,10 @@ box.actions label.btn-word {
     font-size: 10px;
 }
 
-/* A device: an edge mark when it is live, a badge with its class icon, the
- * name and its state, then the link meter, the battery pill, and the one
- * action that makes sense for it. The hover fill is what says the row is a
- * thing at all, since only the buttons at its end are clickable.
+/* A device or a network: an edge mark when it is live, a badge with its class
+ * icon, the name and its state, then the link meter, the battery pill (a device
+ * only), and the one action that makes sense for it. The hover fill is what says
+ * the row is a thing at all, since only the buttons at its end are clickable.
  *
  * The padding is on the left only: the row's buttons are not inset with it, so
  * they share the right edge the heading's own actions and the controller's
@@ -354,8 +356,9 @@ box.dev-badge {
     min-height: 24px;
 }
 
-/* A device that is actually *there*: the one thing in this list worth colouring,
- * because everything else is a name in a cache. */
+/* A device that is actually *there* (or the network carrying the session): the
+ * one thing in the list worth colouring, because everything else is a name in a
+ * cache. */
 box.dev-badge.live {
     background-color: @accent_tint;
 }

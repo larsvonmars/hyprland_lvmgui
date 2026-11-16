@@ -12,9 +12,9 @@
  * because it is built from the same pieces, not because the numbers were copied
  * twice:
  *
- *     16px   cards, the bar (box.card, box.bar)
- *     12px   tiles, tooltips, menus
- *     10px   flat rows
+ *     18px   cards, the bar (box.card, box.bar)
+ *     14px   tiles, tooltips, menus
+ *     12px   flat rows
  *     999px  capsules: pills, chips, progress bars
  *
  * Card padding is NOT part of the recipe (the card in the bar's design language
@@ -24,13 +24,19 @@
  */
 
 /* ---- typography: the bar's face, size and weight ------------------------ */
-/* One monospace face for the whole desktop, which is what keeps the bar's
- * readings from shifting as they change. It used to be a *Nerd Font* because
- * every icon was a private-use codepoint in a label; the icons are drawings in
- * the binary now (see `icons/`), so this is a text face and nothing more - a
- * Nerd Font still works here, but nothing depends on it any more. */
+/* One proportional face for the whole desktop, which is what keeps the bar and
+ * the cards reading as one surface - the rice this look follows sets its words
+ * in a humanist sans, not a mono. Cantarell is the GNOME face and therefore
+ * always installed; the rest are there so a machine that removed it still gets
+ * a sans rather than a fallback serif. Numbers are the one place a mono used to
+ * help (a percentage that ticks over pulled the pill's width), so the readings
+ * that change every second keep their column in `bar.css` instead.
+ *
+ * It used to be a *Nerd Font* because every icon was a private-use codepoint in
+ * a label; the icons are drawings in the binary now (see `icons/`), so this is
+ * a text face and nothing more. */
 * {
-    font-family: "MesloLGS Nerd Font Mono", "Noto Sans Mono", monospace;
+    font-family: "Cantarell", "Inter", "Adwaita Sans", "Noto Sans", sans-serif;
     font-size: 13px;
     font-weight: 500;
     min-height: 0;
@@ -51,9 +57,9 @@ window.osd {
 box.card {
     background-image: linear-gradient(180deg, @card_top, @card_bottom);
     border: 1px solid @border;
-    border-radius: 16px;
+    border-radius: 18px;
     color: @fg;
-    box-shadow: 0 6px 20px @shadow, inset 0 1px 0 @hairline;
+    box-shadow: 0 10px 28px @shadow, inset 0 1px 0 @hairline;
 }
 
 /* ---- the bar: the card recipe grown across the screen -------------------- */
@@ -66,14 +72,14 @@ box.card {
  * card_top -> card_bottom is an opaque fill, so a window scrolled underneath can
  * never show through the clock. */
 box.bar {
-    background-image: linear-gradient(180deg, @bg_gradient, rgba(0, 0, 0, 0.25));
+    background-image: linear-gradient(180deg, @bg_gradient, rgba(0, 0, 0, 0.18));
     background-color: @bg;
-    border: 1px solid @border;
-    border-radius: 16px;
+    border: 1px solid @hairline_soft;
+    border-radius: 18px;
     color: @fg;
     box-shadow:
-        0 6px 20px @shadow,
-        inset 0 1px 0 @hairline;
+        0 8px 24px @shadow,
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 /* ---- the pieces elements are built from --------------------------------- */
@@ -81,7 +87,7 @@ box.bar {
 /* a nested surface inside a card - theme.py's `.tile` */
 box.tile {
     background-color: @surface;
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 9px 10px;
 }
 
@@ -180,3 +186,61 @@ progressbar progress {
     border-radius: 999px;
     min-height: 4px;
 }
+
+/* ---- touch: a fingertip instead of a pointer ---------------------------- */
+/* `window.osd.touch` is added by the shell (`core::osd`) while the machine is
+ * being used as a tablet - the Type Cover folded away, or detached - and removed
+ * again when it comes back (see `core::touch`). Everything above is sized for a
+ * pointer: 13px type, `min-height: 0` on every control, 5px of chip padding.
+ * A fingertip needs about 44 logical pixels and does not get a hover to warn it
+ * that it is on the right thing, so the shared controls grow while the class is
+ * on. A laptop session looks exactly as it always did: none of this applies
+ * without the class.
+ *
+ * The rules are deliberately more specific than the recipes above (two classes
+ * and the element), so an element's own `button.chipbtn` rule cannot shrink a
+ * touch target by accident; an element that wants a *different* touch size adds
+ * its own `window.osd.touch` rule after these and wins. */
+window.osd.touch button.chipbtn {
+    min-height: 26px;
+    padding: 10px 14px;
+    border-radius: 11px;
+    font-size: 13px;
+}
+
+window.osd.touch label.chip {
+    padding: 4px 11px;
+    font-size: 11px;
+}
+
+window.osd.touch box.tile {
+    padding: 12px 12px;
+}
+
+/* A scale is dragged by the thumb; the pointer-sized one is 14px with a 4px
+ * trough, which a finger cannot do anything with. */
+window.osd.touch scale trough {
+    min-height: 10px;
+}
+
+window.osd.touch scale slider {
+    min-width: 26px;
+    min-height: 26px;
+    margin: -8px;
+}
+
+/* The scrollbar is the only affordance a touch list has (there is no wheel). */
+window.osd.touch scrollbar slider {
+    min-width: 12px;
+    min-height: 12px;
+}
+
+/* The tap catcher: the dimmed bands around a card that was opened by a finger
+ * (see `Osd::tap_catcher`). Its colour has to be above the 20 % alpha the
+ * compositor's `ignore_alpha` layer rule lets through - a fainter dim would let
+ * the tap land on whatever is behind the band, which is the accident the
+ * catcher exists to prevent. */
+box.tap-catcher {
+    background-color: rgba(5, 8, 12, 0.34);
+}
+

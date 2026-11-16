@@ -1,0 +1,88 @@
+#!/bin/sh
+# Lock the session - and, on a tablet, put the on-screen keyboard on top of the
+# lock screen so the password can be typed with a finger.
+#
+# hyprlock draws the lock screen and handles touch (a tap clicks), but it has no
+# text-input client in it: an on-screen keyboard has nothing to show itself *for*
+# on the lock screen, so it has to be forced up. This script is that forcing, in
+# one place:
+#
+#   * on a laptop it is just the locker - no keyboard, nothing to do;
+#   * on a tablet it starts the locker, then asks squeekboard (over its D-Bus
+#     interface) to show itself, and takes it down again when the screen is
+#     unlocked.
+#
+# The keyboard is only visible over the lock screen because of a Hyprland layer
+# rule (`above_lock` in ~/.config/hypr/osd.lua) - without it, Hyprland draws
+# nothing above a locked session. That rule is also what makes the keyboard
+# *interactive* while locked, which is the point: the keys are what types the
+# password. It is the one deliberate hole in the lock screen's isolation, and it
+# exists because a tablet folded back with no cover is otherwise impossible to
+# unlock without attaching the keyboard again.
+#
+# Everything the elements use to lock goes through here:
+#   * SUPER + L (~/.config/hypr/osd.lua)
+#   * hypridle's `lock_cmd` (~/.config/hypr/hypridle.conf)
+#   * the session card's Lock and Suspend rows, when they find this installed
+#
+# The installer puts it in ~/.local/bin. It is a script rather than a verb of an
+# element because hypridle and the compositor both have to be able to run it
+# with nothing else alive - an element that was not started yet must not be a
+# reason for a session to stay unlocked.
+
+set -eu
+
+# The locker, in the order this desktop prefers it. hyprlock is the one the
+# collection is themed for; the others still need to be able to lock.
+locker=""
+for candidate in hyprlock swaylock gtklock; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        locker=$candidate
+        break
+    fi
+done
+if [ -z "$locker" ]; then
+    echo "hypr-osd-lock: no screen locker installed (hyprlock, swaylock, gtklock)" >&2
+    exit 1
+fi
+
+# A second request (a second key press, `loginctl lock-session`, a second idle
+# event) must not start a second locker: the first one owns the session until it
+# is unlocked.
+if command -v pidof >/dev/null 2>&1; then
+    for running in hyprlock swaylock gtklock; do
+        if pidof "$running" >/dev/null 2>&1; then
+            exit 0
+        fi
+    done
+fi
+
+# Is the machine being used as a tablet? The tablet-mode switch's bind writes
+# this flag (see osd.lua's TOUCH section); anything else is "no".
+tablet=0
+if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -f "$XDG_RUNTIME_DIR/hypr-osd-tablet" ]; then
+    if [ "$(cat "$XDG_RUNTIME_DIR/hypr-osd-tablet" 2>/dev/null)" = "1" ]; then
+        tablet=1
+    fi
+fi
+
+# squeekboard's control interface: it is the input method's own D-Bus name, and
+# the call is ignored (quietly) when the keyboard is not installed or running.
+osk() {
+    command -v busctl >/dev/null 2>&1 || return 0
+    busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b "$1" \
+        >/dev/null 2>&1 || true
+}
+
+if [ "$tablet" -eq 1 ]; then
+    # The locker has to be on screen before a keyboard over it makes sense, and
+    # "on screen" is not something it announces - a second is the same grace the
+    # lock screen's own fade uses.
+    ( sleep 1; osk true ) &
+    "$locker" "$@" || true
+    # ... and the keyboard goes away with the lock screen, or it would sit over
+    # the desktop of a machine that has a real keyboard again.
+    osk false
+else
+    "$locker" "$@"
+fi

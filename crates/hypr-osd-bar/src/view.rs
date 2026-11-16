@@ -1,11 +1,12 @@
 //! The bar itself: one row, three sections, and the pills in them.
 //!
 //! Left: the button that opens the applications panel, then the workspaces, then
-//! the focused window's title. Centre: the clock, which is also the handle for the
-//! island popup (hover it and the panel unfolds; see the `hypr-osd-island`
-//! element). Right: the media pill, the network, the system info pill (CPU,
-//! memory, temperature, pending updates), the volume, the battery, the tray - and
-//! the power button at the far end.
+//! the focused window's title. Centre: the player - the cover and the track, the
+//! one thing in the bar that is not about this machine. Right: the system info
+//! pill (CPU, memory, temperature, pending updates), the tray and the windows put
+//! away, the combined status pill (link, sound, battery), the power button - and
+//! at the far end the clock, which is also the handle for the island popup (hover
+//! it and the panel unfolds; see the `hypr-osd-island` element).
 //!
 //! The view owns no state of its own beyond what the last render put on screen.
 //! Everything it shows is handed to it by `main` (a snapshot from Hyprland, a
@@ -13,26 +14,44 @@
 //! that knows how to draw each pill, and one place that decides *when* to read
 //! the thing it draws.
 //!
-//! A `gtk::CenterBox` is what keeps the clock in the middle: its centre child is
+//! The one exception is the workspace row: its accent capsule remembers where it
+//! was, because switching workspaces is a *movement* between two paints - the
+//! capsule glides from the pill you were on to the one you went to (see
+//! [`WorkspaceRow`]). Nothing else on the bar carries state from one paint to the
+//! next.
+//!
+//! A finger changes two things here, both in the handlers rather than in the
+//! paint: a *tap* on one of the three handles (the applications button, the
+//! clock, the status pill) asks its panel to open pinned - `tap` instead of
+//! `open`, because there is no pointer to leave and so no hover to close it -
+//! and the pointer's arrival no longer asks at all on a tablet, because GDK
+//! turns a tap into an emulated pointer that enters a pill and never leaves it.
+//! The pills' marks are drawn a few pixels larger while the machine is a tablet;
+//! the class that grows the rest is the shell's (`window.osd.touch`).
+//!
+//! A `gtk::CenterBox` is what keeps the player in the middle: its centre child is
 //! centred on the *bar*, not on the space left over between the two sides, which
 //! is what an ordinary box with three children would give.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
 
+use hypr_osd_core::art;
 use hypr_osd_core::hardware::{self as sources, Battery, Charging, Network, Volume};
 use hypr_osd_core::icons::{self, names};
 use hypr_osd_core::mpris::Track;
 use hypr_osd_core::system::Reading;
 use hypr_osd_core::text;
+use hypr_osd_core::touch;
 use hypr_osd_core::windows::Window;
 
 use crate::hypr::{Snapshot, Workspace};
 use crate::minimise::{self, Minimised};
-use crate::{Settings, Shows};
+use crate::{Settings, Shows, TOUCH_ICON_EXTRA};
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -44,10 +63,21 @@ use crate::{Settings, Shows};
 /// 13px text: the workspace row is a step down from that (its dots live in a
 /// capsule beside 12px numbers), the applications button and the power button
 /// at the two ends a step up, because those two are aimed at rather than read.
+/// A tablet draws every one of them [`TOUCH_ICON_EXTRA`] larger - the pill is
+/// still found by the same gesture, but it is now looked at from further away
+/// and hit with a fingertip.
 const ICON: i32 = 14;
 const WS_ICON: i32 = 11;
 const APPS_ICON: i32 = 15;
 const POWER_ICON: i32 = 16;
+
+/// The cover in the player pill is a picture, not a mark: two steps up from the
+/// text beside it, which is what makes it read as artwork rather than an icon.
+const MEDIA_ART: i32 = 22;
+/// The play/pause mark at the *end* of the player pill - smaller than a pill's
+/// own mark, because it is a note about the track rather than a reading of the
+/// machine.
+const MEDIA_HINT: i32 = 12;
 
 /// What separates the parts of a pill's face. A word of its own rather than a
 /// character inside one of the readings, so it reads as a separator and not as
@@ -271,6 +301,861 @@ impl Pill {
 }
 
 // ---------------------------------------------------------------------------
+// The clock
+// ---------------------------------------------------------------------------
+
+/// The clock at the right end of the bar: the time over the small date, and the
+/// handle the island popup unfolds from.
+///
+/// It is not a [`Pill`]: a pill's face is a mark and a reading side by side, and
+/// this is two strings *stacked* - which is the point (the rice this bar follows
+/// closes on the time with the date under it, not on another capsule). The
+/// button around them is still a `.module`, so it hovers and clicks like every
+/// other target.
+struct Clock {
+    button: gtk::Button,
+    time: gtk::Label,
+    date: gtk::Label,
+}
+
+impl Clock {
+    fn new() -> Self {
+        let button = gtk::Button::new();
+        button.add_css_class("module");
+        button.add_css_class("clock");
+        button.set_has_frame(false);
+        button.set_focus_on_click(false);
+        button.set_can_focus(false);
+
+        // A vertical box rather than one label with a line break: the two lines
+        // carry different sizes and weights (see `bar.css`), which a single label
+        // cannot do - markup would set the whole stack to the same style.
+        let face = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        face.set_halign(gtk::Align::Center);
+        face.set_valign(gtk::Align::Center);
+
+        let time = gtk::Label::new(None);
+        time.add_css_class("clock-time");
+        let date = gtk::Label::new(None);
+        date.add_css_class("clock-date");
+        face.append(&time);
+        face.append(&date);
+        button.set_child(Some(&face));
+
+        Clock { button, time, date }
+    }
+
+    /// Both lines, already formatted by the caller (`main` is the only place that
+    /// knows the configured formats). An empty date takes its line out rather
+    /// than leaving a blank one, so a config that asks for no date gets a clock of
+    /// one line.
+    fn render(&self, time: &str, date: &str) {
+        self.time.set_text(time);
+        self.date.set_text(date);
+        self.date.set_visible(!date.is_empty());
+        let tooltip = match date.is_empty() {
+            true => time.to_string(),
+            false => format!("{time} · {date}"),
+        };
+        self.button.set_tooltip_text(Some(&tooltip));
+    }
+
+    fn set_visible(&self, visible: bool) {
+        self.button.set_visible(visible);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The player pill
+// ---------------------------------------------------------------------------
+
+/// The player, in the middle of the bar: the cover (or the player's own mark when
+/// it has no artwork) and the track, in one rounded capsule.
+///
+/// The cover is loaded from `mpris:artUrl` through `core::art`, which never
+/// blocks: the mark stands in until the picture arrives, and a track that changes
+/// while a slow cover is still being fetched drops whatever comes back (the `url`
+/// cell is the "is this still the track I asked about?" answer).
+struct MediaPill {
+    button: gtk::Button,
+    /// The left slot of the face: the artwork when there is some, the mark when
+    /// there is not. A `gtk::Stack` rather than a child that is swapped out, so
+    /// the two never change the pill's size and the picture is kept while the
+    /// slot is showing the mark.
+    slot: gtk::Stack,
+    art: gtk::Image,
+    /// The box holding the player's mark, rebuilt when the mark changes (a
+    /// different player, or play/pause) without touching the artwork.
+    mark: gtk::Box,
+    /// The play/pause mark at the end of the pill: the same note the rice's
+    /// player carries, and the only thing that says "paused" once a cover is
+    /// showing (the mark in the slot is the *player*, not the state).
+    hint: gtk::Box,
+    label: gtk::Label,
+    /// What the face shows now, so a repaint that changes nothing (the same track
+    /// arriving again on the heartbeat) leaves the widgets alone.
+    shown: RefCell<String>,
+    /// The art URL the slot is showing, or waiting for.
+    url: Rc<RefCell<String>>,
+    icon_size: i32,
+    hint_size: i32,
+}
+
+impl MediaPill {
+    fn new(icon_size: i32, art_size: i32, hint_size: i32, width: i32) -> Self {
+        let button = gtk::Button::new();
+        button.add_css_class("module");
+        button.add_css_class("media");
+        button.set_has_frame(false);
+        button.set_focus_on_click(false);
+        button.set_can_focus(false);
+
+        let face = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+        face.set_halign(gtk::Align::Center);
+        face.set_valign(gtk::Align::Center);
+
+        let art = gtk::Image::new();
+        art.add_css_class("media-art");
+        art.set_pixel_size(art_size);
+
+        let mark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        mark.set_valign(gtk::Align::Center);
+
+        let hint = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        hint.add_css_class("media-hint");
+        hint.set_valign(gtk::Align::Center);
+
+        let slot = gtk::Stack::new();
+        slot.set_hhomogeneous(false);
+        slot.set_vhomogeneous(false);
+        slot.add_named(&art, Some("art"));
+        slot.add_named(&mark, Some("mark"));
+        slot.set_visible_child_name("mark");
+
+        let label = gtk::Label::new(None);
+        label.add_css_class("media-title");
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_xalign(0.0);
+        // An ellipsised label still asks for the width of its full text; the cap
+        // is what stops one long track from deciding how much room the rest of
+        // the bar gets.
+        text::cap_width(&label, width);
+
+        face.append(&slot);
+        face.append(&label);
+        face.append(&hint);
+        button.set_child(Some(&face));
+
+        MediaPill {
+            button,
+            slot,
+            art,
+            mark,
+            hint,
+            label,
+            shown: RefCell::new(String::new()),
+            url: Rc::new(RefCell::new(String::new())),
+            icon_size,
+            hint_size,
+        }
+    }
+
+    fn render(&self, track: Option<&Track>, playing: bool) {
+        let Some(track) = track.filter(|track| !track.is_empty()) else {
+            self.button.set_visible(false);
+            return;
+        };
+        let icon = player_icon(&track.player);
+        let state = if playing {
+            names::AUDIO_LINES
+        } else {
+            names::PAUSE
+        };
+        // The artist is dropped before the title is: on a bar, "what is this" is
+        // more useful than "who is this".
+        let summary = if track.artist.is_empty() {
+            track.title.clone()
+        } else {
+            format!("{} · {}", track.title, track.artist)
+        };
+
+        let signature = format!("{icon}|{state}|{summary}");
+        {
+            let mut shown = self.shown.borrow_mut();
+            if *shown != signature {
+                *shown = signature;
+                while let Some(child) = self.mark.first_child() {
+                    self.mark.remove(&child);
+                }
+                self.mark.append(&icons::lucide(icon, self.icon_size));
+                while let Some(child) = self.hint.first_child() {
+                    self.hint.remove(&child);
+                }
+                self.hint.append(&icons::lucide(state, self.hint_size));
+                self.label.set_text(&summary);
+            }
+        }
+        self.set_art(&track.art);
+        set_class(&self.button, "playing", playing);
+        set_class(&self.hint, "playing", playing);
+        self.button.set_tooltip_text(Some(&format!(
+            "{summary}\n{}",
+            if playing { "playing" } else { "paused" }
+        )));
+        self.button.set_visible(true);
+    }
+
+    /// Point the cover slot at `url`, through `core::art` (which decodes a local
+    /// file or fetches a remote one, never on the main loop).
+    fn set_art(&self, url: &str) {
+        if *self.url.borrow() == url {
+            return;
+        }
+        *self.url.borrow_mut() = url.to_string();
+        if url.is_empty() {
+            self.art.set_paintable(None::<&gtk::gdk::Texture>);
+            self.slot.set_visible_child_name("mark");
+            return;
+        }
+        // The mark stands in until the cover is decoded, so a slow fetch never
+        // leaves a hole in the pill.
+        self.slot.set_visible_child_name("mark");
+        let wanted = url.to_string();
+        let cell = self.url.clone();
+        let slot = self.slot.clone();
+        let art = self.art.clone();
+        art::load(url, move |texture| {
+            // The track changed while this one was being read: whatever arrived
+            // belongs to a pill that is no longer showing that track.
+            if *cell.borrow() != wanted {
+                return;
+            }
+            match texture {
+                Some(texture) => {
+                    art.set_paintable(Some(&texture));
+                    slot.set_visible_child_name("art");
+                }
+                None => slot.set_visible_child_name("mark"),
+            }
+        });
+    }
+
+    fn set_visible(&self, visible: bool) {
+        self.button.set_visible(visible);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The workspace row
+// ---------------------------------------------------------------------------
+
+/// How long the accent capsule takes to glide from the workspace you were on to
+/// the one you switched to.
+///
+/// The pills' own colour transitions are 180ms (`bar.css`), so the glide is the
+/// same size of gesture: long enough to read as movement, over before it becomes
+/// something to wait for.
+const GLIDE: Duration = Duration::from_millis(180);
+
+/// A rectangle in the workspace row's own coordinates.
+///
+/// Kept in floats because a glide interpolates it on every frame; the capsule is
+/// only ever *drawn* at whole pixels (see [`WorkspaceRow::put`]), but rounding
+/// each step of a long ease would stutter at the slow end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+/// How far a glide that started at `started` has got by `now`, as 0..=1.
+///
+/// The frame clock's times are microseconds and monotonic, so a glide is a
+/// subtraction and a division; the clamps are what keep a late frame (or a clock
+/// that went backwards) from drawing the capsule outside its two pills.
+fn progress(now: i64, started: i64, span: Duration) -> f64 {
+    let span = span.as_micros().max(1) as f64;
+    ((now - started).max(0) as f64 / span).clamp(0.0, 1.0)
+}
+
+/// The eased fraction of a glide: it leaves at once and settles at the end.
+///
+/// Ease-out cubic - the shape the CSS transitions on the pills already have. A
+/// capsule that started slowly would read as dragged rather than sent, and one
+/// that stopped at full speed would look like it had missed the pill.
+fn ease_out_cubic(part: f64) -> f64 {
+    let part = part.clamp(0.0, 1.0);
+    1.0 - (1.0 - part).powi(3)
+}
+
+/// The rectangle the capsule draws `eased` of the way from `from` to `to`.
+fn between(from: Rect, to: Rect, eased: f64) -> Rect {
+    let at = |start: f32, end: f32| start + (end - start) * eased as f32;
+    Rect {
+        x: at(from.x, to.x),
+        y: at(from.y, to.y),
+        width: at(from.width, to.width),
+        height: at(from.height, to.height),
+    }
+}
+
+/// Where the row has been asked to put the capsule, and whether it may glide
+/// there.
+///
+/// A move waits when the row has not been laid out: nothing has an allocation
+/// before the bar is on screen, and a rebuilt row's buttons do not have one
+/// until the next frame.
+#[derive(Clone, Copy)]
+struct PendingMove {
+    workspace: i32,
+    animate: bool,
+}
+
+/// One glide of the accent capsule.
+struct Travel {
+    /// Where the capsule started and where it is going, in row coordinates.
+    from: Rect,
+    to: Rect,
+    /// The workspace it is gliding to: the number inside changes half way, where
+    /// the movement hides the change.
+    to_id: i32,
+    /// The frame time of the first frame, which is where the glide's clock
+    /// starts (the tick that starts it has no time of its own yet).
+    started: Option<i64>,
+}
+
+/// What the row was last drawn from, and what its capsule is doing about it.
+#[derive(Default)]
+struct RowState {
+    /// The workspace ids the buttons were made for, in row order.
+    ids: Vec<i32>,
+    /// One pill per id. Kept between renders so that a switch restyles the
+    /// buttons instead of replacing them - a replaced button is what used to make
+    /// the row snap.
+    pills: Vec<Pill>,
+    /// The signature of the snapshot the row was last drawn for.
+    signature: String,
+    /// The rectangle the capsule is at, or `None` before it has been placed.
+    rect: Option<Rect>,
+    /// The workspace the number in the capsule names.
+    label: Option<i32>,
+    /// The workspace the capsule is at, or gliding to.
+    place: Option<i32>,
+    /// A move that is waiting for the row to be laid out (see [`PendingMove`]).
+    pending: Option<PendingMove>,
+    /// The glide in progress, if any.
+    travel: Option<Travel>,
+    /// The tick callback that is running the glide, so a switch arriving
+    /// mid-glide can take it over from where the capsule has got to.
+    glide_tick: Option<gtk::TickCallbackId>,
+    /// Whether a tick is waiting for the layout to catch up (see
+    /// [`WorkspaceRow::settle`]).
+    settling: bool,
+}
+
+impl RowState {
+    /// Stop the glide where it is: a retarget starts a new one from there.
+    fn cancel_glide(&mut self) {
+        if let Some(tick) = self.glide_tick.take() {
+            tick.remove();
+        }
+        self.travel = None;
+    }
+}
+
+/// The row of workspace pills, and the accent capsule above them that says which
+/// one you are on.
+///
+/// The capsule is a widget of its own rather than the active button's
+/// background, because it is the thing that *moves*, and a background cannot
+/// slide from one pill to another. Its position is not something a stylesheet
+/// can be told: the distance between two pills is only known once the row has
+/// been laid out, and a `GtkOverlay` places an overlay child by its alignment
+/// alone, ignoring its margins - so the row stacks a `GtkFixed` over the pills
+/// and moves the capsule inside it, frame by frame, from `add_tick_callback`
+/// (see [`WorkspaceRow::glide`]).
+///
+/// The buttons are rebuilt only when the *set* of workspaces changes; a switch
+/// restyles them in place. That split is what the glide needs: its journey starts
+/// from wherever the capsule was on screen, which only exists as long as the row
+/// is not thrown away.
+struct WorkspaceRow {
+    /// The row as a widget: the pills, with the capsule on top.
+    root: gtk::Overlay,
+    /// The buttons, in workspace order.
+    row: gtk::Box,
+    /// The absolute-position layer the capsule lives on.
+    track: gtk::Fixed,
+    /// The accent pill: the workspace you are on, as its number.
+    capsule: gtk::Label,
+    /// How large a workspace mark is drawn (see [`WS_ICON`]), kept for the
+    /// buttons a rebuild makes.
+    ws_icon: i32,
+    state: RefCell<RowState>,
+}
+
+impl WorkspaceRow {
+    /// Build the empty row. It fills in on the first [`WorkspaceRow::render`].
+    fn new(ws_icon: i32) -> Rc<Self> {
+        let root = gtk::Overlay::new();
+        root.add_css_class("workspaces");
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        root.set_child(Some(&row));
+
+        // The capsule's layer. A fixed container is the only widget that takes an
+        // absolute position, and neither it nor the capsule may eat the clicks
+        // and hovers the pills underneath are there for.
+        let track = gtk::Fixed::new();
+        track.set_can_target(false);
+        // A fixed clips what it holds to its own box, which would cut the
+        // capsule's glow off at the row's edges - the glow is what separates it
+        // from the bar behind it, so it has to be able to spill.
+        track.set_overflow(gtk::Overflow::Visible);
+        root.add_overlay(&track);
+
+        let capsule = gtk::Label::new(None);
+        capsule.add_css_class("ws-capsule");
+        capsule.set_can_target(false);
+        capsule.set_visible(false);
+        track.put(&capsule, 0.0, 0.0);
+
+        let this = Rc::new(WorkspaceRow {
+            root,
+            row,
+            track,
+            capsule,
+            ws_icon,
+            state: RefCell::new(RowState::default()),
+        });
+
+        // The first render runs before the bar is on screen (so nothing has an
+        // allocation then), and a bar that was hidden and shown again has a layout
+        // that may have moved underneath the capsule. Both are moments to place it
+        // again - a frame later, when the row can be measured (see `settle`).
+        let me = Rc::downgrade(&this);
+        this.root.connect_map(move |_| {
+            let Some(row) = me.upgrade() else {
+                return;
+            };
+            {
+                let mut state = row.state.borrow_mut();
+                if let Some(place) = state.place {
+                    state.pending = Some(PendingMove {
+                        workspace: place,
+                        animate: false,
+                    });
+                }
+            }
+            row.ensure_settle();
+        });
+
+        this
+    }
+
+    /// Draw the row from one Hyprland snapshot.
+    fn render(self: &Rc<Self>, workspaces: &[Workspace]) {
+        // The signature is the whole picture the row draws - which workspaces
+        // exist, what is in them, and which one you are on. A repaint that changes
+        // none of it (the clock's heartbeat, a volume tick) must not touch a
+        // widget, let alone restart a glide.
+        let signature = workspaces
+            .iter()
+            .map(|workspace| {
+                format!(
+                    "{}:{}:{}:{}",
+                    workspace.id,
+                    workspace.windows,
+                    u8::from(workspace.active),
+                    u8::from(workspace.visible)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        {
+            let mut state = self.state.borrow_mut();
+            if state.signature == signature {
+                return;
+            }
+            state.signature = signature;
+        }
+
+        self.rebuild(workspaces);
+        self.paint(workspaces);
+        self.aim(
+            workspaces
+                .iter()
+                .find(|workspace| workspace.active)
+                .map(|workspace| workspace.id),
+        );
+    }
+
+    /// Make one button per workspace when the list of workspaces changes.
+    ///
+    /// Not on a switch: the capsule needs the old buttons' rectangles to glide
+    /// from, and a workspace that has just come into existence appends a pill at
+    /// the end without moving the ones before it.
+    fn rebuild(self: &Rc<Self>, workspaces: &[Workspace]) {
+        let ids: Vec<i32> = workspaces.iter().map(|workspace| workspace.id).collect();
+        if self.state.borrow().ids == ids {
+            return;
+        }
+
+        while let Some(child) = self.row.first_child() {
+            self.row.remove(&child);
+        }
+        let mut pills = Vec::with_capacity(workspaces.len());
+        for workspace in workspaces {
+            let pill = Pill::new("ws", self.ws_icon);
+            // The number lives in the capsule rather than in this button (see
+            // `paint`), so the name a screen reader would otherwise have found
+            // only in the label is given to the button itself.
+            pill.button
+                .update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Workspace {}",
+                    workspace.id
+                ))]);
+            {
+                let id = workspace.id.to_string();
+                pill.on_click(move || {
+                    hypr_osd_core::hypripc::request(&format!(
+                        "dispatch hl.dsp.focus({{ workspace = {id} }})"
+                    ));
+                });
+            }
+            pill.on_scroll(move |direction| {
+                // `e+1`/`e-1` are Hyprland's own "the next existing workspace"
+                // relative forms, so the wheel skips the gaps the way the
+                // workspace swipe does.
+                let step = if direction > 0 { "e+1" } else { "e-1" };
+                hypr_osd_core::hypripc::request(&format!(
+                    "dispatch hl.dsp.focus({{ workspace = \"{step}\" }})"
+                ));
+            });
+            self.row.append(&pill.button);
+            pills.push(pill);
+        }
+
+        let mut state = self.state.borrow_mut();
+        // A glide belongs to the old row; the next one starts from wherever the
+        // capsule is now (`rect`), so the number cannot arrive on a pill that the
+        // rebuild has just moved away from under it.
+        state.cancel_glide();
+        state.ids = ids;
+        state.pills = pills;
+        // The buttons are new, so the capsule's place among them has to be found
+        // again (the row has no allocations for them until the next frame).
+        state.place = None;
+    }
+
+    /// Restyle the buttons for one snapshot, without replacing any of them.
+    fn paint(&self, workspaces: &[Workspace]) {
+        let state = self.state.borrow();
+        for (pill, workspace) in state.pills.iter().zip(workspaces) {
+            // An idle workspace is a dot, and the *shape* carries its state:
+            // filled when it holds a window, hollow when it is empty. That leaves
+            // the colour free for the one thing shape cannot say - the accent,
+            // for a workspace that is up on another monitor.
+            //
+            // The workspace you are on carries no mark here at all: the capsule
+            // above the row draws its number, and this button is only the target
+            // a click lands on.
+            pill.set_one(
+                if workspace.active {
+                    ""
+                } else if workspace.windows > 0 {
+                    names::WORKSPACE_ACTIVE
+                } else {
+                    names::WORKSPACE_IDLE
+                },
+                "",
+                &[
+                    ("active", workspace.active),
+                    ("visible", workspace.visible),
+                    ("occupied", workspace.windows > 0),
+                    ("empty", workspace.windows == 0),
+                ],
+            );
+            pill.tooltip(Some(&workspace_tooltip(workspace)));
+        }
+    }
+
+    /// Put the capsule where the focused workspace is: glide there if it is
+    /// already on screen, land on it if it is not.
+    fn aim(self: &Rc<Self>, wanted: Option<i32>) {
+        let Some(wanted) = wanted else {
+            // Nothing the row draws has the focus (a special workspace has no
+            // pill): there is nowhere for the capsule to stand, so it goes away.
+            {
+                let mut state = self.state.borrow_mut();
+                state.pending = None;
+                state.place = None;
+                state.cancel_glide();
+            }
+            self.capsule.set_visible(false);
+            return;
+        };
+        // A workspace the row has no pill for cannot be glided to. That should
+        // not happen - the row is built from the same snapshot the focus comes
+        // from - but the two IPC reads behind that snapshot are separate, so a
+        // workspace created between them can leave the focus ahead of the row for
+        // a moment. The capsule is left where it is and the next snapshot aims it;
+        // waiting here would leave the settle tick retrying for a pill that is not
+        // there yet, for ever.
+        if !self.state.borrow().ids.contains(&wanted) {
+            {
+                let mut state = self.state.borrow_mut();
+                state.pending = None;
+                state.cancel_glide();
+                state.place = None;
+            }
+            return;
+        }
+        let animate = self.capsule.is_visible();
+        // A glide already on its way to this workspace is not disturbed by a
+        // repaint that changed only some other field (a window count, another
+        // monitor's `visible`): restarting the clock would stretch the movement.
+        if self
+            .state
+            .borrow()
+            .travel
+            .as_ref()
+            .is_some_and(|travel| travel.to_id == wanted)
+        {
+            return;
+        }
+        {
+            let state = self.state.borrow();
+            let settled =
+                state.place == Some(wanted) && state.travel.is_none() && state.pending.is_none();
+            if settled && animate {
+                return;
+            }
+            if state
+                .pending
+                .is_some_and(|pending| pending.workspace == wanted)
+            {
+                return;
+            }
+        }
+        self.move_to(wanted, animate);
+    }
+
+    /// Put the capsule on `workspace`, gliding from where it is when `animate`
+    /// is set and the row has been laid out enough to measure the pill.
+    fn move_to(self: &Rc<Self>, workspace: i32, animate: bool) {
+        let Some(to) = self.bounds_of(workspace) else {
+            // The bar is not on screen yet, or a rebuilt row's buttons have no
+            // allocation until the next frame: wait for the layout.
+            self.state.borrow_mut().pending = Some(PendingMove { workspace, animate });
+            self.ensure_settle();
+            return;
+        };
+        let from = self.state.borrow().rect;
+        match from {
+            Some(from) if animate && animations_enabled() && from != to => {
+                self.glide(from, to, workspace)
+            }
+            _ => self.land(to, workspace),
+        }
+    }
+
+    /// Start a glide: every frame moves the capsule a little further, and the
+    /// number in it changes at the half-way point (the movement is what hides the
+    /// change). A switch that arrives mid-glide takes the glide over from where
+    /// the capsule has got to instead of starting again.
+    fn glide(self: &Rc<Self>, from: Rect, to: Rect, workspace: i32) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.cancel_glide();
+            state.pending = None;
+            state.place = Some(workspace);
+            state.travel = Some(Travel {
+                from,
+                to,
+                to_id: workspace,
+                started: None,
+            });
+        }
+        let me = Rc::downgrade(self);
+        let tick = self.root.add_tick_callback(move |_, clock| {
+            let Some(row) = me.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            row.step(clock.frame_time())
+        });
+        self.state.borrow_mut().glide_tick = Some(tick);
+    }
+
+    /// One frame of the glide. Returns whether there is another one.
+    fn step(self: &Rc<Self>, now: i64) -> glib::ControlFlow {
+        let mut state = self.state.borrow_mut();
+        if state.travel.is_none() {
+            // Nobody took the callback away, but there is nothing left to move.
+            state.glide_tick = None;
+            return glib::ControlFlow::Break;
+        }
+        let (started, from, to, to_id) = {
+            let travel = state.travel.as_mut().expect("checked above");
+            (
+                *travel.started.get_or_insert(now),
+                travel.from,
+                travel.to,
+                travel.to_id,
+            )
+        };
+        let part = progress(now, started, GLIDE);
+        let finished = part >= 1.0;
+        let rect = if finished {
+            to
+        } else {
+            between(from, to, ease_out_cubic(part))
+        };
+        // The half-way point: by now the capsule is moving fast enough to hide
+        // the number changing under the eye.
+        if part >= 0.5 && state.label != Some(to_id) {
+            state.label = Some(to_id);
+            self.capsule.set_text(&to_id.to_string());
+        }
+        if finished {
+            state.travel = None;
+            state.glide_tick = None;
+        }
+        state.rect = Some(rect);
+        state.place = Some(to_id);
+        drop(state);
+        self.put(rect);
+        if finished {
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    }
+
+    /// Put the capsule down without a glide: the first paint (there is nothing to
+    /// glide from yet), or a desktop that has asked GTK for no animations. A
+    /// rebuilt row is not one of those cases - it cancels a running glide and the
+    /// next one starts from wherever the capsule has got to (see `rebuild`).
+    fn land(self: &Rc<Self>, rect: Rect, workspace: i32) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.cancel_glide();
+            state.pending = None;
+            state.place = Some(workspace);
+            state.rect = Some(rect);
+            state.label = Some(workspace);
+        }
+        self.capsule.set_text(&workspace.to_string());
+        self.put(rect);
+        self.capsule.set_visible(true);
+    }
+
+    /// Draw the capsule at `rect`.
+    ///
+    /// Its size is a size *request*: a fixed allocates its children at their
+    /// *minimum*, which is where the request lands (the label's own minimum - the
+    /// widest number it could show - is smaller than the pill). Its position is
+    /// the child's transform. Those are the two numbers this code animates, and
+    /// both are rounded to whole pixels: a bar of hairlines and 12px text is not
+    /// improved by a capsule that sits on half a pixel.
+    fn put(&self, rect: Rect) {
+        self.capsule.set_size_request(
+            rect.width.round().max(1.0) as i32,
+            rect.height.round().max(1.0) as i32,
+        );
+        self.track.move_(
+            &self.capsule,
+            f64::from(rect.x.round()),
+            f64::from(rect.y.round()),
+        );
+    }
+
+    /// Where a workspace's pill is inside the row, in the row's coordinates.
+    ///
+    /// `compute_bounds` is GTK's own answer, so it accounts for the row's layout
+    /// rather than for anything guessed here. `None` before the bar is on screen
+    /// (or before a rebuilt row has been laid out) is what makes a move wait.
+    ///
+    /// The guard is not merely "is the rectangle non-empty": a button that has
+    /// not been allocated *still* answers `compute_bounds` with a degenerate
+    /// rectangle instead of nothing (measured: `-8,-1 16x2` on the first paint).
+    /// Trusting that placed the capsule from a layout that had not happened yet,
+    /// and nothing aimed it again until the workspace changed - so the number sat
+    /// off its pill until you switched. A real pill is at least a mark wide and
+    /// tall and lies inside the row, which is what these two tests check. */
+    fn bounds_of(&self, workspace: i32) -> Option<Rect> {
+        let state = self.state.borrow();
+        let index = state.ids.iter().position(|id| *id == workspace)?;
+        let pill = state.pills.get(index)?;
+        let bounds = pill.button.compute_bounds(&self.root)?;
+        let rect = Rect {
+            x: bounds.x(),
+            y: bounds.y(),
+            width: bounds.width(),
+            height: bounds.height(),
+        };
+        let inside = rect.x >= -1.0
+            && rect.y >= -1.0
+            && rect.x + rect.width <= self.root.width() as f32 + 1.0
+            && rect.y + rect.height <= self.root.height() as f32 + 1.0;
+        (rect.width >= 8.0 && rect.height >= 8.0 && inside).then_some(rect)
+    }
+
+    /// Ask for a frame in which to carry out a move that had to wait for the
+    /// layout. Only one wait runs at a time, and a wait that still has nothing to
+    /// measure keeps the same tick rather than adding another.
+    fn ensure_settle(self: &Rc<Self>) {
+        if self.state.borrow().settling {
+            return;
+        }
+        self.state.borrow_mut().settling = true;
+        let me = Rc::downgrade(self);
+        self.root.add_tick_callback(move |_, _| {
+            let Some(row) = me.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if row.settle() {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    /// One frame of the wait: carry out the pending move if the row can be
+    /// measured now. Returns whether the wait is over.
+    fn settle(self: &Rc<Self>) -> bool {
+        let pending = self.state.borrow_mut().pending.take();
+        if let Some(pending) = pending {
+            self.move_to(pending.workspace, pending.animate);
+        }
+        let done = self.state.borrow().pending.is_none();
+        if done {
+            self.state.borrow_mut().settling = false;
+        }
+        done
+    }
+
+    /// Whether the row is on the bar at all (`show_workspaces = false` turns it
+    /// off, like any other part).
+    fn set_visible(&self, visible: bool) {
+        self.root.set_visible(visible);
+    }
+}
+
+/// Whether the desktop asks GTK to animate at all.
+///
+/// GTK's own setting is the accessibility switch for motion ("Enable
+/// animations"): a desktop that has turned it off gets the landing without the
+/// glide, which is the whole point of the switch. The row is as readable either
+/// way; it is only still.
+fn animations_enabled() -> bool {
+    gtk::Settings::default().is_none_or(|settings| settings.is_gtk_enable_animations())
+}
+
+// ---------------------------------------------------------------------------
 // The bar
 // ---------------------------------------------------------------------------
 
@@ -282,10 +1167,12 @@ pub struct BarView {
     pub root: gtk::CenterBox,
     /// The button that opens the applications panel, at the far left.
     apps: Pill,
-    workspaces: gtk::Box,
+    /// The workspace row: one button per workspace, with the accent capsule that
+    /// glides between them when you switch.
+    workspaces: Rc<WorkspaceRow>,
     title: gtk::Label,
-    clock: Pill,
-    media: Pill,
+    clock: Clock,
+    media: MediaPill,
     /// The system info pill: what the machine is *doing*.
     stats: Pill,
     /// The combined status pill: the link, the sound and the battery, and the
@@ -298,15 +1185,13 @@ pub struct BarView {
     /// The three readings behind the status pill, kept together because the pill
     /// is drawn from all of them at once (see [`Status`]).
     readings: RefCell<Status>,
-    /// What the workspace row was last drawn from, so an event that changes
-    /// nothing does not rebuild a row of buttons.
-    last_workspaces: RefCell<String>,
     /// The same for the put-away icons, which are buttons too - and one the
     /// pointer may well be resting on (see [`BarView::render_minimised`]).
     last_minimised: RefCell<String>,
     /// How large a tray icon is drawn, in layout pixels. The put-away icons are
     /// the same size as the application indicators beside them: they are the same
-    /// gesture.
+    /// gesture. Larger while the machine is a tablet - the icon *is* the target,
+    /// so it grows with the finger.
     icon_size: i32,
     /// Which parts of the bar the config asks for (see [`Shows`]). Kept rather
     /// than read once, because four of the pills show and hide themselves as
@@ -338,11 +1223,43 @@ impl BarView {
     /// Build one monitor's bar. `connector` is the output it is on, which it
     /// needs to tell its two popups where they belong: they are drawn on the
     /// bar's screen and measured against it, and the bar is the only one who
-    /// knows which screen that is.
-    pub fn new(settings: &Rc<Settings>, connector: &str) -> Self {
+    /// knows which screen that is. `tablet` is the layout the bar's surface was
+    /// made for - the marks grow with it, and a rebuild after a fold builds the
+    /// pills again at the new size.
+    pub fn new(settings: &Rc<Settings>, connector: &str, tablet: bool) -> Self {
+        let icon = if tablet {
+            ICON + TOUCH_ICON_EXTRA
+        } else {
+            ICON
+        };
+        let ws_icon = if tablet {
+            WS_ICON + TOUCH_ICON_EXTRA
+        } else {
+            WS_ICON
+        };
+        let apps_icon = if tablet {
+            APPS_ICON + TOUCH_ICON_EXTRA
+        } else {
+            APPS_ICON
+        };
+        let power_icon = if tablet {
+            POWER_ICON + TOUCH_ICON_EXTRA
+        } else {
+            POWER_ICON
+        };
+        let media_art = if tablet {
+            MEDIA_ART + TOUCH_ICON_EXTRA
+        } else {
+            MEDIA_ART
+        };
+        let media_hint = if tablet {
+            MEDIA_HINT + TOUCH_ICON_EXTRA
+        } else {
+            MEDIA_HINT
+        };
+
         // --- left: the workspaces and the focused window -------------------
-        let workspaces = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        workspaces.add_css_class("workspaces");
+        let workspaces = WorkspaceRow::new(ws_icon);
 
         let title = gtk::Label::new(None);
         title.add_css_class("title");
@@ -360,64 +1277,108 @@ impl BarView {
         // takes it away again when the pointer has left both the button and the
         // panel. The handler is wired after the row exists, because the request
         // measures the button and needs the tree it ends up in.
-        let apps = Pill::new("apps", APPS_ICON);
+        let apps = Pill::new("apps", apps_icon);
 
         let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         left.add_css_class("section");
         left.append(&apps.button);
-        left.append(&workspaces);
+        left.append(&workspaces.root);
         left.append(&title);
 
-        // --- centre: the clock, and the island popup's handle ---------------
-        let clock = Pill::new("clock", ICON);
+        // --- centre: the player --------------------------------------------
+        let media = MediaPill::new(icon, media_art, media_hint, settings.media_width);
+        // The click is bound with `touch::on_click` rather than the button's own
+        // `clicked`, because this pill has a long press beside it: on a release
+        // that followed one, the click stands down and only the long press's
+        // action runs (see `touch::on_click`).
+        touch::on_click(&media.button, move |_| {
+            sources::launch("playerctl", &["play-pause"]);
+        });
+        {
+            // The previous track is on the middle button; GTK's `clicked` is
+            // button 1 only, so it arrives as a gesture.
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(gtk::gdk::BUTTON_MIDDLE);
+            gesture.connect_pressed(|_, _, _, _| {
+                sources::launch("playerctl", &["previous"]);
+            });
+            media.button.add_controller(gesture);
+        }
+        {
+            // Scrolling seeks: `5+` is "five seconds further in".
+            let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+            scroll.connect_scroll(|_, _dx, dy| {
+                let spec = if dy < 0.0 { "5+" } else { "5-" };
+                sources::launch("playerctl", &["position", spec]);
+                glib::Propagation::Stop
+            });
+            media.button.add_controller(scroll);
+        }
+        // Next track had the right button. A finger reaches it with a long press
+        // instead (the same binding the whole bar uses); the middle click for the
+        // *previous* track stays mouse-only, because a finger has no third
+        // gesture to spare and the play button is right beside it.
+        touch::on_secondary(&media.button, || {
+            sources::launch("playerctl", &["next"]);
+        });
+
+        // --- the clock: the island popup's handle, at the right end --------
+        let clock = Clock::new();
         // Hovering the clock unfolds the island popup. The bar only *asks*: the
         // island decides when to go away again, because leaving a popup is the
         // pointer moving somewhere the bar cannot see (onto the popup itself).
+        //
+        // A finger is not a pointer, and asking here would be wrong twice: it
+        // has no hover, and GDK turns its tap into an emulated pointer that
+        // enters the pill and never leaves it. So a tablet's way in is the
+        // `tap` verb below, and this handler stays a pointer's.
         let motion = gtk::EventControllerMotion::new();
         {
             let island = settings.island_command.clone();
             let connector = connector.to_owned();
-            motion.connect_enter(move |_, _, _| {
-                // The island's hot zone is the middle of the bar, so the panel
-                // only needs to be told *which* bar - i.e. which monitor. It
-                // cannot look that up itself: the focused output is not
-                // necessarily the one this bar is on.
+            motion.connect_enter(move |motion, _, _| {
+                if touch::tablet() || from_finger(motion) {
+                    return;
+                }
+                // The island's own hot zone is the right end of the bar, where
+                // the clock now is, so the panel only needs to be told *which*
+                // bar - i.e. which monitor. It cannot look that up itself: the
+                // focused output is not necessarily the one this bar is on.
                 sources::launch(&island, &["open", &connector]);
             });
         }
         clock.button.add_controller(motion);
         {
+            let island = settings.island_command.clone();
             let notifications = settings.notifications_command.clone();
-            clock
-                .on_click(move || {
+            let connector = connector.to_owned();
+            // A finger's tap opens the island *pinned*: the island puts a tap
+            // catcher around its card, because the only way out of a hover popup
+            // is a pointer moving off it, and this screen has no pointer. A
+            // mouse's click keeps the gesture it always had - the notification
+            // centre - so the difference lives in this one flag, not in a second
+            // button.
+            touch::on_click(&clock.button, move |from_finger| {
+                if from_finger {
+                    sources::launch(&island, &["tap", &connector]);
+                } else {
                     sources::launch(&notifications, &["-t", "-sw"]);
-                })
-                .on_button(gtk::gdk::BUTTON_SECONDARY, {
-                    let notifications = settings.notifications_command.clone();
-                    move || {
-                        sources::launch(&notifications, &["-d", "-sw"]);
-                    }
-                });
+                }
+            });
+        }
+        {
+            // Do-not-disturb had the right button; a long press is the same
+            // gesture on a touchscreen (see `touch::on_secondary`). The tap bound
+            // above is a `touch::on_click`, so it stands down for a release that
+            // followed this long press: holding the clock toggles do-not-disturb
+            // without also opening the island.
+            let notifications = settings.notifications_command.clone();
+            touch::on_secondary(&clock.button, move || {
+                sources::launch(&notifications, &["-d", "-sw"]);
+            });
         }
 
-        // --- right: media, tray, status, power -----------------------------
-        let media = Pill::new("media", ICON);
-        media
-            .on_click(move || {
-                sources::launch("playerctl", &["play-pause"]);
-            })
-            .on_button(gtk::gdk::BUTTON_SECONDARY, || {
-                sources::launch("playerctl", &["next"]);
-            })
-            .on_button(gtk::gdk::BUTTON_MIDDLE, || {
-                sources::launch("playerctl", &["previous"]);
-            })
-            .on_scroll(|direction| {
-                // Scrolling seeks: `5+` is "five seconds further in".
-                let spec = if direction > 0 { "5+" } else { "5-" };
-                sources::launch("playerctl", &["position", spec]);
-            });
-
+        // --- right: stats, tray, status, power, clock ----------------------
         let tray = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         tray.add_css_class("tray");
 
@@ -438,7 +1399,7 @@ impl BarView {
         // They belong together because they are one question ("is this machine
         // alright?") and because they are all *handles*: this pill unfolds the
         // system popup, which is where the detail lives now.
-        let status = Pill::new("status", ICON);
+        let status = Pill::new("status", icon);
         {
             let stats = settings.stats_command.clone();
             // The left click is the popup's other handle, but it is wired
@@ -451,16 +1412,6 @@ impl BarView {
                 // on the volume pill: one click away, out of the way.
                 .on_button(gtk::gdk::BUTTON_MIDDLE, || {
                     sources::launch("wpctl", &["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"]);
-                })
-                // The wireless radio on/off, which the network pill had here.
-                // The *element* owns that switch (it reads `rfkill` and knows
-                // what it means), so the pill asks it rather than guessing with
-                // `nmcli`.
-                .on_button(gtk::gdk::BUTTON_SECONDARY, {
-                    let stats = stats.clone();
-                    move || {
-                        sources::launch(&stats, &["wifi"]);
-                    }
                 })
                 // The wheel is the volume, as it was on the volume pill: the
                 // element that owns the step does it, so the level shows up in
@@ -477,11 +1428,18 @@ impl BarView {
                         );
                     }
                 });
+            // The wireless radio on/off had the right button. The *element* owns
+            // that switch (it reads `rfkill` and knows what it means), so the
+            // pill asks it rather than guessing with `nmcli` - and the touchscreen
+            // reaches the same verb with a long press.
+            touch::on_secondary(&status.button, move || {
+                sources::launch(&stats, &["wifi"]);
+            });
         }
 
         // The system info pill sits to the left of the status pill: what the
         // machine is doing first, then what it is connected to and holding.
-        let stats = Pill::new("stats", ICON);
+        let stats = Pill::new("stats", icon);
         if !settings.updates_command.is_empty() {
             // The count is the one part of this pill with something behind it, and
             // the old pill's tooltip promised exactly this: the full list, in a
@@ -501,7 +1459,7 @@ impl BarView {
             });
         }
 
-        let power = Pill::new("power", POWER_ICON);
+        let power = Pill::new("power", power_icon);
         {
             let session = settings.session_command.clone();
             power.on_click(move || {
@@ -511,43 +1469,48 @@ impl BarView {
 
         let right = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         right.add_css_class("section");
-        for pill in [&media, &stats, &status] {
-            right.append(&pill.button);
-        }
+        right.append(&stats.button);
         right.append(&minimised);
         right.append(&tray);
-        // The power button sits at the far right, where a mis-aimed click is
-        // least likely to land on it.
+        // The status pill sits to the right of the tray, where the rice puts its
+        // network, sound and battery readings - and where the system popup's
+        // own geometry already expects it (right-aligned with the bar).
+        right.append(&status.button);
+        // The power button sits between the status pill and the clock, which
+        // keeps the dangerous button off the corner a pointer flies into while
+        // leaving the clock as the last thing in the row.
         right.append(&power.button);
+        right.append(&clock.button);
 
         // --- the row -------------------------------------------------------
         let root = gtk::CenterBox::new();
         root.set_start_widget(Some(&left));
-        root.set_center_widget(Some(&clock.button));
+        root.set_center_widget(Some(&media.button));
         root.set_end_widget(Some(&right));
 
-        // The applications button's two handles: the pointer arriving on it, and
-        // a left click. Both send the same request - `open` with the connector
-        // the bar is on and the button's own rectangle - for the same reason the
-        // status pill does: a `toggle` would put the panel into its *pinned*
-        // state, which is not watched at all, so the panel would stay up for good
-        // after a single click. The element closes itself when the pointer has
-        // left it, which is the way back out (as with the island and the system
-        // popup). Wired here rather than with the pill's other handlers, because
-        // the request has to *measure* the button - for which it needs the widget
-        // tree the button lives in.
+        // The applications button's handles: the pointer arriving on it, and a
+        // press. Both ask the panel to open - with the connector the bar is on
+        // and the button's own rectangle - but with a different *verb*: a pointer
+        // gets `open`, and the panel watches the pointer and closes itself when
+        // it leaves; a finger gets `tap`, because there is no pointer to leave
+        // and the panel therefore opens pinned with a tap catcher around it.
+        // Either way the request is `open`-shaped rather than `toggle`: a
+        // `toggle` would put the panel into its *pinned* state, which is not
+        // watched at all. Wired here rather than with the pill's other handlers,
+        // because the request has to *measure* the button - for which it needs
+        // the widget tree the button lives in.
         {
             let command = settings.apps_command.clone();
             let pill = apps.button.clone();
             let root = root.clone();
             let connector = connector.to_owned();
-            let ask = Rc::new(move || {
+            let ask = Rc::new(move |verb: &str| {
                 // Two things the panel cannot work out for itself: which monitor
                 // the bar is on (the panel is drawn on that screen and measured
                 // against it), and where the button is. The rectangle is in the
                 // bar's *card*, because the panel knows the bar's margins and the
                 // monitor's position but not the button's own width.
-                let mut args: Vec<String> = vec!["open".to_string(), connector.clone()];
+                let mut args: Vec<String> = vec![verb.to_string(), connector.clone()];
                 if let Some(card) = root.parent() {
                     if let Some(bounds) = bounds_in(&pill, &card) {
                         args.extend(bounds.iter().map(|value| format!("{value:.0}")));
@@ -559,19 +1522,33 @@ impl BarView {
             {
                 let ask = ask.clone();
                 let motion = gtk::EventControllerMotion::new();
-                motion.connect_enter(move |_, _, _| ask());
+                motion.connect_enter(move |motion, _, _| {
+                    // The emulated pointer a tap produces enters and never
+                    // leaves; only a real pointer's arrival means "watch me".
+                    if touch::tablet() || from_finger(motion) {
+                        return;
+                    }
+                    ask("open");
+                });
                 apps.button.add_controller(motion);
             }
-            apps.on_click(move || ask());
+            touch::on_click(&apps.button, move |from_finger| {
+                ask(if from_finger { "tap" } else { "open" });
+            });
         }
 
         // The two handles that unfold the system popup: the pointer arriving on
-        // the status pill, and a left click on it. Both send the *same* thing,
-        // and that thing is only ever `open` - the request to start watching,
-        // which is all the bar ever says to either popup (the clock's hover sends
-        // the island the same verb). The panel then decides for itself when it has
-        // had enough of the pointer, exactly as the island does: the bar asks, the
-        // panel disposes.
+        // the status pill, and a press. Both measure the pill and send the same
+        // two things - which monitor the bar is on, and where the pill is - and
+        // both send an `open`-shaped request rather than a `toggle`.
+        //
+        // The *verb* differs with who is asking: a pointer gets `open`, and the
+        // panel watches it and closes itself when it leaves; a finger gets `tap`,
+        // which opens the panel pinned with a tap catcher around it. (What a
+        // click used to send is worth remembering, because it is the bug this
+        // shape exists to prevent: `toggle` puts the panel into the machine's
+        // *pinned* state, which is not watched at all, so a single click left it
+        // up for good, glowing, with the pointer long gone.)
         //
         // Wired here rather than with the pill's other handlers, because the
         // request has to *measure* the pill - for which it needs the widget tree
@@ -581,14 +1558,7 @@ impl BarView {
             let pill = status.button.clone();
             let root = root.clone();
             let connector = connector.to_owned();
-            // What the click used to run instead is worth knowing about, because
-            // it is the bug this shape exists to prevent: `toggle`, which puts the
-            // panel into the machine's *pinned* state - and a pinned panel is not
-            // watched at all, so a single click on the pill left it up for good,
-            // glowing, with the pointer long gone. Nothing but another click (or
-            // `hypr-osd-stats close`) could take it away. The island has no such
-            // state, and the bar must not be able to put either panel into one.
-            let ask = Rc::new(move || {
+            let ask = Rc::new(move |verb: &str| {
                 // Two things the panel cannot work out for itself, so the bar
                 // says them: which monitor the bar is on (the panel is drawn on
                 // that screen and measured against it, and it has no way of
@@ -598,7 +1568,7 @@ impl BarView {
                 // and the rectangle below is measured inside the bar's card,
                 // because the panel knows the bar's margins and the monitor's
                 // position but not this.
-                let mut args: Vec<String> = vec!["open".to_string(), connector.clone()];
+                let mut args: Vec<String> = vec![verb.to_string(), connector.clone()];
                 if let Some(card) = root.parent() {
                     if let Some(bounds) = bounds_in(&pill, &card) {
                         args.extend(bounds.iter().map(|value| format!("{value:.0}")));
@@ -610,10 +1580,17 @@ impl BarView {
             {
                 let ask = ask.clone();
                 let motion = gtk::EventControllerMotion::new();
-                motion.connect_enter(move |_, _, _| ask());
+                motion.connect_enter(move |motion, _, _| {
+                    if touch::tablet() || from_finger(motion) {
+                        return;
+                    }
+                    ask("open");
+                });
                 status.button.add_controller(motion);
             }
-            status.on_click(move || ask());
+            touch::on_click(&status.button, move |from_finger| {
+                ask(if from_finger { "tap" } else { "open" });
+            });
         }
 
         let this = BarView {
@@ -630,9 +1607,8 @@ impl BarView {
             minimised,
             power,
             readings: RefCell::new(Status::default()),
-            last_workspaces: RefCell::new(String::new()),
             last_minimised: RefCell::new(String::new()),
-            icon_size: settings.icon_size,
+            icon_size: settings.tray_icon_size(tablet),
             shows: settings.shows,
         };
         // A first paint, so the bar that appears is already correct rather than
@@ -732,86 +1708,10 @@ impl BarView {
         }
     }
 
+    /// The workspace row: one button per workspace and the accent capsule over
+    /// them, which glides to the workspace you switch to (see [`WorkspaceRow`]).
     fn render_workspaces(&self, workspaces: &[Workspace]) {
-        // Rebuilding the row on every event would replace buttons under the
-        // pointer (and lose a hover); the signature is what says whether
-        // anything visible actually changed.
-        let signature = workspaces
-            .iter()
-            .map(|workspace| {
-                format!(
-                    "{}:{}:{}:{}",
-                    workspace.id,
-                    workspace.windows,
-                    u8::from(workspace.active),
-                    u8::from(workspace.visible)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        {
-            let mut last = self.last_workspaces.borrow_mut();
-            if *last == signature {
-                return;
-            }
-            *last = signature;
-        }
-
-        while let Some(child) = self.workspaces.first_child() {
-            self.workspaces.remove(&child);
-        }
-        for workspace in workspaces {
-            let pill = Pill::new("ws", WS_ICON);
-            // An idle workspace is a dot, and the *shape* carries its state:
-            // filled when it holds a window, hollow when it is empty. That
-            // leaves the colour free for the one thing shape cannot say - the
-            // accent, for a workspace that is up on another monitor.
-            //
-            // The workspace you are on carries no dot at all: it widens into
-            // its number, the row's only reading, so "where am I" needs no
-            // hover and no counting from a fixed edge. Lucide draws outlines,
-            // so the solid dot is ours (see `icons/local/`).
-            let number = workspace.id.to_string();
-            pill.set_one(
-                if workspace.active {
-                    ""
-                } else if workspace.windows > 0 {
-                    names::WORKSPACE_ACTIVE
-                } else {
-                    names::WORKSPACE_IDLE
-                },
-                if workspace.active {
-                    number.as_str()
-                } else {
-                    ""
-                },
-                &[
-                    ("active", workspace.active),
-                    ("visible", workspace.visible),
-                    ("occupied", workspace.windows > 0),
-                    ("empty", workspace.windows == 0),
-                ],
-            );
-            pill.tooltip(Some(&workspace_tooltip(workspace)));
-            {
-                let id = workspace.id.to_string();
-                pill.on_click(move || {
-                    hypr_osd_core::hypripc::request(&format!(
-                        "dispatch hl.dsp.focus({{ workspace = {id} }})"
-                    ));
-                });
-            }
-            pill.on_scroll(move |direction| {
-                // `e+1`/`e-1` are Hyprland's own "the next existing workspace"
-                // relative forms, so the wheel skips the gaps the way the
-                // workspace swipe does.
-                let step = if direction > 0 { "e+1" } else { "e-1" };
-                hypr_osd_core::hypripc::request(&format!(
-                    "dispatch hl.dsp.focus({{ workspace = \"{step}\" }})"
-                ));
-            });
-            self.workspaces.append(&pill.button);
-        }
+        self.workspaces.render(workspaces);
     }
 
     fn render_title(&self, snapshot: &Snapshot) {
@@ -832,9 +1732,8 @@ impl BarView {
 
     /// The clock, every second. `time` and `date` are already formatted by the
     /// caller, which is the only place that knows the configured formats.
-    pub fn render_clock(&self, time: &str) {
-        self.clock.set_one(names::CLOCK, time, &[]);
-        self.clock.tooltip(Some(time));
+    pub fn render_clock(&self, time: &str, date: &str) {
+        self.clock.render(time, date);
     }
 
     /// Whether the island popup is on screen, so the clock can light up while
@@ -980,29 +1879,11 @@ impl BarView {
     }
 
     pub fn render_media(&self, track: Option<&Track>, playing: bool) {
-        let Some(track) = track.filter(|track| !track.is_empty()) else {
+        if !self.shows.media {
             self.media.set_visible(false);
             return;
-        };
-        let icon = if playing {
-            player_icon(&track.player)
-        } else {
-            names::PAUSE
-        };
-        // The artist is dropped before the title is: on a bar, "what is this" is
-        // more useful than "who is this".
-        let summary = if track.artist.is_empty() {
-            track.title.clone()
-        } else {
-            format!("{} · {}", track.title, track.artist)
-        };
-        self.media.set_one(icon, &summary, &[("playing", playing)]);
-        self.media.tooltip(Some(&format!(
-            "{}\n{}",
-            summary,
-            if playing { "playing" } else { "paused" }
-        )));
-        self.media.set_visible(self.shows.media);
+        }
+        self.media.render(track, playing);
     }
 
     /// The system info pill: CPU, memory, temperature, and how many updates are
@@ -1078,6 +1959,31 @@ fn picture(window: &Window, size: i32) -> gtk::Widget {
 /// right, so its hot zone cannot be derived from the bar's edge, and the card is
 /// the one origin both programs can agree on - the panel knows the bar's margins
 /// and the monitor's position, and adds them to whatever this says.
+/// Whether the event that just reached a controller came from a finger or a pen
+/// rather than the pointer.
+///
+/// The hover handlers are not gestures, so `touch::is_touch` cannot be asked
+/// here - but the event the controller is handling can. That is what keeps a
+/// *laptop* session usable with a touchscreen: with the Type Cover attached the
+/// machine is not a tablet (so the pill is pointer-sized and `tablet()` is
+/// false), and a finger touching the clock still must not be mistaken for a
+/// pointer *hovering* it - the panel would open on the dwell and then stay up,
+/// because the emulated pointer never leaves.
+fn from_finger(controller: &impl IsA<gtk::EventController>) -> bool {
+    let Some(event) = controller.current_event() else {
+        return false;
+    };
+    if event.is_pointer_emulated() {
+        return true;
+    }
+    event.device().is_some_and(|device| {
+        matches!(
+            device.source(),
+            gtk::gdk::InputSource::Touchscreen | gtk::gdk::InputSource::Pen
+        )
+    })
+}
+
 fn bounds_in(widget: &impl IsA<gtk::Widget>, target: &impl IsA<gtk::Widget>) -> Option<[f64; 4]> {
     let bounds = widget.compute_bounds(target)?;
     Some([
@@ -1158,5 +2064,59 @@ mod tests {
         assert_eq!(player_icon("mpv"), names::CLAPPERBOARD);
         // Unknown (and empty) players fall back to the note.
         assert_eq!(player_icon("some-new-player"), names::MUSIC);
+    }
+
+    #[test]
+    fn the_glide_eases_out_and_never_overshoots_its_pill() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert_eq!(ease_out_cubic(1.0), 1.0);
+        // Ease-out: most of the distance is covered in the first half of the
+        // time, and the rest is the settling.
+        assert!(ease_out_cubic(0.5) > 0.75);
+        let mut last = -1.0;
+        for step in 0..=20 {
+            let eased = ease_out_cubic(f64::from(step) / 20.0);
+            assert!(eased >= last, "the ease went backwards at step {step}");
+            assert!((0.0..=1.0).contains(&eased), "the ease left 0..=1");
+            last = eased;
+        }
+    }
+
+    #[test]
+    fn the_capsule_travels_from_one_pill_to_the_other() {
+        let from = Rect {
+            x: 10.0,
+            y: 5.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        let to = Rect {
+            x: 74.0,
+            y: 5.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        // The ends are the pills themselves, which is what makes the capsule
+        // land on exactly the button its number names.
+        assert_eq!(between(from, to, 0.0), from);
+        assert_eq!(between(from, to, 1.0), to);
+        let half = between(from, to, 0.5);
+        assert_eq!(half.x, 42.0);
+        assert_eq!(half.y, 5.0);
+        assert_eq!(half.width, 30.0);
+        assert_eq!(half.height, 30.0);
+    }
+
+    #[test]
+    fn a_glide_is_measured_from_its_first_frame() {
+        let span = Duration::from_millis(180);
+        let started = 1_000_000;
+        assert_eq!(progress(started, started, span), 0.0);
+        assert_eq!(progress(started + 90_000, started, span), 0.5);
+        assert_eq!(progress(started + 180_000, started, span), 1.0);
+        // A clock that went backwards, and a frame that is late, both clamp: the
+        // capsule is never drawn outside its two pills.
+        assert_eq!(progress(started - 5, started, span), 0.0);
+        assert_eq!(progress(started + 999_999, started, span), 1.0);
     }
 }

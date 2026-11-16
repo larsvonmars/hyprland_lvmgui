@@ -67,3 +67,20 @@ button.control:disabled {
     background-color: @surface;
     color: @fg_faint;
 }
+
+/* ---- touch: a fingertip instead of a pointer ------------------------------ */
+/* The shell adds `window.osd.touch` while the machine is a tablet (see
+ * core::touch). The pointer buttons are 32px - comfortable under a cursor,
+ * invisible to a fingertip - so they grow to the 44px target the shared rules
+ * use; `view.rs` gives the text column up the difference, because the card is the
+ * width the config asked for and a card that widened when the cover changed would
+ * move its own edges with it. The hint line is only shown in this mode: it is the
+ * one thing on the card that says what the two icons do without a tooltip. */
+window.osd.touch button.control {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+window.osd.touch label.hint {
+    font-size: 12px;
+}

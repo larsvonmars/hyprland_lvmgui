@@ -5,6 +5,19 @@
 //! the same "destructive actions ask twice" rule. Two session menus on one
 //! desktop should not disagree about what "Shut down" does, or which mark it
 //! wears.
+//!
+//! # Locking a tablet
+//!
+//! The first choice for "lock the screen" is this collection's own
+//! `hypr-osd-lock` wrapper, because it is the only candidate that works on a
+//! tablet: hyprlock has no text-input client, so an on-screen keyboard can never
+//! appear on the lock screen by itself, and the wrapper starts squeekboard over
+//! it (and hides it again on unlock) so a folded-back Surface can still be
+//! unlocked with no cover attached. On a laptop the wrapper is a plain locker, so
+//! the row behaves exactly as it always did; when it is not installed the three
+//! classic lockers are tried in the order the bar's menu used to try them. The
+//! same choice is what Suspend runs before suspending (see [`all`]), so the
+//! screen is locked whichever way you got there.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -72,7 +85,7 @@ impl Action {
     pub fn describe(&self) -> String {
         if !self.enabled {
             return format!(
-                "{:<9} disabled (no screen locker: install hyprlock, swaylock or gtklock)",
+                "{:<9} disabled (no screen locker: install hypr-osd-lock, hyprlock, swaylock or gtklock)",
                 self.id.verb()
             );
         }
@@ -104,7 +117,7 @@ pub fn all() -> Vec<Action> {
             // greying it out silently would look like a bug.
             label: match locker {
                 Some(_) => "Lock".to_string(),
-                None => "Lock — install hyprlock or swaylock".to_string(),
+                None => "Lock — install hypr-osd-lock or hyprlock".to_string(),
             },
             confirm_label: None,
             danger: false,
@@ -197,10 +210,18 @@ fn reap(child: Child) {
     glib::child_watch_add_local(pid, |_, _| {});
 }
 
-/// The first screen locker that exists on this machine, the way the bar's menu
-/// picks it.
+/// The screen locker to run, the way the bar's menu and `osd.lua` pick it.
+///
+/// `hypr-osd-lock` comes first because it is the only one that can lock a
+/// *tablet*: a bare hyprlock cannot raise an on-screen keyboard (it offers no
+/// text input for squeekboard to appear around), so a Surface folded back with no
+/// cover would be locked out. The wrapper starts the locker and force-shows the
+/// keyboard over it, and is a no-op when a lock is already running, so calling it
+/// from here costs nothing on a laptop. Only when the wrapper is not installed do
+/// the classic lockers get their turn, in the order they have always had.
 fn locker() -> Option<Vec<String>> {
     [
+        command(&["hypr-osd-lock"]),
         command(&["hyprlock"]),
         command(&["swaylock", "-f"]),
         command(&["gtklock"]),
@@ -267,7 +288,7 @@ mod tests {
         {
             assert!(matches!(
                 first[0].as_str(),
-                "hyprlock" | "swaylock" | "gtklock"
+                "hypr-osd-lock" | "hyprlock" | "swaylock" | "gtklock"
             ));
         }
     }

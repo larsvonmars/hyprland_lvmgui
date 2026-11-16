@@ -376,3 +376,147 @@ label.cal-day.today {
     color: @on_accent;
     font-weight: 700;
 }
+
+/* ── touch: a fingertip instead of a pointer ─────────────────────────────────
+ *
+ * The shell adds `touch` to this window while the machine is being used as a
+ * tablet (see `core::touch`), and the shared stylesheet already grows
+ * `button.chipbtn`, `label.chip`, `box.tile`, the scales and the scrollbar
+ * (base.css). What is left is this panel's own rhythm: the transport buttons,
+ * the seek bar, the notification rows and the calendar grid - all of them
+ * aimed at rather than merely looked at once the pointer is a finger.
+ *
+ * The widths are the constraint here, not the heights: the card is a fixed
+ * number of pixels wide (`island.conf`'s two columns), so every rule below grows
+ * in the vertical or keeps its horizontal footprint. The one exception is the
+ * shared `box.tile` rule, which pads 12px on each side - two pixels more than
+ * the text budgets in view.rs were computed against - so this panel keeps its
+ * own 10px there and spends the difference on height instead.
+ */
+
+window.osd.touch box.island {
+    padding: 4px 2px 6px 2px;
+}
+
+window.osd.touch box.tile {
+    padding: 12px 10px;
+}
+
+window.osd.touch box.island-header {
+    padding: 2px 2px 0 2px;
+}
+
+/* The clock and the date keep their pointer sizes: the header is 440 pixels and
+ * the state chips on its right grow in the same row, so the heading is where the
+ * room for them comes from. */
+window.osd.touch label.section {
+    font-size: 11px;
+}
+
+window.osd.touch label.chip {
+    font-size: 11px;
+    padding: 4px 9px;
+}
+
+/* The notification buttons: two to a row inside a 232-pixel tile, so the shared
+ * touch recipe's 14px side padding would make the row wider than the column. */
+window.osd.touch box.notif-actions button.chipbtn {
+    padding: 10px 8px;
+}
+
+window.osd.touch label.notif-count {
+    font-size: 13px;
+}
+
+window.osd.touch box.notif-row {
+    padding: 8px 6px;
+}
+
+window.osd.touch label.notif-app {
+    font-size: 12px;
+}
+
+window.osd.touch label.notif-age {
+    font-size: 11px;
+}
+
+window.osd.touch label.notif-text {
+    font-size: 12px;
+}
+
+window.osd.touch label.notif-letter {
+    font-size: 15px;
+}
+
+/* ---- now playing --------------------------------------------------------- */
+window.osd.touch label.track {
+    font-size: 16px;
+}
+
+window.osd.touch label.artist {
+    font-size: 12px;
+}
+
+/* The seek block is the whole click target, so it grows in both directions: a
+ * 10px bar and a 60-pixel block is something a finger can land on. */
+window.osd.touch box.seek {
+    padding: 6px 0;
+}
+
+window.osd.touch progressbar trough,
+window.osd.touch progressbar progress {
+    min-height: 10px;
+}
+
+/* The transport: five buttons have to fit the left column - 5 x 40 plus four
+ * 6px gaps is 224 of the 232 pixels available after the tile's padding. */
+window.osd.touch box.transport {
+    margin-top: 4px;
+}
+
+window.osd.touch button.transport-button {
+    min-width: 40px;
+    min-height: 36px;
+    padding: 6px 0;
+    border-radius: 14px;
+}
+
+window.osd.touch scale.volume {
+    min-height: 32px;
+}
+
+window.osd.touch box.players button.player-chip {
+    min-height: 34px;
+    padding: 4px 8px;
+}
+
+window.osd.touch button.player-chip label {
+    font-size: 11px;
+}
+
+/* ---- calendar ------------------------------------------------------------ */
+/* Seven day cells are what the right column is measured for, so their *width*
+ * stays the pointer's 22px; a finger gets its target from the height, the type
+ * and the radius instead. */
+window.osd.touch label.cal-title {
+    font-size: 13px;
+}
+
+/* Paging the month: the button grows *tall* rather than wide - the title row is
+ * 158 pixels inside the tile and the month's name takes most of it. */
+window.osd.touch box.cal-head-row button {
+    min-width: 24px;
+    min-height: 34px;
+    padding: 0 2px;
+}
+
+window.osd.touch label.cal-head {
+    font-size: 11px;
+}
+
+window.osd.touch label.cal-day {
+    font-size: 13px;
+    min-height: 28px;
+    padding: 3px 0;
+    border-radius: 8px;
+}

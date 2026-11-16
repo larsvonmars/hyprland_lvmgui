@@ -1,13 +1,19 @@
 //! What Hyprland knows about windows and workspaces.
 //!
-//! `hyprctl -j clients` is the single source, and it happens to carry everything
-//! the two elements that draw windows need: the class (to find an icon), the
-//! title (to label a tile), the address (to focus the window on the way out),
-//! the size (to draw a tile in the window's own shape), the `stableId` (to
-//! capture the window's picture, which is what the overview is made of) and
-//! `focusHistoryID` - the field that turns a list of windows into an *alt-tab*
-//! order, because 0 is the window you are in, 1 the one you were in before it,
-//! and so on.
+//! The single source is Hyprland's own `clients` / `workspaces` answer, which
+//! happens to carry everything the two elements that draw windows need: the
+//! class (to find an icon), the title (to label a tile), the address (to focus
+//! the window on the way out), the size (to draw a tile in the window's own
+//! shape), the `stableId` (to capture the window's picture, which is what the
+//! overview is made of) and `focusHistoryID` - the field that turns a list of
+//! windows into an *alt-tab* order, because 0 is the window you are in, 1 the one
+//! you were in before it, and so on.
+//!
+//! Every read here goes over Hyprland's command socket first and only falls back
+//! to `hyprctl` without one: the answer is the same JSON (`hyprctl -j clients`
+//! *is* `j/clients`), but no process is started for it, and both callers ask on a
+//! key press - ALT+TAB for the switcher, SUPER+SHIFT+TAB for the overview - where
+//! four process spawns are a visible part of the card appearing.
 //!
 //! One distinction is worth more than it looks: a window the bar has minimised
 //! sits on a hidden special workspace ([`PUT_AWAY`]) while Hyprland goes on
@@ -20,6 +26,7 @@
 //! business.
 
 use crate::hyprctl;
+use crate::hypripc;
 use serde_json::Value;
 
 /// The special workspace a window is put away on: what the bar's minimise does
@@ -119,12 +126,12 @@ pub struct Workspace {
 /// [`PUT_AWAY`]) are not: they are hidden, focusing one would leave it exactly as
 /// hidden as it was, and the bar's tray is where they are offered instead.
 pub fn list() -> Vec<Window> {
-    let Some(clients) = hyprctl::json(&["clients"]) else {
-        eprintln!("hypr-osd: hyprctl clients did not answer");
+    let Some(clients) = ask("clients") else {
+        eprintln!("hypr-osd: Hyprland did not answer with its clients");
         return Vec::new();
     };
     let Some(clients) = clients.as_array() else {
-        eprintln!("hypr-osd: hyprctl clients answered something unexpected");
+        eprintln!("hypr-osd: the client list arrived in an unexpected shape");
         return Vec::new();
     };
     split(clients).switchable
@@ -132,22 +139,31 @@ pub fn list() -> Vec<Window> {
 
 /// Every workspace that exists, by number.
 pub fn workspaces() -> Vec<Workspace> {
-    let Some(list) = hyprctl::json(&["workspaces"]) else {
-        eprintln!("hypr-osd: hyprctl workspaces did not answer");
+    let Some(list) = ask("workspaces") else {
+        eprintln!("hypr-osd: Hyprland did not answer with its workspaces");
         return Vec::new();
     };
     let Some(list) = list.as_array() else {
-        eprintln!("hypr-osd: hyprctl workspaces answered something unexpected");
+        eprintln!("hypr-osd: the workspace list arrived in an unexpected shape");
         return Vec::new();
     };
     sorted_workspaces(list)
 }
 
 /// The name of the workspace that is focused right now (`3`), i.e. the one whose
-/// windows are on screen. `None` when hyprctl cannot be asked.
+/// windows are on screen. `None` when Hyprland cannot be asked.
 pub fn focused_workspace() -> Option<String> {
-    let workspace = hyprctl::json(&["activeworkspace"])?;
+    let workspace = ask("activeworkspace")?;
     workspace.get("name")?.as_str().map(str::to_owned)
+}
+
+/// One `j/…` question: over the compositor's socket, or through `hyprctl` when
+/// there is no socket to speak to (a session that is not Hyprland at all).
+///
+/// Both answer the same JSON - `hyprctl` *is* a client of that socket - so which
+/// one answered is invisible to the callers above.
+fn ask(command: &str) -> Option<Value> {
+    hypripc::json(&format!("j/{command}")).or_else(|| hyprctl::json(&[command]))
 }
 
 /// The windows in `clients`, split into the ones you can switch to and the ones

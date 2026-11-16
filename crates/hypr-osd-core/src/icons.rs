@@ -362,6 +362,11 @@ pub mod names {
         VOLUME_OFF => "volume-x",
         VOLUME_LOW => "volume-1",
         VOLUME_HIGH => "volume-2",
+        // The *input* side, which only the system popup's sound row draws: a
+        // finger has no middle click, so the microphone switch that used to be
+        // the bar's status-pill middle click lives there now.
+        MIC => "mic",
+        MIC_OFF => "mic-off",
 
         // The battery, empty to full, and charging - which is the one state
         // that is not a level.

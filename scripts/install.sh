@@ -26,10 +26,9 @@
 #     `require("launchpad")` line is commented out (see --keep-launchpad); the
 #     applications panel is the old launcher's *main window*, and is opened by
 #     the button at the bar's left end
-#   - ~/.config/hypr/hyprlock.conf      the lock screen, when hyprlock is there
-#   - ~/.config/hypr/hyprlock-vars.conf the palette and numbers that file is
-#                                       written in terms of: generated from
-#                                       theme.css and hypr-osd/lock.conf
+#   - ~/.config/hypr/hyprlock.conf      the lock screen, generated from
+#                                       theme.css and hypr-osd/lock.conf when
+#                                       hyprlock is there
 #   - ~/.config/hypr/hypridle.conf      idle timers, when hypridle is there
 #
 # Usage:
@@ -186,25 +185,24 @@ fi
 
 # The lock screen's knobs. Not an element's config: hyprlock draws the lock screen
 # and is not ours, but the settings window's Lock screen page edits this file and
-# `hypr-osd-lock-vars` turns it (and the palette) into the variables
-# ~/.config/hypr/hyprlock.conf is written in terms of.
+# `hypr-osd-lock-vars` generates ~/.config/hypr/hyprlock.conf from it (and the
+# palette).
 if [ ! -f "$OSD_CONFIG_DIR/lock.conf" ]; then
   cat > "$OSD_CONFIG_DIR/lock.conf" <<'EOF'
 # hypr-osd lock screen - settings for ~/.config/hypr/hyprlock.conf
 # (hyprland_lvmgui).
 #
 # hyprlock is the locker, not one of this collection's binaries - but the lock
-# screen wears this desktop's palette, so the half of its config that has to keep
-# up is generated: this file and ~/.config/hypr-osd/theme.css go into
-# ~/.config/hypr/hyprlock-vars.conf, which the structure sources. Nothing has to
-# be restarted for a change to take effect, because hyprlock reads its config at
-# every lock.
+# screen wears this desktop's palette, so its whole config is generated: this
+# file and ~/.config/hypr-osd/theme.css become
+# ~/.config/hypr/hyprlock.conf. Nothing has to be restarted for a change to take
+# effect, because hyprlock reads its config at every lock.
 #
-#     ~/.local/bin/hypr-osd-lock-vars     # write the variables now
+#     ~/.local/bin/hypr-osd-lock-vars     # write it now
 #
 # Every key has a built-in default (the value written below); delete a line to
 # fall back to it, or edit it here - the Lock screen page in the settings window
-# is the same file.
+# is the same file, with every option hyprlock has.
 
 # The picture behind the lock screen. Empty follows the wallpaper hyprpaper draws
 # (read out of ~/.config/hypr/hyprpaper.conf), so the desktop and the lock screen
@@ -285,7 +283,7 @@ show_stats = true         # CPU, memory, temperature, pending updates
 show_status = true        # link/sound/battery (and the system popup's handle)
 show_tray = true          # the application indicators (off: the names are not claimed)
 show_minimised = true     # the windows put away with SUPER + H
-show_power = true         # the session button at the far right
+show_power = true         # the session button, between the status pill and the clock
 
 # How many numbered workspaces the row keeps room for, so a workspace you have
 # never visited is still clickable. Workspaces that exist beyond this number get
@@ -295,9 +293,15 @@ workspaces = 5
 # How much room the focused window's title may take before it is ellipsised.
 title_width = 320
 
-# The clock, in strftime terms. The island popup shows the date and the time;
-# this is the pill.
+# The same for the player in the middle of the bar. It is the bar's centre child,
+# so the cap is what keeps one long track from pushing the two ends apart.
+media_width = 340
+
+# The clock at the bar's right end, in strftime terms: the time on the top line
+# and the date in small type under it. An empty `date_format` gives a one-line
+# clock.
 clock_format = %H:%M
+date_format = %a, %b %d
 
 # The battery to watch, and the mains supply that says whether it is charging.
 # A battery that is not there is looked up by name prefix instead (so a renamed
@@ -405,10 +409,12 @@ bar_margin_x = 12
 # The distance between the bar's bottom edge and the panel's top edge.
 gap = 6
 
-# How wide the hover zone around the bar's centre is. The clock is the bar's
-# middle child, so it is centred on the bar; this is how much of that centre
-# counts as hovering it.
-hot_width = 280
+# How wide the hover zone at the bar's *right end* is. The clock is the bar's
+# last child (the power button sits just to its left), so the zone is measured
+# from the bar's right edge; this number is the clock, the power button and the
+# margins between them - no more, or it would reach the status pill and hold the
+# panel open while the system popup was being used.
+hot_width = 120
 
 # The panel's two columns, in pixels: what is playing and what is waiting on the
 # left, the calendar on the right. The panel's width follows from them.
@@ -479,11 +485,12 @@ gap = 6
 hot_width = 240
 
 # The panel's two columns, in pixels: the machine's *load* on the left (the three
-# gauges, then the bluetooth radios and the devices they know), the machine's
-# *controls* on the right, with the pending updates under them. The panel's width
-# follows from them - and they are a floor, not a ceiling: a widget the theme
-# will not let be narrower (a progress bar's trough, a slider's) wins over them,
-# and `hypr-osd-stats status` prints the width the card actually came out at.
+# gauges, then the two radios - the wireless link with the networks in reach, and
+# bluetooth with the devices it knows), the machine's *controls* on the right,
+# with the pending updates under them. The panel's width follows from them - and
+# they are a floor, not a ceiling: a widget the theme will not let be narrower (a
+# progress bar's trough, a slider's) wins over them, and `hypr-osd-stats status`
+# prints the width the card actually came out at.
 left_width = 260
 right_width = 240
 
@@ -514,14 +521,22 @@ devices_every_ms = 10000
 max_devices = 5
 scan_seconds = 12
 
+# The networks in reach, on their own clock for the same reason: one `nmcli` for
+# the list, one for the stored profiles and one per profile (the only way to learn
+# what SSID a profile is for), so it is re-read every few seconds *while the panel
+# is open* - and never while it is closed. `max_networks` is how many of them the
+# tile lists before it switches to a count.
+networks_every_ms = 15000
+max_networks = 5
+
 # The pending-update count, from the same cache the bar's pill uses. Stale after
 # half an hour, at which point `checkupdates` runs again - in the background, in
 # both programs. Leave `updates_command` empty to turn the updates tile off.
 updates_every_ms = 1800000
 updates_command = checkupdates
 
-# The wireless interface the NETWORK row reports, and where the buttons that open
-# something put it (btop, nmtui, bluetoothctl, pacman).
+# The wireless interface the network tile reports on (and disconnects), and where
+# the buttons that open something put it (btop, nmtui, bluetoothctl, pacman).
 network_interface = wlan0
 terminal_command = kitty
 
@@ -1220,36 +1235,21 @@ EOF
     fi
 
     if command -v hyprlock >/dev/null; then
-      # The structure below is written in terms of variables, not colours: the
-      # palette (hyprlock cannot read CSS) and the knobs of
-      # `~/.config/hypr-osd/lock.conf` are generated into `hyprlock-vars.conf`.
-      #
-      # The file this repository shipped *before* that carried the palette as
-      # literal `$bg = rgba(...)` lines - a hand-maintained mirror, the one place
-      # a retint did not follow - which is what the `$_name = rgb` pattern below
-      # looks for (any such file, however it was worded or edited). Such a file
-      # cannot follow the theme, so it is replaced once, with a backup; a `.conf`
-      # that already sources the variables is left alone, and so is one that was
-      # edited into something else entirely.
-      if [ ! -f "$HYPR_DIR/hyprlock.conf" ]; then
-        install -m644 configs/hyprlock.conf "$HYPR_DIR/hyprlock.conf"
-        echo "   -> $HYPR_DIR/hyprlock.conf (new)"
-      elif ! grep -q 'hyprlock-vars\.conf' "$HYPR_DIR/hyprlock.conf" \
-        && grep -qE '^\$[a-z_]+[[:space:]]*=[[:space:]]*(rgb|rgba)\(' "$HYPR_DIR/hyprlock.conf"; then
-        cp "$HYPR_DIR/hyprlock.conf" "$HYPR_DIR/hyprlock.conf.bak-palette"
-        install -m644 configs/hyprlock.conf "$HYPR_DIR/hyprlock.conf"
-        echo "   -> $HYPR_DIR/hyprlock.conf now reads the generated palette (backup: hyprlock.conf.bak-palette)"
-      else
-        echo "   -> $HYPR_DIR/hyprlock.conf (left alone)"
+      # The lock screen is generated, not shipped: `hypr-osd-lock-vars` writes the
+      # whole of `hyprlock.conf` from `~/.config/hypr-osd/lock.conf` and the
+      # palette (hyprlock cannot read CSS). A hand-written file from before that
+      # is backed up once, because the generated one replaces it - the settings
+      # window's Lock screen page is the way in now.
+      if [ -f "$HYPR_DIR/hyprlock.conf" ] \
+        && ! head -n 1 "$HYPR_DIR/hyprlock.conf" | grep -q 'GENERATED FILE'; then
+        cp "$HYPR_DIR/hyprlock.conf" "$HYPR_DIR/hyprlock.conf.bak-handwritten"
+        echo "   -> $HYPR_DIR/hyprlock.conf backed up (hyprlock.conf.bak-handwritten)"
       fi
 
-      # Write those variables before checking the config: without them every
-      # `$name` in the structure is undefined, and hyprlock would report an error
-      # per line for a file that is in fact correct.
       if "$BIN_DIR/hypr-osd-lock-vars" >/dev/null; then
-        echo "   -> $HYPR_DIR/hyprlock-vars.conf (generated from the theme)"
+        echo "   -> $HYPR_DIR/hyprlock.conf (generated from the theme and lock.conf)"
       else
-        echo "   ! the lock screen's variables could not be written" >&2
+        echo "   ! the lock screen could not be written" >&2
       fi
 
       # A lock screen that does not parse is worse than none: hyprlock ignores
